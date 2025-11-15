@@ -1,2 +1,2 @@
-# bushey-manor-timestables
-times table test
+# Bushey Manor Times Tables App
+Full starter repo. Instructions will be provided separately.
