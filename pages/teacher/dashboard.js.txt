@@ -1,0 +1,1 @@
+export default function Dashboard(){ return (<div style={{padding:20}}><h2>Teacher Dashboard</h2><p>Create tests and view reports here (coming soon)</p></div>) }

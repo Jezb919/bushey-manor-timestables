@@ -1,0 +1,40 @@
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
+
+export default function StudentTest(){
+  const router = useRouter()
+  const { attemptId } = router.query
+  const [q, setQ] = useState(null)
+  const [countdown, setCountdown] = useState(6)
+  useEffect(()=>{
+    if(!attemptId) return
+    fetch(`/api/attempts/${attemptId}/next`).then(r=>r.json()).then(setQ)
+  },[attemptId])
+  useEffect(()=>{
+    if(!q) return
+    setCountdown(6)
+    const t = setInterval(()=> setCountdown(c=> c-1),1000)
+    return ()=> clearInterval(t)
+  },[q])
+  async function submit(ans=''){
+    await fetch(`/api/attempts/${attemptId}/answer`,{method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({answer: ans})})
+    // wait 2s gap
+    setTimeout(async ()=>{
+      const res = await fetch(`/api/attempts/${attemptId}/next`)
+      if(res.status===204){ window.location = `/student/result?attemptId=${attemptId}` }
+      else { const nq = await res.json(); setQ(nq) }
+    },2000)
+  }
+  if(!q) return <div style={{padding:20}}>Loading...</div>
+  return (
+    <div style={{padding:20}}>
+      <h3>Question {q.index} of {q.total}</h3>
+      <div style={{fontSize:40}}>{q.base} × {q.multiplier} = ?</div>
+      <div>Time left: {countdown}s</div>
+      <input id="ans" type="number" style={{fontSize:24}} />
+      <div style={{marginTop:10}}>
+        <button onClick={()=>{ const v = document.getElementById('ans').value; submit(v) }}>Submit</button>
+      </div>
+    </div>
+  )
+}

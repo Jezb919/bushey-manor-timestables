@@ -1,0 +1,10 @@
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
+export default function StudentResult(){
+  const router = useRouter()
+  const { attemptId } = router.query
+  const [resu, setResu] = useState(null)
+  useEffect(()=>{ if(!attemptId) return; fetch(`/api/attempts/${attemptId}`).then(r=>r.json()).then(setResu) },[attemptId])
+  if(!resu) return <div>Loading...</div>
+  return (<div style={{padding:20}}><h2>Test complete</h2><p>Score: {resu.score} / {resu.max_score} ({Math.round(resu.percent)}%)</p></div>)
+}
