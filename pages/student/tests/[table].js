@@ -1,4 +1,5 @@
-import { useRouter } from "next/router";
+
+  import { useRouter } from "next/router";
 import { useState, useEffect } from "react";
 
 export default function TestPage() {
@@ -9,30 +10,31 @@ export default function TestPage() {
   const [answer, setAnswer] = useState("");
   const [score, setScore] = useState(0);
   const [showQuestion, setShowQuestion] = useState(false);
-  const [waiting, setWaiting] = useState(false); // during 2 second gap
+  const [waiting, setWaiting] = useState(false);
 
-  // 25 questions
-  const questions = Array.from({ length: 25 }).map(() => {
-    const num = Math.floor(Math.random() * 12) + 1;
-    return {
-      a: num,
-      b: table,
-      correct: num * table,
-    };
-  });
+  // Generate questions ONCE (fixes question-changing bug)
+  const [questions] = useState(() =>
+    Array.from({ length: 25 }).map(() => {
+      const num = Math.floor(Math.random() * 12) + 1;
+      return {
+        a: num,
+        b: table,
+        correct: num * table,
+      };
+    })
+  );
 
   const current = questions[questionIndex];
 
-  // ⏳ 6-second countdown before test starts
+  // 6-second countdown before showing first question
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowQuestion(true);
     }, 6000);
-
     return () => clearTimeout(timer);
   }, []);
 
-  // Handle pressing ENTER
+  // ENTER submits answer
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !waiting) {
       submitAnswer();
@@ -54,7 +56,7 @@ export default function TestPage() {
     setAnswer("");
     setWaiting(true);
 
-    // ⏸ 2-second gap before next question
+    // 2 second pause
     setTimeout(() => {
       setWaiting(false);
 
@@ -118,3 +120,4 @@ export default function TestPage() {
     </div>
   );
 }
+
