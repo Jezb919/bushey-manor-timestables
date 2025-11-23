@@ -6,7 +6,7 @@ const READY_SECONDS = 6;
 
 export default function MixedTablePage() {
   const router = useRouter();
-  // We ignore the [table] param, since we now use mixed tables
+  // We ignore the [table] param now – this page uses mixed tables
   // const { table } = router.query;
 
   const [questions, setQuestions] = useState([]);
@@ -20,7 +20,8 @@ export default function MixedTablePage() {
 
   const inputRef = useRef(null);
 
-  // Mixed tables – later this will come from teacher settings
+  // For now, allow 1–12 times tables.
+  // Later this can come from teacher settings.
   const allowedTables = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
   // Generate mixed questions once
@@ -41,7 +42,7 @@ export default function MixedTablePage() {
 
   const current = questions[questionIndex];
 
-  // 6-second visible countdown
+  // 6-second visible countdown (6 → 0)
   useEffect(() => {
     if (readySecondsLeft <= 0) {
       setShowQuestion(true);
@@ -110,7 +111,7 @@ export default function MixedTablePage() {
     }, 2000);
   };
 
-  // Loading state
+  // Loading state (before we have questions)
   if (!questions.length) {
     return (
       <div style={outerStyle}>
@@ -428,4 +429,3 @@ function Header({ question, total, progress }) {
     </div>
   );
 }
-
