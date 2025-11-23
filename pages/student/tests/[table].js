@@ -6,13 +6,12 @@ const READY_SECONDS = 6;
 
 export default function MixedTablePage() {
   const router = useRouter();
-  // We ignore the [table] param now – this page uses mixed tables
-  // const { table } = router.query;
 
   const [questions, setQuestions] = useState([]);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [answer, setAnswer] = useState("");
   const [score, setScore] = useState(0);
+
   const [showQuestion, setShowQuestion] = useState(false);
   const [waiting, setWaiting] = useState(false);
 
@@ -20,8 +19,7 @@ export default function MixedTablePage() {
 
   const inputRef = useRef(null);
 
-  // For now, allow 1–12 times tables.
-  // Later this can come from teacher settings.
+  // 1–12 tables allowed for now – later this can come from teacher settings
   const allowedTables = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
   // Generate mixed questions once
@@ -42,19 +40,21 @@ export default function MixedTablePage() {
 
   const current = questions[questionIndex];
 
-  // 6-second visible countdown (6 → 0)
+  // Visible 6-second countdown (6 → 5 → 4 → 3 → 2 → 1) then show questions
   useEffect(() => {
+    if (showQuestion) return;
+
     if (readySecondsLeft <= 0) {
       setShowQuestion(true);
       return;
     }
 
-    const interval = setInterval(() => {
-      setReadySecondsLeft((prev) => prev - 1);
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [readySecondsLeft]);
+    const timer = setTimeout(
+      () => setReadySecondsLeft((prev) => prev - 1),
+      1000
+    );
+    return () => clearTimeout(timer);
+  }, [readySecondsLeft, showQuestion]);
 
   // Strong autofocus helper
   const focusInput = () => {
@@ -66,7 +66,7 @@ export default function MixedTablePage() {
     }
   };
 
-  // Focus when question changes / gap ends / test starts
+  // Focus when a new question appears / gap ends / test starts
   useEffect(() => {
     if (showQuestion && !waiting) {
       focusInput();
@@ -111,7 +111,7 @@ export default function MixedTablePage() {
     }, 2000);
   };
 
-  // Loading state (before we have questions)
+  // Loading state (questions not ready yet)
   if (!questions.length) {
     return (
       <div style={outerStyle}>
@@ -122,8 +122,20 @@ export default function MixedTablePage() {
     );
   }
 
-  // READY SCREEN with 6→0 countdown
+  // READY SCREEN with animated countdown
   if (!showQuestion) {
+    // Little “animation” via scale + colour change
+    const danger = readySecondsLeft <= 2;
+    const countdownStyle = {
+      fontSize: "4.5rem",
+      fontWeight: 800,
+      marginTop: "0.75rem",
+      color: danger ? "#f97316" : "#facc15",
+      textShadow: "0 0 20px rgba(250,204,21,0.7)",
+      transform: danger ? "scale(1.15)" : "scale(1.0)",
+      transition: "transform 0.15s ease, color 0.15s ease",
+    };
+
     return (
       <div style={outerStyle}>
         <div style={cardStyle}>
@@ -132,39 +144,31 @@ export default function MixedTablePage() {
           <div
             style={{
               textAlign: "center",
-              marginTop: "1.5rem",
+              marginTop: "1.75rem",
               padding: "1.5rem 0",
             }}
           >
             <div
               style={{
                 fontSize: "0.9rem",
-                letterSpacing: "0.15em",
+                letterSpacing: "0.18em",
                 textTransform: "uppercase",
                 color: "#e5e7eb",
               }}
             >
               Get Ready…
             </div>
-            <div
-              style={{
-                fontSize: "4rem",
-                fontWeight: 800,
-                marginTop: "0.5rem",
-                color: "#facc15",
-                textShadow: "0 0 12px rgba(250,204,21,0.5)",
-              }}
-            >
-              {readySecondsLeft}
-            </div>
+
+            <div style={countdownStyle}>{readySecondsLeft}</div>
+
             <p
               style={{
-                marginTop: "0.5rem",
+                marginTop: "0.6rem",
                 color: "#d1d5db",
                 fontSize: "0.95rem",
               }}
             >
-              Your <strong>mixed times tables</strong> test will start in{" "}
+              Your <strong>mixed times tables</strong> test will begin in{" "}
               <strong>{readySecondsLeft}</strong> seconds.
             </p>
           </div>
@@ -185,7 +189,7 @@ export default function MixedTablePage() {
           progress={progress}
         />
 
-        {/* Question section */}
+        {/* Question block */}
         <div
           style={{
             marginTop: "1.5rem",
@@ -317,7 +321,7 @@ const cardStyle = {
   border: "1px solid rgba(148,163,184,0.3)",
 };
 
-/* ---------- Header component ---------- */
+/* ---------- Header component (logo + title + progress bar) ---------- */
 
 function Header({ question, total, progress }) {
   return (
