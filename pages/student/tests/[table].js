@@ -6,6 +6,7 @@ const READY_SECONDS = 6;
 
 export default function MixedTablePage() {
   const router = useRouter();
+  const { name, class: className } = router.query;
 
   const [questions, setQuestions] = useState([]);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -16,27 +17,31 @@ export default function MixedTablePage() {
   const [waiting, setWaiting] = useState(false);
 
   const [readySecondsLeft, setReadySecondsLeft] = useState(READY_SECONDS);
-  const [questionSecondsLeft, setQuestionSecondsLeft] = useState(6);
 
   const inputRef = useRef(null);
 
+  // All tables allowed (later controlled by teacher settings)
   const allowedTables = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
-  // Generate mixed questions once
+  // Generate mixed questions ONCE
   useEffect(() => {
     const generated = Array.from({ length: TOTAL_QUESTIONS }).map(() => {
       const a = Math.floor(Math.random() * 12) + 1;
       const b =
         allowedTables[Math.floor(Math.random() * allowedTables.length)];
-      return { a, b, correct: a * b };
-    });
 
+      return {
+        a,
+        b,
+        correct: a * b,
+      };
+    });
     setQuestions(generated);
   }, []);
 
   const current = questions[questionIndex];
 
-  // READY COUNTDOWN (before Q1)
+  // Visible countdown
   useEffect(() => {
     if (showQuestion) return;
 
@@ -45,18 +50,21 @@ export default function MixedTablePage() {
       return;
     }
 
-    const timer = setTimeout(() => {
-      setReadySecondsLeft((prev) => prev - 1);
-    }, 1000);
-
+    const timer = setTimeout(
+      () => setReadySecondsLeft((prev) => prev - 1),
+      1000
+    );
     return () => clearTimeout(timer);
   }, [readySecondsLeft, showQuestion]);
 
-  // STRONG AUTOFOCUS
+  // Strong autofocus helper
   const focusInput = () => {
-    if (!inputRef.current) return;
-    inputRef.current.focus();
-    setTimeout(() => inputRef.current && inputRef.current.focus(), 20);
+    if (inputRef.current) {
+      inputRef.current.focus();
+      setTimeout(() => {
+        inputRef.current && inputRef.current.focus();
+      }, 10);
+    }
   };
 
   useEffect(() => {
@@ -65,46 +73,26 @@ export default function MixedTablePage() {
     }
   }, [questionIndex, waiting, showQuestion]);
 
-  // PER-QUESTION TIMER
+  // ENTER submits
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !waiting && showQuestion) {
+      submitAnswer();
+    }
+  };
+
   useEffect(() => {
-    if (!showQuestion) return;
-    if (waiting) return;
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
 
-    setQuestionSecondsLeft(6);
+  const submitAnswer = () => {
+    if (waiting || !current) return;
 
-    const interval = setInterval(() => {
-      setQuestionSecondsLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          submitAnswer(true); // auto-submit
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [questionIndex, showQuestion, waiting]);
-
-  // ENTER → submit
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.key === "Enter" && !waiting && showQuestion) {
-        submitAnswer(false);
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [showQuestion, waiting]);
-
-  // MAIN SUBMIT
-  const submitAnswer = (auto = false) => {
-    if (!current || waiting) return;
-
-    const isCorrect = !auto && parseInt(answer) === current.correct;
+    const isCorrect = parseInt(answer) === current.correct;
     const newScore = isCorrect ? score + 1 : score;
 
-    setScore(newScore);
+    if (isCorrect) setScore(newScore);
+
     setAnswer("");
     setWaiting(true);
 
@@ -115,215 +103,221 @@ export default function MixedTablePage() {
         setQuestionIndex((prev) => prev + 1);
       } else {
         router.push(
-          `/student/tests/result?score=${newScore}&total=${questions.length}`
+          `/student/tests/result?score=${newScore}&total=${questions.length}&name=${name}&class=${className}`
         );
       }
-    }, 1800);
+    }, 2000);
   };
 
-  // Loading
-  if (!questions.length)
-    return (
-      <div style={outerStyle}>
-        <div style={cardStyle}>Loading questions…</div>
-      </div>
-    );
+  if (!questions.length) {
+    return <div style={outerStyle}><div style={cardStyle}><p>Loading…</p></div></div>;
+  }
 
-  // READY SCREEN
+  /* ---------------- READY SCREEN ------------------ */
   if (!showQuestion) {
     const danger = readySecondsLeft <= 2;
+    const countdownStyle = {
+      fontSize: "4.5rem",
+      fontWeight: 800,
+      marginTop: "0.75rem",
+      color: danger ? "#f97316" : "#facc15",
+      textShadow: "0 0 20px rgba(250,204,21,0.7)",
+      transform: danger ? "scale(1.15)" : "scale(1.0)",
+      transition: "all 0.2s ease",
+    };
 
     return (
       <div style={outerStyle}>
         <div style={cardStyle}>
-          <h1
-            style={{
-              fontSize: "2.2rem",
-              fontWeight: "bold",
-              color: "#facc15",
-              textShadow: "0 0 20px rgba(250,204,21,0.6)",
-              marginBottom: "10px",
-            }}
-          >
-            Times Tables Arena
-          </h1>
-
-          <p style={{ color: "#ddd", fontSize: "1rem" }}>
-            Mixed Times Tables Test
-          </p>
-
-          <div
-            style={{
-              fontSize: "6rem",
-              fontWeight: "900",
-              color: danger ? "#ff4444" : "#facc15",
-              textShadow: "0 0 25px rgba(250,204,21,0.8)",
-              transform: danger ? "scale(1.25)" : "scale(1)",
-              transition: "0.25s",
-              margin: "25px 0",
-            }}
-          >
-            {readySecondsLeft}
+          <Header />
+          <div style={{ textAlign: "center", marginTop: "2rem" }}>
+            <div style={{ color: "#e5e7eb", letterSpacing: "0.2em" }}>
+              Get Ready…
+            </div>
+            <div style={countdownStyle}>{readySecondsLeft}</div>
+            <p style={{ marginTop: "0.5rem", color: "#d1d5db" }}>
+              Your mixed times tables test starts in{" "}
+              <strong>{readySecondsLeft}</strong> seconds.
+            </p>
           </div>
-
-          <p style={{ color: "#ccc", fontSize: "1.1rem" }}>
-            Get ready… your test begins in{" "}
-            <span style={{ color: "#facc15", fontWeight: "bold" }}>
-              {readySecondsLeft}
-            </span>{" "}
-            seconds.
-          </p>
         </div>
       </div>
     );
   }
 
+  /* ---------------- MAIN TEST SCREEN ------------------ */
   const progress = (questionIndex + 1) / questions.length;
 
-  // MAIN TEST UI
   return (
     <div style={outerStyle}>
       <div style={cardStyle}>
-        <Header
-          question={questionIndex + 1}
-          total={questions.length}
-          progress={progress}
-        />
+        <Header question={questionIndex + 1} total={questions.length} progress={progress} />
 
-        <div style={{ textAlign: "center", marginTop: "20px" }}>
-          <div
-            style={{
-              fontSize: "1.1rem",
-              fontWeight: "bold",
-              marginBottom: "10px",
-              color: questionSecondsLeft <= 2 ? "#ff4444" : "#facc15",
-            }}
-          >
-            Time left: {questionSecondsLeft}s
+        <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
+          <div style={{ color: "#9ca3af", marginBottom: "0.5rem" }}>
+            Question {questionIndex + 1} of {questions.length}
           </div>
 
-          <div
-            style={{
-              fontSize: "3.5rem",
-              fontWeight: 900,
-              color: "#fff",
-              marginBottom: "20px",
-            }}
-          >
+          <div style={questionStyle}>
             {current.a} × {current.b}
           </div>
+
+          <div style={{ marginTop: "0.5rem", fontSize: "1.5rem", color: "#e5e7eb" }}>=</div>
 
           <input
             ref={inputRef}
             value={answer}
             disabled={waiting}
             onChange={(e) => setAnswer(e.target.value)}
-            style={{
-              padding: "12px",
-              fontSize: "2rem",
-              width: "160px",
-              textAlign: "center",
-              borderRadius: "50px",
-              outline: "none",
-              border: "3px solid #facc15",
-              background: "#111",
-              color: "#fff",
-            }}
+            style={inputStyle}
           />
 
-          <div>
+          <div style={{ marginTop: "1.25rem" }}>
             <button
-              onClick={() => submitAnswer(false)}
+              onClick={submitAnswer}
               disabled={waiting}
-              style={{
-                marginTop: "20px",
-                padding: "14px 30px",
-                fontSize: "1.2rem",
-                borderRadius: "30px",
-                border: "none",
-                background: waiting ? "#555" : "#facc15",
-                color: waiting ? "#ccc" : "#000",
-                cursor: waiting ? "default" : "pointer",
-              }}
+              style={buttonStyle(waiting)}
             >
-              {waiting ? "..." : "Submit"}
+              {waiting ? "Next…" : "Submit"}
             </button>
           </div>
 
-          {waiting && (
-            <p style={{ marginTop: "10px", color: "#aaa" }}>
-              Next question loading…
-            </p>
-          )}
+          {waiting && <p style={{ marginTop: "0.5rem", color: "#9ca3af" }}>Next question…</p>}
         </div>
       </div>
     </div>
   );
 }
 
-/* ---------- Styles ---------- */
+/* ---------- Shared Layout Styles ---------- */
 
 const outerStyle = {
   minHeight: "100vh",
-  background: "radial-gradient(circle at top, #facc15, #0f172a 50%, #000)",
+  background:
+    "radial-gradient(circle at top, #facc15 0, #0f172a 35%, #020617 100%)",
   display: "flex",
-  justifyContent: "center",
   alignItems: "center",
-  padding: "20px",
-  fontFamily: "Arial",
+  justifyContent: "center",
+  padding: "1.5rem",
+  color: "white",
 };
 
 const cardStyle = {
-  background: "rgba(0,0,0,0.8)",
-  padding: "40px",
-  borderRadius: "20px",
+  background: "rgba(3,7,18,0.9)",
+  borderRadius: "22px",
+  padding: "2rem 2.5rem",
+  maxWidth: "700px",
   width: "100%",
-  maxWidth: "650px",
-  color: "white",
-  textAlign: "center",
-  boxShadow: "0 0 30px rgba(0,0,0,0.7)",
+  boxShadow: "0 25px 60px rgba(0,0,0,0.45)",
+  border: "1px solid rgba(148,163,184,0.3)",
 };
+
+const questionStyle = {
+  fontSize: "3.5rem",
+  fontWeight: 800,
+  color: "#f9fafb",
+  textShadow: "0 0 20px rgba(0,0,0,0.7)",
+};
+
+const inputStyle = {
+  marginTop: "0.75rem",
+  padding: "14px",
+  fontSize: "1.75rem",
+  width: "170px",
+  textAlign: "center",
+  borderRadius: "999px",
+  border: "2px solid #facc15",
+  backgroundColor: "#020617",
+  color: "white",
+  outline: "none",
+};
+
+const buttonStyle = (waiting) => ({
+  padding: "12px 28px",
+  fontSize: "1.1rem",
+  fontWeight: 700,
+  borderRadius: "999px",
+  background: waiting
+    ? "#4b5563"
+    : "linear-gradient(135deg,#f59e0b,#facc15)",
+  color: waiting ? "#e5e7eb" : "#111827",
+  cursor: waiting ? "default" : "pointer",
+});
+
+/* ---------- Header Component ---------- */
 
 function Header({ question, total, progress }) {
   return (
     <div>
+      {/* Top Row */}
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          marginBottom: "15px",
+          alignItems: "center",
+          marginBottom: "1rem",
         }}
       >
-        <div style={{ fontWeight: "bold", fontSize: "1.3rem" }}>
-          Times Tables Arena
-        </div>
-
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: "0.8rem", color: "#ccc" }}>Question</div>
-          <div style={{ fontSize: "1.1rem", fontWeight: "bold" }}>
-            {question}/{total}
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <div
+            style={{
+              width: "60px",
+              height: "60px",
+              borderRadius: "50%",
+              background: "white",
+              border: "3px solid #facc15",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <img
+              src="/bushey-logo.png"
+              alt="Bushey Manor"
+              style={{ width: "100%", height: "100%", borderRadius: "50%" }}
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: "0.75rem", color: "#e5e7eb" }}>
+              Bushey Manor
+            </div>
+            <div style={{ fontSize: "1.25rem", fontWeight: "bold", color: "#facc15" }}>
+              Times Tables Arena
+            </div>
           </div>
         </div>
+
+        {question && (
+          <div style={{ textAlign: "right" }}>
+            <div style={{ color: "#9ca3af", fontSize: "0.75rem" }}>Question</div>
+            <div style={{ fontSize: "1.2rem", fontWeight: 700 }}>
+              {question} / {total}
+            </div>
+          </div>
+        )}
       </div>
 
-      <div
-        style={{
-          height: "10px",
-          background: "#333",
-          borderRadius: "20px",
-          overflow: "hidden",
-        }}
-      >
+      {/* Progress Bar */}
+      {typeof progress === "number" && (
         <div
           style={{
-            height: "100%",
-            width: `${progress * 100}%`,
-            background:
-              "linear-gradient(90deg, #22c55e, #facc15, #f97316, #ef4444)",
-            transition: "width 0.3s ease",
+            height: "8px",
+            borderRadius: "999px",
+            background: "#0f172a",
+            overflow: "hidden",
           }}
-        />
-      </div>
+        >
+          <div
+            style={{
+              width: `${progress * 100}%`,
+              height: "100%",
+              background:
+                "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
+              transition: "width 0.3s ease-out",
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
