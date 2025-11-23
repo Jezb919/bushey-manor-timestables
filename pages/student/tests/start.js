@@ -11,17 +11,18 @@ export default function MixedTest() {
   const [showQuestion, setShowQuestion] = useState(false);
   const [waiting, setWaiting] = useState(false);
 
-  // Input focus handling
+  // Input ref
   const inputRef = useRef(null);
 
-  // Tables allowed – later this will come from teacher settings
+  // Allowed tables for now – will later come from teacher settings
   const allowedTables = [1,2,3,4,5,6,7,8,9,10,11,12];
 
-  // Generate 25 mixed questions
+  // Generate questions once
   useEffect(() => {
     const generated = Array.from({ length: 25 }).map(() => {
       const a = Math.floor(Math.random() * 12) + 1;
-      const b = allowedTables[Math.floor(Math.random() * allowedTables.length)];
+      const b =
+        allowedTables[Math.floor(Math.random() * allowedTables.length)];
       return {
         a,
         b,
@@ -34,13 +35,32 @@ export default function MixedTest() {
 
   const current = questions[questionIndex];
 
-  // 6-second countdown
+  // 6-second countdown before first question
   useEffect(() => {
     const timer = setTimeout(() => setShowQuestion(true), 6000);
     return () => clearTimeout(timer);
   }, []);
 
-  // Press Enter to submit
+  // Strong auto-focus function
+  const focusInput = () => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+
+      // If the browser renders slightly later, force focus again
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 10);
+    }
+  };
+
+  // Focus when ready or after each new question
+  useEffect(() => {
+    if (!waiting && showQuestion) {
+      focusInput();
+    }
+  }, [questionIndex, waiting, showQuestion]);
+
+  // PRESS ENTER to submit
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !waiting) {
       submitAnswer();
@@ -52,13 +72,7 @@ export default function MixedTest() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  // Automatically focus input whenever question changes
-  useEffect(() => {
-    if (!waiting && inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [questionIndex, waiting]);
-
+  // Submit the current answer
   const submitAnswer = () => {
     if (waiting) return;
 
