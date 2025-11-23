@@ -7,8 +7,6 @@ export default function StudentLogin() {
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    // For now, we just send them to the test page
-    // Later we will connect this to Supabase.
     const encodedName = encodeURIComponent(name);
     const encodedClass = encodeURIComponent(className);
 
@@ -16,47 +14,102 @@ export default function StudentLogin() {
   };
 
   return (
-    <div style={{ padding: "2rem", fontFamily: "Arial" }}>
-      <h1>Student Login</h1>
-      <p>Please enter your name and class:</p>
+    <div style={outerStyle}>
+      <div style={cardStyle}>
+        <h1 style={titleStyle}>Student Login</h1>
+        <p style={subtitleStyle}>Enter your name and class to begin</p>
 
-      <form onSubmit={handleSubmit} style={{ marginTop: "2rem" }}>
-        <div style={{ marginBottom: "1rem" }}>
-          <label>Name:</label><br/>
-          <input
-            type="text"
-            value={name}
-            required
-            onChange={(e) => setName(e.target.value)}
-            style={{ padding: "8px", width: "250px" }}
-          />
-        </div>
+        <form onSubmit={handleSubmit} style={{ marginTop: "2rem" }}>
+          {/* Name field */}
+          <div style={{ marginBottom: "1rem" }}>
+            <input
+              type="text"
+              placeholder="Name"
+              value={name}
+              required
+              onChange={(e) => setName(e.target.value)}
+              style={inputStyle}
+            />
+          </div>
 
-        <div style={{ marginBottom: "1rem" }}>
-          <label>Class:</label><br/>
-          <input
-            type="text"
-            value={className}
-            required
-            onChange={(e) => setClassName(e.target.value)}
-            style={{ padding: "8px", width: "250px" }}
-          />
-        </div>
+          {/* Class field */}
+          <div style={{ marginBottom: "1rem" }}>
+            <input
+              type="text"
+              placeholder="Class (e.g. 4M)"
+              value={className}
+              required
+              onChange={(e) => setClassName(e.target.value)}
+              style={inputStyle}
+            />
+          </div>
 
-        <button
-          type="submit"
-          style={{
-            padding: "10px 20px",
-            background: "#0070f3",
-            color: "white",
-            borderRadius: "5px",
-            border: "none",
-            fontSize: "16px",
-          }}
-        >
-          Continue
-        </button>
-      </form>
+          <button type="submit" style={buttonPrimary}>
+            Continue
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
+
+/* ---------- Styles ---------- */
+
+const outerStyle = {
+  minHeight: "100vh",
+  background:
+    "radial-gradient(circle at top, #facc15, #0f172a 50%, #000)",
+  display: "flex",
+  justifyContent: "center",
+  alignItems: "center",
+  padding: "20px",
+  fontFamily: "Arial",
+};
+
+const cardStyle = {
+  background: "rgba(0,0,0,0.8)",
+  padding: "40px",
+  borderRadius: "20px",
+  width: "100%",
+  maxWidth: "600px",
+  color: "white",
+  textAlign: "center",
+  boxShadow: "0 0 30px rgba(0,0,0,0.7)",
+};
+
+const titleStyle = {
+  fontSize: "2.1rem",
+  fontWeight: "bold",
+  color: "#facc15",
+  textShadow: "0 0 20px rgba(250,204,21,0.6)",
+};
+
+const subtitleStyle = {
+  fontSize: "1rem",
+  color: "#ddd",
+  marginTop: "10px",
+};
+
+const inputStyle = {
+  padding: "12px",
+  width: "250px",
+  fontSize: "1.1rem",
+  borderRadius: "10px",
+  border: "2px solid #facc15",
+  outline: "none",
+  background: "#111",
+  color: "white",
+  textAlign: "center",
+};
+
+const buttonPrimary = {
+  marginTop: "10px",
+  padding: "14px 28px",
+  background: "#facc15",
+  color: "#000",
+  fontSize: "1.1rem",
+  fontWeight: "bold",
+  borderRadius: "999px",
+  border: "none",
+  cursor: "pointer",
+};
