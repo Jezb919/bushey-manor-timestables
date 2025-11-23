@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 
 export default function MixedTest() {
@@ -11,7 +11,10 @@ export default function MixedTest() {
   const [showQuestion, setShowQuestion] = useState(false);
   const [waiting, setWaiting] = useState(false);
 
-  // Teacher will define this later – for now, full 1–12 tables
+  // Input focus handling
+  const inputRef = useRef(null);
+
+  // Tables allowed – later this will come from teacher settings
   const allowedTables = [1,2,3,4,5,6,7,8,9,10,11,12];
 
   // Generate 25 mixed questions
@@ -37,15 +40,24 @@ export default function MixedTest() {
     return () => clearTimeout(timer);
   }, []);
 
-  // Press Enter
+  // Press Enter to submit
   const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !waiting) submitAnswer();
+    if (e.key === "Enter" && !waiting) {
+      submitAnswer();
+    }
   };
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
+
+  // Automatically focus input whenever question changes
+  useEffect(() => {
+    if (!waiting && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [questionIndex, waiting]);
 
   const submitAnswer = () => {
     if (waiting) return;
@@ -70,7 +82,8 @@ export default function MixedTest() {
     }, 2000);
   };
 
-  if (!questions.length) return <p>Loading questions…</p>;
+  if (!questions.length)
+    return <p style={{ padding: "2rem" }}>Loading questions…</p>;
 
   if (!showQuestion) {
     return (
@@ -91,11 +104,11 @@ export default function MixedTest() {
       </h2>
 
       <input
+        ref={inputRef}
         value={answer}
         disabled={waiting}
         onChange={(e) => setAnswer(e.target.value)}
         style={{ padding: "10px", fontSize: "20px", width: "120px" }}
-        autoFocus
       />
 
       <div>
