@@ -1,44 +1,45 @@
-
-  import { useRouter } from "next/router";
+import { useRouter } from "next/router";
 import { useState, useEffect } from "react";
 
 export default function TestPage() {
   const router = useRouter();
   const { table } = router.query;
 
+  const [questions, setQuestions] = useState([]);
   const [questionIndex, setQuestionIndex] = useState(0);
   const [answer, setAnswer] = useState("");
   const [score, setScore] = useState(0);
   const [showQuestion, setShowQuestion] = useState(false);
   const [waiting, setWaiting] = useState(false);
 
-  // Generate questions ONCE (fixes question-changing bug)
-  const [questions] = useState(() =>
-    Array.from({ length: 25 }).map(() => {
-      const num = Math.floor(Math.random() * 12) + 1;
+  // Generate questions ONLY after table is ready
+  useEffect(() => {
+    if (!table) return; // don't generate too early!
+
+    const generated = Array.from({ length: 25 }).map(() => {
+      const a = Math.floor(Math.random() * 12) + 1;
+
       return {
-        a: num,
-        b: table,
-        correct: num * table,
+        a,
+        b: parseInt(table),                   // FIXED: lock table number
+        correct: a * parseInt(table),         // FIXED: no NaN
       };
-    })
-  );
+    });
+
+    setQuestions(generated);
+  }, [table]);
 
   const current = questions[questionIndex];
 
-  // 6-second countdown before showing first question
+  // 6-second countdown at start
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowQuestion(true);
-    }, 6000);
+    const timer = setTimeout(() => setShowQuestion(true), 6000);
     return () => clearTimeout(timer);
   }, []);
 
-  // ENTER submits answer
+  // Press ENTER to submit
   const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !waiting) {
-      submitAnswer();
-    }
+    if (e.key === "Enter" && !waiting) submitAnswer();
   };
 
   useEffect(() => {
@@ -56,7 +57,7 @@ export default function TestPage() {
     setAnswer("");
     setWaiting(true);
 
-    // 2 second pause
+    // 2-second pause
     setTimeout(() => {
       setWaiting(false);
 
@@ -70,7 +71,8 @@ export default function TestPage() {
     }, 2000);
   };
 
-  if (!table) return <p>Loading...</p>;
+  if (!questions.length)
+    return <p style={{ padding: "2rem" }}>Loading questions…</p>;
 
   if (!showQuestion) {
     return (
@@ -120,4 +122,3 @@ export default function TestPage() {
     </div>
   );
 }
-
