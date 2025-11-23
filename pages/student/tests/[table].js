@@ -16,24 +16,19 @@ export default function MixedTablePage() {
   const [waiting, setWaiting] = useState(false);
 
   const [readySecondsLeft, setReadySecondsLeft] = useState(READY_SECONDS);
-  const [questionTime, setQuestionTime] = useState(6); // per-question timer
+  const [questionSecondsLeft, setQuestionSecondsLeft] = useState(6);
 
   const inputRef = useRef(null);
 
-  // 1–12 tables allowed for now – later this can come from teacher settings
   const allowedTables = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
-  // Generate mixed questions once
+  // Generate questions once
   useEffect(() => {
     const generated = Array.from({ length: TOTAL_QUESTIONS }).map(() => {
       const a = Math.floor(Math.random() * 12) + 1;
       const b =
         allowedTables[Math.floor(Math.random() * allowedTables.length)];
-      return {
-        a,
-        b,
-        correct: a * b,
-      };
+      return { a, b, correct: a * b };
     });
 
     setQuestions(generated);
@@ -41,7 +36,7 @@ export default function MixedTablePage() {
 
   const current = questions[questionIndex];
 
-  // Visible 6-second READY countdown (before first question)
+  // READY COUNTDOWN (before Q1)
   useEffect(() => {
     if (showQuestion) return;
 
@@ -50,41 +45,39 @@ export default function MixedTablePage() {
       return;
     }
 
-    const timer = setTimeout(
-      () => setReadySecondsLeft((prev) => prev - 1),
-      1000
-    );
+    const timer = setTimeout(() => {
+      setReadySecondsLeft((prev) => prev - 1);
+    }, 1000);
+
     return () => clearTimeout(timer);
   }, [readySecondsLeft, showQuestion]);
 
-  // Strong autofocus helper
+  // STRONG AUTOFOCUS
   const focusInput = () => {
-    if (inputRef.current) {
-      inputRef.current.focus();
-      setTimeout(() => {
-        inputRef.current && inputRef.current.focus();
-      }, 10);
-    }
+    if (!inputRef.current) return;
+    inputRef.current.focus();
+    setTimeout(() => inputRef.current && inputRef.current.focus(), 20);
   };
 
-  // Focus when a new question appears / gap ends / test starts
   useEffect(() => {
     if (showQuestion && !waiting) {
       focusInput();
     }
   }, [questionIndex, waiting, showQuestion]);
 
-  // Per-question 6-second timer
+  // -------------------------------
+  // 🔥 **PER-QUESTION TIMER**
+  // -------------------------------
   useEffect(() => {
-    if (!showQuestion || waiting || !current) return;
+    if (!showQuestion) return;
+    if (waiting) return;
 
-    setQuestionTime(6); // reset timer at start of each question
+    setQuestionSecondsLeft(6);
 
     const interval = setInterval(() => {
-      setQuestionTime((prev) => {
+      setQuestionSecondsLeft((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          // Auto-submit as "no answer" (always wrong)
           submitAnswer(true);
           return 0;
         }
@@ -93,36 +86,30 @@ export default function MixedTablePage() {
     }, 1000);
 
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questionIndex, showQuestion, waiting, current]);
+  }, [questionIndex, showQuestion, waiting]);
 
-  // ENTER submits
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !waiting && showQuestion) {
-      submitAnswer(false);
-    }
-  };
-
+  // ENTER → submit
   useEffect(() => {
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  });
+    const handler = (e) => {
+      if (e.key === "Enter" && !waiting && showQuestion) {
+        submitAnswer(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [showQuestion, waiting]);
 
-  // auto = true means timer ran out (don’t give credit even if something is typed)
+  // MAIN SUBMIT
   const submitAnswer = (auto = false) => {
-    if (waiting || !current) return;
+    if (!current || waiting) return;
 
     const isCorrect = !auto && parseInt(answer) === current.correct;
     const newScore = isCorrect ? score + 1 : score;
 
-    if (isCorrect) {
-      setScore(newScore);
-    }
-
+    setScore(newScore);
     setAnswer("");
     setWaiting(true);
 
-    // 2-second gap before next question / results
     setTimeout(() => {
       setWaiting(false);
 
@@ -133,78 +120,60 @@ export default function MixedTablePage() {
           `/student/tests/result?score=${newScore}&total=${questions.length}`
         );
       }
-    }, 2000);
+    }, 1800);
   };
 
-  // Loading state (questions not ready yet)
-  if (!questions.length) {
+  // Loading
+  if (!questions.length)
     return (
       <div style={outerStyle}>
-        <div style={cardStyle}>
-          <p style={{ fontSize: "1.25rem" }}>Loading questions…</p>
-        </div>
+        <div style={cardStyle}>Loading questions…</div>
       </div>
     );
-  }
 
-  // READY SCREEN with animated countdown
+  // READY SCREEN
   if (!showQuestion) {
-    // Little “animation” via scale + colour change
     const danger = readySecondsLeft <= 2;
-    const countdownStyle = {
-      fontSize: "4.5rem",
-      fontWeight: 800,
-      marginTop: "0.75rem",
-      color: danger ? "#f97316" : "#facc15",
-      textShadow: "0 0 20px rgba(250,204,21,0.7)",
-      transform: danger ? "scale(1.15)" : "scale(1.0)",
-      transition: "transform 0.15s ease, color 0.15s ease",
-    };
 
     return (
       <div style={outerStyle}>
         <div style={cardStyle}>
-          <Header question={null} total={TOTAL_QUESTIONS} />
+          <h2
+            style={{
+              fontSize: "1.2rem",
+              letterSpacing: "3px",
+              textTransform: "uppercase",
+              color: "#eee",
+            }}
+          >
+            Get Ready…
+          </h2>
 
           <div
             style={{
-              textAlign: "center",
-              marginTop: "1.75rem",
-              padding: "1.5rem 0",
+              fontSize: "5rem",
+              fontWeight: "bold",
+              color: danger ? "#ff4444" : "#facc15",
+              transform: danger ? "scale(1.2)" : "scale(1)",
+              transition: "0.2s",
+              textShadow: "0 0 20px rgba(250,204,21,0.7)",
+              marginTop: "10px",
             }}
           >
-            <div
-              style={{
-                fontSize: "0.9rem",
-                letterSpacing: "0.18em",
-                textTransform: "uppercase",
-                color: "#e5e7eb",
-              }}
-            >
-              Get Ready…
-            </div>
-
-            <div style={countdownStyle}>{readySecondsLeft}</div>
-
-            <p
-              style={{
-                marginTop: "0.6rem",
-                color: "#d1d5db",
-                fontSize: "0.95rem",
-              }}
-            >
-              Your <strong>mixed times tables</strong> test will begin in{" "}
-              <strong>{readySecondsLeft}</strong> seconds.
-            </p>
+            {readySecondsLeft}
           </div>
+
+          <p style={{ color: "#ddd", marginTop: "10px" }}>
+            Your test begins in {readySecondsLeft} seconds...
+          </p>
         </div>
       </div>
     );
   }
 
-  // MAIN TEST SCREEN
   const progress = (questionIndex + 1) / questions.length;
 
+  // MAIN TEST UI
   return (
     <div style={outerStyle}>
       <div style={cardStyle}>
@@ -214,116 +183,71 @@ export default function MixedTablePage() {
           progress={progress}
         />
 
-        {/* Question block */}
-        <div
-          style={{
-            marginTop: "1.5rem",
-            textAlign: "center",
-          }}
-        >
-          {/* Time left for this question */}
+        <div style={{ textAlign: "center", marginTop: "20px" }}>
+          {/* QUESTION TIMER */}
           <div
             style={{
-              fontSize: "0.9rem",
-              color: questionTime <= 2 ? "#f97316" : "#facc15",
-              marginBottom: "0.25rem",
-              fontWeight: 600,
+              fontSize: "1.1rem",
+              fontWeight: "bold",
+              marginBottom: "10px",
+              color: questionSecondsLeft <= 2 ? "#ff4444" : "#facc15",
             }}
           >
-            Time left: {questionTime}s
-          </div>
-
-          <div
-            style={{
-              fontSize: "0.9rem",
-              letterSpacing: "0.12em",
-              textTransform: "uppercase",
-              color: "#9ca3af",
-              marginBottom: "0.4rem",
-            }}
-          >
-            Question {questionIndex + 1} of {questions.length}
+            Time left: {questionSecondsLeft}s
           </div>
 
           <div
             style={{
               fontSize: "3.5rem",
-              fontWeight: 800,
-              color: "#f9fafb",
-              textShadow: "0 0 20px rgba(0,0,0,0.7)",
+              fontWeight: 900,
+              color: "#fff",
+              marginBottom: "20px",
             }}
           >
             {current.a} × {current.b}
           </div>
 
-          <div
+          {/* INPUT */}
+          <input
+            ref={inputRef}
+            value={answer}
+            disabled={waiting}
+            onChange={(e) => setAnswer(e.target.value)}
             style={{
-              fontSize: "1.5rem",
-              marginTop: "0.75rem",
-              color: "#e5e7eb",
+              padding: "12px",
+              fontSize: "2rem",
+              width: "140px",
+              textAlign: "center",
+              borderRadius: "50px",
+              outline: "none",
+              border: "3px solid #facc15",
+              background: "#111",
+              color: "#fff",
             }}
-          >
-            =
-          </div>
+          />
 
-          {/* Answer input */}
-          <div style={{ marginTop: "0.75rem" }}>
-            <input
-              ref={inputRef}
-              value={answer}
-              disabled={waiting}
-              onChange={(e) => setAnswer(e.target.value)}
-              style={{
-                padding: "14px 18px",
-                fontSize: "1.5rem",
-                width: "160px",
-                textAlign: "center",
-                borderRadius: "999px",
-                border: "2px solid #facc15",
-                outline: "none",
-                backgroundColor: "#020617",
-                color: "#f9fafb",
-                boxShadow: "0 0 10px rgba(250,204,21,0.4)",
-              }}
-            />
-          </div>
-
-          {/* Submit button */}
-          <div style={{ marginTop: "1.25rem" }}>
+          {/* BUTTON */}
+          <div>
             <button
               onClick={() => submitAnswer(false)}
               disabled={waiting}
               style={{
-                padding: "12px 28px",
-                fontSize: "1.1rem",
-                fontWeight: 700,
-                textTransform: "uppercase",
-                letterSpacing: "0.12em",
-                borderRadius: "999px",
+                marginTop: "20px",
+                padding: "12px 30px",
+                fontSize: "1.2rem",
+                borderRadius: "30px",
                 border: "none",
+                background: waiting ? "#555" : "#facc15",
+                color: waiting ? "#ccc" : "#000",
                 cursor: waiting ? "default" : "pointer",
-                background: waiting
-                  ? "#4b5563"
-                  : "linear-gradient(135deg,#f59e0b,#facc15)",
-                color: waiting ? "#e5e7eb" : "#111827",
-                boxShadow: waiting
-                  ? "none"
-                  : "0 0 18px rgba(250,204,21,0.5)",
-                transition: "transform 0.1s ease, box-shadow 0.1s ease",
               }}
             >
-              {waiting ? "Next…" : "Submit"}
+              {waiting ? "..." : "Submit"}
             </button>
           </div>
 
           {waiting && (
-            <p
-              style={{
-                marginTop: "0.5rem",
-                color: "#9ca3af",
-                fontSize: "0.9rem",
-              }}
-            >
+            <p style={{ marginTop: "10px", color: "#aaa" }}>
               Next question loading…
             </p>
           )}
@@ -333,138 +257,71 @@ export default function MixedTablePage() {
   );
 }
 
-/* ---------- Shared layout styles ---------- */
+/* ---------- Styles ---------- */
 
 const outerStyle = {
   minHeight: "100vh",
-  background:
-    "radial-gradient(circle at top, #facc15 0, #0f172a 35%, #020617 100%)",
+  background: "radial-gradient(circle at top, #facc15, #0f172a 50%, #000)",
   display: "flex",
-  alignItems: "center",
   justifyContent: "center",
-  padding: "1.5rem",
-  color: "white",
-  fontFamily:
-    "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  alignItems: "center",
+  padding: "20px",
+  fontFamily: "Arial",
 };
 
 const cardStyle = {
-  background: "rgba(3,7,18,0.95)",
+  background: "rgba(0,0,0,0.8)",
+  padding: "30px",
   borderRadius: "20px",
-  padding: "1.75rem 2.25rem",
-  maxWidth: "680px",
   width: "100%",
-  boxShadow: "0 25px 60px rgba(0,0,0,0.6)",
-  border: "1px solid rgba(148,163,184,0.3)",
+  maxWidth: "650px",
+  color: "white",
+  textAlign: "center",
+  boxShadow: "0 0 30px rgba(0,0,0,0.7)",
 };
-
-/* ---------- Header component (badge + title + progress bar) ---------- */
 
 function Header({ question, total, progress }) {
   return (
     <div>
-      {/* Top row: badge + title + question counter */}
+      {/* Top */}
       <div
         style={{
           display: "flex",
-          alignItems: "center",
           justifyContent: "space-between",
-          gap: "1rem",
+          marginBottom: "15px",
         }}
       >
-        {/* Badge + title */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <div
-            style={{
-              width: "56px",
-              height: "56px",
-              borderRadius: "999px",
-              background: "#facc15",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: "2px solid #fbbf24",
-              color: "#111827",
-              fontWeight: 800,
-              fontSize: "1.2rem",
-            }}
-          >
-            BM
-          </div>
-
-          <div>
-            <div
-              style={{
-                fontSize: "0.75rem",
-                letterSpacing: "0.16em",
-                textTransform: "uppercase",
-                color: "#e5e7eb",
-              }}
-            >
-              Bushey Manor
-            </div>
-            <div
-              style={{
-                fontSize: "1.2rem",
-                fontWeight: 800,
-                color: "#facc15",
-              }}
-            >
-              Times Tables Arena
-            </div>
-          </div>
+        <div style={{ fontWeight: "bold", fontSize: "1.3rem" }}>
+          Times Tables Arena
         </div>
 
-        {/* Question counter */}
-        {typeof question === "number" && total && (
-          <div style={{ textAlign: "right" }}>
-            <div
-              style={{
-                fontSize: "0.75rem",
-                textTransform: "uppercase",
-                letterSpacing: "0.14em",
-                color: "#9ca3af",
-              }}
-            >
-              Question
-            </div>
-            <div
-              style={{
-                fontSize: "1.2rem",
-                fontWeight: 700,
-                color: "#e5e7eb",
-              }}
-            >
-              {question} / {total}
-            </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: "0.8rem", color: "#ccc" }}>Question</div>
+          <div style={{ fontSize: "1.1rem", fontWeight: "bold" }}>
+            {question}/{total}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Progress bar */}
-      {typeof progress === "number" && (
-        <div style={{ marginTop: "1rem" }}>
-          <div
-            style={{
-              height: "8px",
-              borderRadius: "999px",
-              background: "#020617",
-              overflow: "hidden",
-              boxShadow: "0 0 10px rgba(15,23,42,0.8)",
-            }}
-          >
-            <div
-              style={{
-                width: `${Math.min(progress * 100, 100)}%`,
-                height: "100%",
-                background:
-                  "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
-                transition: "width 0.25s ease-out",
-              }}
-            />
-          </div>
-        </div>
-      )}
+      <div
+        style={{
+          height: "10px",
+          background: "#333",
+          borderRadius: "20px",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${progress * 100}%`,
+            background:
+              "linear-gradient(90deg, #22c55e, #facc15, #f97316, #ef4444)",
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
     </div>
   );
 }
