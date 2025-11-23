@@ -22,7 +22,7 @@ export default function MixedTablePage() {
 
   const allowedTables = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
-  // Generate questions once
+  // Generate mixed questions once
   useEffect(() => {
     const generated = Array.from({ length: TOTAL_QUESTIONS }).map(() => {
       const a = Math.floor(Math.random() * 12) + 1;
@@ -65,9 +65,7 @@ export default function MixedTablePage() {
     }
   }, [questionIndex, waiting, showQuestion]);
 
-  // -------------------------------
-  // 🔥 **PER-QUESTION TIMER**
-  // -------------------------------
+  // PER-QUESTION TIMER
   useEffect(() => {
     if (!showQuestion) return;
     if (waiting) return;
@@ -78,7 +76,7 @@ export default function MixedTablePage() {
       setQuestionSecondsLeft((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          submitAnswer(true);
+          submitAnswer(true); // auto-submit
           return 0;
         }
         return prev - 1;
@@ -138,33 +136,42 @@ export default function MixedTablePage() {
     return (
       <div style={outerStyle}>
         <div style={cardStyle}>
-          <h2
+          <h1
             style={{
-              fontSize: "1.2rem",
-              letterSpacing: "3px",
-              textTransform: "uppercase",
-              color: "#eee",
+              fontSize: "2.2rem",
+              fontWeight: "bold",
+              color: "#facc15",
+              textShadow: "0 0 20px rgba(250,204,21,0.6)",
+              marginBottom: "10px",
             }}
           >
-            Get Ready…
-          </h2>
+            Times Tables Arena
+          </h1>
+
+          <p style={{ color: "#ddd", fontSize: "1rem" }}>
+            Mixed Times Tables Test
+          </p>
 
           <div
             style={{
-              fontSize: "5rem",
-              fontWeight: "bold",
+              fontSize: "6rem",
+              fontWeight: "900",
               color: danger ? "#ff4444" : "#facc15",
-              transform: danger ? "scale(1.2)" : "scale(1)",
-              transition: "0.2s",
-              textShadow: "0 0 20px rgba(250,204,21,0.7)",
-              marginTop: "10px",
+              textShadow: "0 0 25px rgba(250,204,21,0.8)",
+              transform: danger ? "scale(1.25)" : "scale(1)",
+              transition: "0.25s",
+              margin: "25px 0",
             }}
           >
             {readySecondsLeft}
           </div>
 
-          <p style={{ color: "#ddd", marginTop: "10px" }}>
-            Your test begins in {readySecondsLeft} seconds...
+          <p style={{ color: "#ccc", fontSize: "1.1rem" }}>
+            Get ready… your test begins in{" "}
+            <span style={{ color: "#facc15", fontWeight: "bold" }}>
+              {readySecondsLeft}
+            </span>{" "}
+            seconds.
           </p>
         </div>
       </div>
@@ -184,7 +191,6 @@ export default function MixedTablePage() {
         />
 
         <div style={{ textAlign: "center", marginTop: "20px" }}>
-          {/* QUESTION TIMER */}
           <div
             style={{
               fontSize: "1.1rem",
@@ -207,7 +213,6 @@ export default function MixedTablePage() {
             {current.a} × {current.b}
           </div>
 
-          {/* INPUT */}
           <input
             ref={inputRef}
             value={answer}
@@ -216,7 +221,7 @@ export default function MixedTablePage() {
             style={{
               padding: "12px",
               fontSize: "2rem",
-              width: "140px",
+              width: "160px",
               textAlign: "center",
               borderRadius: "50px",
               outline: "none",
@@ -226,14 +231,13 @@ export default function MixedTablePage() {
             }}
           />
 
-          {/* BUTTON */}
           <div>
             <button
               onClick={() => submitAnswer(false)}
               disabled={waiting}
               style={{
                 marginTop: "20px",
-                padding: "12px 30px",
+                padding: "14px 30px",
                 fontSize: "1.2rem",
                 borderRadius: "30px",
                 border: "none",
@@ -271,7 +275,7 @@ const outerStyle = {
 
 const cardStyle = {
   background: "rgba(0,0,0,0.8)",
-  padding: "30px",
+  padding: "40px",
   borderRadius: "20px",
   width: "100%",
   maxWidth: "650px",
@@ -283,7 +287,6 @@ const cardStyle = {
 function Header({ question, total, progress }) {
   return (
     <div>
-      {/* Top */}
       <div
         style={{
           display: "flex",
@@ -303,7 +306,6 @@ function Header({ question, total, progress }) {
         </div>
       </div>
 
-      {/* Progress bar */}
       <div
         style={{
           height: "10px",
