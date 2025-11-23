@@ -16,6 +16,7 @@ export default function MixedTablePage() {
   const [waiting, setWaiting] = useState(false);
 
   const [readySecondsLeft, setReadySecondsLeft] = useState(READY_SECONDS);
+  const [questionTime, setQuestionTime] = useState(6); // per-question timer
 
   const inputRef = useRef(null);
 
@@ -40,7 +41,7 @@ export default function MixedTablePage() {
 
   const current = questions[questionIndex];
 
-  // Visible 6-second countdown (6 → 5 → 4 → 3 → 2 → 1) then show questions
+  // Visible 6-second READY countdown (before first question)
   useEffect(() => {
     if (showQuestion) return;
 
@@ -73,10 +74,32 @@ export default function MixedTablePage() {
     }
   }, [questionIndex, waiting, showQuestion]);
 
+  // Per-question 6-second timer
+  useEffect(() => {
+    if (!showQuestion || waiting || !current) return;
+
+    setQuestionTime(6); // reset timer at start of each question
+
+    const interval = setInterval(() => {
+      setQuestionTime((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          // Auto-submit as "no answer" (always wrong)
+          submitAnswer(true);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questionIndex, showQuestion, waiting, current]);
+
   // ENTER submits
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !waiting && showQuestion) {
-      submitAnswer();
+      submitAnswer(false);
     }
   };
 
@@ -85,10 +108,11 @@ export default function MixedTablePage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  const submitAnswer = () => {
+  // auto = true means timer ran out (don’t give credit even if something is typed)
+  const submitAnswer = (auto = false) => {
     if (waiting || !current) return;
 
-    const isCorrect = parseInt(answer) === current.correct;
+    const isCorrect = !auto && parseInt(answer) === current.correct;
     const newScore = isCorrect ? score + 1 : score;
 
     if (isCorrect) {
@@ -98,6 +122,7 @@ export default function MixedTablePage() {
     setAnswer("");
     setWaiting(true);
 
+    // 2-second gap before next question / results
     setTimeout(() => {
       setWaiting(false);
 
@@ -196,6 +221,18 @@ export default function MixedTablePage() {
             textAlign: "center",
           }}
         >
+          {/* Time left for this question */}
+          <div
+            style={{
+              fontSize: "0.9rem",
+              color: questionTime <= 2 ? "#f97316" : "#facc15",
+              marginBottom: "0.25rem",
+              fontWeight: 600,
+            }}
+          >
+            Time left: {questionTime}s
+          </div>
+
           <div
             style={{
               fontSize: "0.9rem",
@@ -254,7 +291,7 @@ export default function MixedTablePage() {
           {/* Submit button */}
           <div style={{ marginTop: "1.25rem" }}>
             <button
-              onClick={submitAnswer}
+              onClick={() => submitAnswer(false)}
               disabled={waiting}
               style={{
                 padding: "12px 28px",
@@ -321,12 +358,12 @@ const cardStyle = {
   border: "1px solid rgba(148,163,184,0.3)",
 };
 
-/* ---------- Header component (logo + title + progress bar) ---------- */
+/* ---------- Header component (badge + title + progress bar) ---------- */
 
 function Header({ question, total, progress }) {
   return (
     <div>
-      {/* Top row: logo + title + question counter */}
+      {/* Top row: badge + title + question counter */}
       <div
         style={{
           display: "flex",
@@ -335,26 +372,24 @@ function Header({ question, total, progress }) {
           gap: "1rem",
         }}
       >
-        {/* Logo + title */}
+        {/* Badge + title */}
         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
           <div
             style={{
               width: "56px",
               height: "56px",
               borderRadius: "999px",
-              background: "#f9fafb",
+              background: "#facc15",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              overflow: "hidden",
-              border: "2px solid #facc15",
+              border: "2px solid #fbbf24",
+              color: "#111827",
+              fontWeight: 800,
+              fontSize: "1.2rem",
             }}
           >
-            <img
-              src="/bushey-logo.png"
-              alt="Bushey Manor Junior School"
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
+            BM
           </div>
 
           <div>
