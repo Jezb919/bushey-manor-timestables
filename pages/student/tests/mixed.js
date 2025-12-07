@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../../../lib/supabaseClient";
 
-const TOTAL_QUESTIONS = 3;
+const TOTAL_QUESTIONS = 3;     // keep 3 for now while we debug saving
 const READY_SECONDS = 6;
 
 export default function MixedTablePage() {
@@ -171,6 +171,10 @@ export default function MixedTablePage() {
 
       const studentId = await getOrCreateStudent(decodedName, decodedClass);
 
+      if (!studentId) {
+        alert("Could not create or find student – test will not be saved.");
+      }
+
       const tablesUsed = Array.from(new Set(questions.map((q) => q.b)));
 
       // Insert test summary
@@ -190,8 +194,11 @@ export default function MixedTablePage() {
         .single();
 
       if (testError) {
+        alert("Error saving test: " + testError.message);
         console.error("Error inserting test:", testError);
-      } else if (testRow && finalAnswers && finalAnswers.length > 0) {
+      }
+
+      if (!testError && testRow && finalAnswers && finalAnswers.length > 0) {
         const questionRows = finalAnswers.map((q) => ({
           test_id: testRow.id,
           a: q.a,
@@ -206,10 +213,12 @@ export default function MixedTablePage() {
           .insert(questionRows);
 
         if (questionsError) {
+          alert("Error saving questions: " + questionsError.message);
           console.error("Error inserting test questions:", questionsError);
         }
       }
     } catch (err) {
+      alert("Unexpected error saving test: " + err.message);
       console.error("Unexpected error saving test:", err);
     }
 
@@ -522,4 +531,3 @@ function Header({ question, total, progress }) {
     </div>
   );
 }
-
