@@ -1,4 +1,19 @@
-export default function Home() {
+import { useState } from "react";
+
+export default function StudentLogin() {
+  const [name, setName] = useState("");
+  const [className, setClassName] = useState("");
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+
+    const encodedName = encodeURIComponent(name.trim());
+    const encodedClass = encodeURIComponent(className.trim());
+
+    // Send them to the test start screen WITH name & class in the URL
+    window.location.href = `/student/tests?name=${encodedName}&class=${encodedClass}`;
+  };
+
   return (
     <div
       style={{
@@ -18,137 +33,158 @@ export default function Home() {
         style={{
           background: "rgba(3,7,18,0.95)",
           borderRadius: "22px",
-          padding: "2.25rem 2.75rem",
-          maxWidth: "720px",
+          padding: "2rem 2.5rem",
+          maxWidth: "520px",
           width: "100%",
           boxShadow: "0 25px 60px rgba(0,0,0,0.55)",
           border: "1px solid rgba(148,163,184,0.35)",
         }}
       >
-        {/* Header row */}
+        {/* Header */}
         <div
           style={{
             display: "flex",
-            justifyContent: "space-between",
             alignItems: "center",
-            gap: "1rem",
+            gap: "0.8rem",
+            marginBottom: "1.25rem",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: "0.8rem" }}>
-            <div
+          <div
+            style={{
+              width: "52px",
+              height: "52px",
+              borderRadius: "50%",
+              background: "white",
+              border: "3px solid #facc15",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <span
               style={{
-                width: "60px",
-                height: "60px",
-                borderRadius: "50%",
-                background: "white",
-                border: "3px solid #facc15",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden",
+                fontWeight: 800,
+                fontSize: "1.1rem",
+                color: "#0f172a",
               }}
             >
-              {/* You can upload /public/bushey-logo.png later */}
-              <span
-                style={{
-                  fontWeight: 800,
-                  fontSize: "1.3rem",
-                  color: "#0f172a",
-                }}
-              >
-                BM
-              </span>
-            </div>
+              BM
+            </span>
+          </div>
 
-            <div>
-              <div
-                style={{
-                  fontSize: "0.75rem",
-                  letterSpacing: "0.16em",
-                  textTransform: "uppercase",
-                  color: "#e5e7eb",
-                }}
-              >
-                Bushey Manor Junior School
-              </div>
-              <div
-                style={{
-                  fontSize: "1.4rem",
-                  fontWeight: 800,
-                  color: "#facc15",
-                }}
-              >
-                Times Tables Arena
-              </div>
+          <div>
+            <div
+              style={{
+                fontSize: "0.75rem",
+                letterSpacing: "0.16em",
+                textTransform: "uppercase",
+                color: "#e5e7eb",
+              }}
+            >
+              Student Login
+            </div>
+            <div
+              style={{
+                fontSize: "1.3rem",
+                fontWeight: 800,
+                color: "#facc15",
+              }}
+            >
+              Times Tables Test
             </div>
           </div>
         </div>
 
-        {/* Intro text */}
-        <div style={{ marginTop: "1.75rem" }}>
-          <h1
-            style={{
-              fontSize: "1.8rem",
-              marginBottom: "0.4rem",
-              color: "#f9fafb",
-            }}
-          >
-            Welcome!
-          </h1>
-          <p style={{ color: "#d1d5db", fontSize: "0.98rem" }}>
-            Choose whether you are a{" "}
-            <strong>Student</strong> ready to take a times tables test or a{" "}
-            <strong>Teacher</strong> managing tests and results.
-          </p>
-        </div>
+        <p style={{ color: "#d1d5db", fontSize: "0.95rem" }}>
+          Please enter your <strong>name</strong> and <strong>class</strong> so
+          your teacher can see your progress.
+        </p>
 
-        {/* Buttons */}
-        <div
-          style={{
-            marginTop: "2rem",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: "1rem",
-          }}
-        >
-          <a
-            href="/student"
+        <form onSubmit={handleSubmit} style={{ marginTop: "1.5rem" }}>
+          <div style={{ marginBottom: "1rem" }}>
+            <label
+              style={{
+                display: "block",
+                marginBottom: "0.35rem",
+                fontSize: "0.9rem",
+                color: "#e5e7eb",
+              }}
+            >
+              Name
+            </label>
+            <input
+              type="text"
+              value={name}
+              required
+              onChange={(e) => setName(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                fontSize: "1rem",
+                borderRadius: "999px",
+                border: "1px solid #4b5563",
+                outline: "none",
+              }}
+            />
+          </div>
+
+          <div style={{ marginBottom: "1.5rem" }}>
+            <label
+              style={{
+                display: "block",
+                marginBottom: "0.35rem",
+                fontSize: "0.9rem",
+                color: "#e5e7eb",
+              }}
+            >
+              Class (e.g. 3M, 4B)
+            </label>
+            <input
+              type="text"
+              value={className}
+              required
+              onChange={(e) => setClassName(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                fontSize: "1rem",
+                borderRadius: "999px",
+                border: "1px solid #4b5563",
+                outline: "none",
+              }}
+            />
+          </div>
+
+          <button
+            type="submit"
             style={{
-              flex: "1 1 180px",
-              padding: "1rem 1.2rem",
+              width: "100%",
+              padding: "12px",
               borderRadius: "999px",
-              textAlign: "center",
-              textDecoration: "none",
-              fontWeight: 700,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              fontSize: "0.95rem",
+              border: "none",
               background: "linear-gradient(135deg,#3b82f6,#60a5fa)",
-              color: "#f9fafb",
-              boxShadow: "0 10px 25px rgba(59,130,246,0.45)",
-            }}
-          >
-            Student
-          </a>
-
-          <a
-            href="/teacher"
-            style={{
-              flex: "1 1 180px",
-              padding: "1rem 1.2rem",
-              borderRadius: "999px",
-              textAlign: "center",
-              textDecoration: "none",
+              color: "white",
               fontWeight: 700,
-              letterSpacing: "0.08em",
+              letterSpacing: "0.12em",
               textTransform: "uppercase",
+              cursor: "pointer",
               fontSize: "0.95rem",
-              background: "linear-gradient(135deg,#6b7280,#9ca3af)",
-              color: "#f9fafb",
-              boxShadow: "0 10px 25px rgba(15,23,42,0.6)",
             }}
           >
-            Teacher
+            Start Test
+          </button>
+        </form>
+
+        <div style={{ marginTop: "1rem", textAlign: "center" }}>
+          <a
+            href="/"
+            style={{
+              fontSize: "0.85rem",
+              color: "#9ca3af",
+              textDecoration: "underline",
+            }}
+          >
+            Back to Home
           </a>
         </div>
       </div>
