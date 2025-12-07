@@ -17,6 +17,7 @@ export default function MixedTablePage() {
   const [waiting, setWaiting] = useState(false);
 
   const [readySecondsLeft, setReadySecondsLeft] = useState(READY_SECONDS);
+  const [questionSecondsLeft, setQuestionSecondsLeft] = useState(6); // per-question timer
 
   const inputRef = useRef(null);
 
@@ -74,10 +75,35 @@ export default function MixedTablePage() {
     }
   }, [questionIndex, waiting, showQuestion]);
 
-  // ENTER key submits answer
+  // Per-question 6-second timer with auto-advance
+  useEffect(() => {
+    if (!showQuestion) return;
+    if (waiting) return;
+    if (!current) return;
+
+    // Reset timer at start of each question
+    setQuestionSecondsLeft(6);
+
+    const interval = setInterval(() => {
+      setQuestionSecondsLeft((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          // Time is up – auto submit (does NOT count as correct)
+          submitAnswer(true);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questionIndex, showQuestion, waiting, current]);
+
+  // ENTER key submits answer (manual submission)
   const handleKeyDown = (e) => {
     if (e.key === "Enter" && !waiting && showQuestion) {
-      submitAnswer();
+      submitAnswer(false);
     }
   };
 
@@ -86,10 +112,14 @@ export default function MixedTablePage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  const submitAnswer = () => {
+  // auto = true when timer runs out
+  const submitAnswer = (auto = false) => {
     if (waiting || !current) return;
 
-    const isCorrect = parseInt(answer) === current.correct;
+    const parsedAnswer =
+      answer === "" || answer === null ? null : parseInt(answer, 10);
+
+    const isCorrect = !auto && parsedAnswer === current.correct;
     const newScore = isCorrect ? score + 1 : score;
 
     if (isCorrect) setScore(newScore);
@@ -173,6 +203,18 @@ export default function MixedTablePage() {
         />
 
         <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
+          {/* Visible per-question countdown */}
+          <div
+            style={{
+              fontSize: "1.1rem",
+              fontWeight: 600,
+              marginBottom: "0.4rem",
+              color: questionSecondsLeft <= 2 ? "#f97316" : "#facc15",
+            }}
+          >
+            Time left: {questionSecondsLeft}s
+          </div>
+
           <div style={{ color: "#9ca3af", marginBottom: "0.5rem" }}>
             Question {questionIndex + 1} of {questions.length}
           </div>
@@ -201,7 +243,7 @@ export default function MixedTablePage() {
 
           <div style={{ marginTop: "1.25rem" }}>
             <button
-              onClick={submitAnswer}
+              onClick={() => submitAnswer(false)}
               disabled={waiting}
               style={buttonStyle(waiting)}
             >
