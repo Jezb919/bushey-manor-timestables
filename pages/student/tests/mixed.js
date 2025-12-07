@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../../../lib/supabaseClient";
 
-const TOTAL_QUESTIONS = 3;     // keep 3 for now while we debug saving
+const TOTAL_QUESTIONS = 3;     // keep small while we debug
 const READY_SECONDS = 6;
 
 export default function MixedTablePage() {
@@ -115,9 +115,15 @@ export default function MixedTablePage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  // Helper: create or find student in Supabase
+  // Helper: create or find student in Supabase WITH DEBUG ALERTS
   const getOrCreateStudent = async (studentName, studentClass) => {
-    if (!studentName || !studentClass) return null;
+    if (!studentName || !studentClass) {
+      alert(
+        "Debug: Missing studentName or studentClass.\n" +
+          `studentName="${studentName}", studentClass="${studentClass}"`
+      );
+      return null;
+    }
 
     // Try to derive year group from class name like "4M"
     const match = String(studentClass).match(/^\d+/);
@@ -133,7 +139,9 @@ export default function MixedTablePage() {
       .limit(1);
 
     if (existingError) {
+      alert("Error checking student: " + existingError.message);
       console.error("Error checking student:", existingError);
+      return null;
     }
 
     if (existing && existing.length > 0) {
@@ -154,6 +162,7 @@ export default function MixedTablePage() {
       .single();
 
     if (insertError) {
+      alert("Error inserting student: " + insertError.message);
       console.error("Error inserting student:", insertError);
       return null;
     }
@@ -168,6 +177,12 @@ export default function MixedTablePage() {
         typeof name === "string" ? decodeURIComponent(name) : "";
       const decodedClass =
         typeof className === "string" ? decodeURIComponent(className) : "";
+
+      // Show what we're sending, for sanity check
+      alert(
+        "Debug: Saving test for:\n" +
+          `name="${decodedName}"\nclass="${decodedClass}"`
+      );
 
       const studentId = await getOrCreateStudent(decodedName, decodedClass);
 
