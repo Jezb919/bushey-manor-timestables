@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../../../lib/supabaseClient";
 
-const TOTAL_QUESTIONS = 25;
+const TOTAL_QUESTIONS = 3;
 const READY_SECONDS = 6;
 
 export default function MixedTablePage() {
