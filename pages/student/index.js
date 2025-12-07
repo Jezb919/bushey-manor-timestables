@@ -1,13 +1,4 @@
-import { useRouter } from "next/router";
-
-export default function StartTest() {
-  const router = useRouter();
-  const { name, class: className } = router.query;
-
-  const startTest = () => {
-    router.push(`/student/tests/mixed?name=${name}&class=${className}`);
-  };
-
+export default function Home() {
   return (
     <div
       style={{
@@ -26,98 +17,140 @@ export default function StartTest() {
       <div
         style={{
           background: "rgba(3,7,18,0.95)",
-          borderRadius: "20px",
-          padding: "2.25rem",
-          maxWidth: "650px",
+          borderRadius: "22px",
+          padding: "2.25rem 2.75rem",
+          maxWidth: "720px",
           width: "100%",
-          textAlign: "center",
-          boxShadow: "0 25px 60px rgba(0,0,0,0.6)",
-          border: "1px solid rgba(148,163,184,0.3)",
+          boxShadow: "0 25px 60px rgba(0,0,0,0.55)",
+          border: "1px solid rgba(148,163,184,0.35)",
         }}
       >
-        {/* Logo + Title */}
+        {/* Header row */}
         <div
           style={{
             display: "flex",
-            flexDirection: "column",
+            justifyContent: "space-between",
             alignItems: "center",
-            marginBottom: "1.5rem",
+            gap: "1rem",
           }}
         >
-          <div
-            style={{
-              width: "80px",
-              height: "80px",
-              borderRadius: "999px",
-              background: "#f9fafb",
-              overflow: "hidden",
-              border: "3px solid #facc15",
-              marginBottom: "1rem",
-              display: "flex",
-              justifyContent: "center",
-              alignItems: "center",
-            }}
-          >
-            <img
-              src="/bushey-logo.png"
-              alt="Bushey Manor"
-              style={{ width: "100%", height: "100%", objectFit: "cover" }}
-            />
-          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.8rem" }}>
+            <div
+              style={{
+                width: "60px",
+                height: "60px",
+                borderRadius: "50%",
+                background: "white",
+                border: "3px solid #facc15",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+              }}
+            >
+              {/* You can upload /public/bushey-logo.png later */}
+              <span
+                style={{
+                  fontWeight: 800,
+                  fontSize: "1.3rem",
+                  color: "#0f172a",
+                }}
+              >
+                BM
+              </span>
+            </div>
 
+            <div>
+              <div
+                style={{
+                  fontSize: "0.75rem",
+                  letterSpacing: "0.16em",
+                  textTransform: "uppercase",
+                  color: "#e5e7eb",
+                }}
+              >
+                Bushey Manor Junior School
+              </div>
+              <div
+                style={{
+                  fontSize: "1.4rem",
+                  fontWeight: 800,
+                  color: "#facc15",
+                }}
+              >
+                Times Tables Arena
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Intro text */}
+        <div style={{ marginTop: "1.75rem" }}>
           <h1
             style={{
-              fontSize: "2rem",
-              fontWeight: 800,
-              color: "#facc15",
-              marginBottom: "0.5rem",
+              fontSize: "1.8rem",
+              marginBottom: "0.4rem",
+              color: "#f9fafb",
             }}
           >
-            Maths Test
+            Welcome!
           </h1>
-
-          <p
-            style={{
-              color: "#e5e7eb",
-              fontSize: "1rem",
-              marginBottom: "1rem",
-            }}
-          >
-            Mixed Times Tables Challenge
+          <p style={{ color: "#d1d5db", fontSize: "0.98rem" }}>
+            Choose whether you are a{" "}
+            <strong>Student</strong> ready to take a times tables test or a{" "}
+            <strong>Teacher</strong> managing tests and results.
           </p>
         </div>
 
-        {/* Student details */}
-        {name && className && (
-          <p
-            style={{
-              marginBottom: "1.2rem",
-              color: "#9ca3af",
-              fontSize: "1rem",
-            }}
-          >
-            <strong>{name}</strong> from <strong>{className}</strong>
-          </p>
-        )}
-
-        {/* Start Button */}
-        <button
-          onClick={startTest}
+        {/* Buttons */}
+        <div
           style={{
-            padding: "14px 32px",
-            background: "linear-gradient(135deg,#f59e0b,#facc15)",
-            color: "#111827",
-            borderRadius: "999px",
-            fontWeight: 700,
-            fontSize: "1.1rem",
-            border: "none",
-            letterSpacing: "0.08em",
-            cursor: "pointer",
-            boxShadow: "0 0 20px rgba(250,204,21,0.4)",
+            marginTop: "2rem",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "1rem",
           }}
         >
-          Start Test
-        </button>
+          <a
+            href="/student"
+            style={{
+              flex: "1 1 180px",
+              padding: "1rem 1.2rem",
+              borderRadius: "999px",
+              textAlign: "center",
+              textDecoration: "none",
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              fontSize: "0.95rem",
+              background: "linear-gradient(135deg,#3b82f6,#60a5fa)",
+              color: "#f9fafb",
+              boxShadow: "0 10px 25px rgba(59,130,246,0.45)",
+            }}
+          >
+            Student
+          </a>
+
+          <a
+            href="/teacher"
+            style={{
+              flex: "1 1 180px",
+              padding: "1rem 1.2rem",
+              borderRadius: "999px",
+              textAlign: "center",
+              textDecoration: "none",
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              fontSize: "0.95rem",
+              background: "linear-gradient(135deg,#6b7280,#9ca3af)",
+              color: "#f9fafb",
+              boxShadow: "0 10px 25px rgba(15,23,42,0.6)",
+            }}
+          >
+            Teacher
+          </a>
+        </div>
       </div>
     </div>
   );
