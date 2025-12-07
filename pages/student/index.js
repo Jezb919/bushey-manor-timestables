@@ -4,13 +4,45 @@ export default function StudentLogin() {
   const [name, setName] = useState("");
   const [className, setClassName] = useState("");
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
-    const encodedName = encodeURIComponent(name.trim());
-    const encodedClass = encodeURIComponent(className.trim());
+    const trimmedName = name.trim();
+    const trimmedClass = className.trim();
 
-    // Send them to the test start screen WITH name & class in the URL
+    if (!trimmedName || !trimmedClass) {
+      alert("Please enter both your name and your class.");
+      return;
+    }
+
+    // 1. Tell the backend to find/create this student in Supabase
+    try {
+      const response = await fetch("/api/student/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: trimmedName,
+          className: trimmedClass,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.ok) {
+        console.error("Student session error:", data);
+        alert("There was a problem starting your test. Please tell your teacher.");
+        return;
+      }
+    } catch (err) {
+      console.error("Network error calling /api/student/session:", err);
+      alert("Could not contact the server. Please check the internet and try again.");
+      return;
+    }
+
+    // 2. If all good, send them to the test screen with name & class in URL
+    const encodedName = encodeURIComponent(trimmedName);
+    const encodedClass = encodeURIComponent(trimmedClass);
+
     window.location.href = `/student/tests?name=${encodedName}&class=${encodedClass}`;
   };
 
