@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/router";
+import { supabase } from "../../../lib/supabaseClient";
 
 const TOTAL_QUESTIONS = 25;
 const READY_SECONDS = 6;
@@ -18,6 +19,8 @@ export default function MixedTablePage() {
 
   const [readySecondsLeft, setReadySecondsLeft] = useState(READY_SECONDS);
   const [questionSecondsLeft, setQuestionSecondsLeft] = useState(6); // per-question timer
+
+  const [answers, setAnswers] = useState([]); // store all answers for Supabase
 
   const inputRef = useRef(null);
 
@@ -112,6 +115,110 @@ export default function MixedTablePage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
+  // Helper: create or find student in Supabase
+  const getOrCreateStudent = async (studentName, studentClass) => {
+    if (!studentName || !studentClass) return null;
+
+    // Try to derive year group from class name like "4M"
+    const match = String(studentClass).match(/^\d+/);
+    const yearGroup = match ? parseInt(match[0], 10) : 0;
+
+    // Look for existing student
+    const { data: existing, error: existingError } = await supabase
+      .from("students")
+      .select("*")
+      .eq("name", studentName)
+      .eq("class", studentClass)
+      .eq("year_group", yearGroup)
+      .limit(1);
+
+    if (existingError) {
+      console.error("Error checking student:", existingError);
+    }
+
+    if (existing && existing.length > 0) {
+      return existing[0].id;
+    }
+
+    // Insert new student
+    const { data: inserted, error: insertError } = await supabase
+      .from("students")
+      .insert([
+        {
+          name: studentName,
+          class: studentClass,
+          year_group: yearGroup,
+        },
+      ])
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("Error inserting student:", insertError);
+      return null;
+    }
+
+    return inserted.id;
+  };
+
+  // Save test + questions to Supabase then go to result screen
+  const saveTestAndRedirect = async (finalScore, finalAnswers) => {
+    try {
+      const studentId = await getOrCreateStudent(
+        name ? decodeURIComponent(name) : "",
+        className ? decodeURIComponent(className) : ""
+      );
+
+      const tablesUsed = Array.from(new Set(questions.map((q) => q.b)));
+
+      // Insert test summary
+      const { data: testRow, error: testError } = await supabase
+        .from("tests")
+        .insert([
+          {
+            student_id: studentId,
+            score: finalScore,
+            total: questions.length,
+            percentage: (finalScore / questions.length) * 100,
+            tables_used: tablesUsed,
+            question_time: 6, // later this will come from teacher_settings
+          },
+        ])
+        .select()
+        .single();
+
+      if (testError) {
+        console.error("Error inserting test:", testError);
+      } else if (testRow && finalAnswers && finalAnswers.length > 0) {
+        const questionRows = finalAnswers.map((q) => ({
+          test_id: testRow.id,
+          a: q.a,
+          b: q.b,
+          correct_answer: q.correct_answer,
+          student_answer: q.student_answer,
+          was_correct: q.was_correct,
+        }));
+
+        const { error: questionsError } = await supabase
+          .from("test_questions")
+          .insert(questionRows);
+
+        if (questionsError) {
+          console.error("Error inserting test questions:", questionsError);
+        }
+      }
+    } catch (err) {
+      console.error("Unexpected error saving test:", err);
+    }
+
+    // Always go to result screen, even if saving fails
+    router.push(
+      `/student/tests/result?score=${finalScore}&total=${questions.length}&name=${encodeURIComponent(
+        name || ""
+      )}&class=${encodeURIComponent(className || "")}`
+    );
+  };
+
   // auto = true when timer runs out
   const submitAnswer = (auto = false) => {
     if (waiting || !current) return;
@@ -121,6 +228,15 @@ export default function MixedTablePage() {
 
     const isCorrect = !auto && parsedAnswer === current.correct;
     const newScore = isCorrect ? score + 1 : score;
+
+    // Collect this question result for Supabase
+    const questionResult = {
+      a: current.a,
+      b: current.b,
+      correct_answer: current.correct,
+      student_answer: auto ? null : parsedAnswer,
+      was_correct: isCorrect,
+    };
 
     if (isCorrect) setScore(newScore);
 
@@ -132,16 +248,13 @@ export default function MixedTablePage() {
       setWaiting(false);
 
       if (questionIndex + 1 < questions.length) {
+        // Not finished yet → just store this question and move on
+        setAnswers((prev) => [...prev, questionResult]);
         setQuestionIndex((prev) => prev + 1);
       } else {
-        // Go to result page – name & class are passed along
-        router.push(
-          `/student/tests/result?score=${newScore}&total=${
-            questions.length
-          }&name=${encodeURIComponent(name || "")}&class=${encodeURIComponent(
-            className || ""
-          )}`
-        );
+        // Last question → include this one and save full test
+        const allAnswers = [...answers, questionResult];
+        saveTestAndRedirect(newScore, allAnswers);
       }
     }, 2000);
   };
@@ -299,7 +412,7 @@ const inputStyle = {
   width: "170px",
   textAlign: "center",
   borderRadius: "999px",
-  border: "2px solid #facc15",
+  border: "2px solid "#facc15",
   backgroundColor: "#020617",
   color: "white",
   outline: "none",
