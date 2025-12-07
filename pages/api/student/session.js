@@ -1,60 +1,75 @@
 // pages/api/student/session.js
-import { supabase } from "../../../lib/supabaseClient";
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// Use the service role key so we can read/write all students safely on the server
+const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res
+      .status(405)
+      .json({ ok: false, error: "Method not allowed (POST only)" });
   }
 
+  const { name, className } = req.body || {};
+
+  if (!name || !className) {
+    return res
+      .status(400)
+      .json({ ok: false, error: "Missing name or className" });
+  }
+
+  const firstName = name.trim();
+  const classText = className.trim(); // we’ll store the class in last_name
+
   try {
-    const { name, className } = req.body;
-
-    if (!name || !className) {
-      return res.status(400).json({ error: "Missing name or class" });
-    }
-
-    // 1. Try to FIND an existing student using first_name + last_name
-    const { data: existingStudent, error: findError } = await supabase
+    // 🔍 1) Look up existing student by FIRST + LAST name
+    const { data: existing, error: selectError } = await supabase
       .from("students")
-      .select("*")
-      .eq("first_name", name)     // <--- uses first_name column
-      .eq("last_name", className) // <--- uses last_name column (your class)
+      .select("id")
+      .eq("first_name", firstName)
+      .eq("last_name", classText)
       .maybeSingle();
 
-    if (findError) {
-      console.error("Error finding student:", findError);
-      return res.status(500).json({ error: "Error finding student" });
+    if (selectError) {
+      console.error("Supabase select error:", selectError);
+      return res.status(500).json({
+        ok: false,
+        error: selectError.message || "Select from students failed",
+      });
     }
 
-    let student = existingStudent;
-
-    // 2. If not found, CREATE a new row in students
-    if (!student) {
-      const { data: newStudent, error: insertError } = await supabase
-        .from("students")
-        .insert({
-          first_name: name,       // <--- write name into first_name
-          last_name: className,   // <--- write class into last_name
-        })
-        .select()
-        .single();
-
-      if (insertError) {
-        console.error("Error creating student:", insertError);
-        return res.status(500).json({ error: "Error creating student" });
-      }
-
-      student = newStudent;
+    // Found existing pupil
+    if (existing) {
+      return res.status(200).json({ ok: true, studentId: existing.id });
     }
 
-    // 3. Return the student to the frontend
-    return res.status(200).json({
-      ok: true,
-      studentId: student.id,
-      student,
-    });
+    // ➕ 2) No row yet – create one
+    const { data: inserted, error: insertError } = await supabase
+      .from("students")
+      .insert({
+        first_name: firstName,
+        last_name: classText, // using last_name as "class" for now
+      })
+      .select("id")
+      .single();
+
+    if (insertError) {
+      console.error("Supabase insert error:", insertError);
+      return res.status(500).json({
+        ok: false,
+        error: insertError.message || "Insert into students failed",
+      });
+    }
+
+    return res.status(200).json({ ok: true, studentId: inserted.id });
   } catch (err) {
-    console.error("Unhandled error in /api/student/session:", err);
-    return res.status(500).json({ error: "Unexpected server error" });
+    console.error("Unexpected error in /api/student/session:", err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "Unexpected server error" });
   }
 }
