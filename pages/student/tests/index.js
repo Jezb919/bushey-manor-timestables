@@ -1,106 +1,195 @@
-// pages/student/tests/index.js
-
 import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
 
-export default function StartTest() {
+export default function StudentTestStart() {
   const router = useRouter();
   const { name, class: className } = router.query;
 
-  const start = () => {
-    router.push(`/student/tests?start=1&name=${name}&class=${className}`);
+  const [studentName, setStudentName] = useState("");
+  const [studentClass, setStudentClass] = useState("");
+
+  // When the query is ready, store a nice version of name/class
+  useEffect(() => {
+    if (!router.isReady) return;
+
+    if (typeof name === "string") {
+      setStudentName(decodeURIComponent(name));
+    }
+    if (typeof className === "string") {
+      setStudentClass(decodeURIComponent(className));
+    }
+  }, [router.isReady, name, className]);
+
+  const handleStart = () => {
+    // Go to the dynamic [table] route – we use "mixed" as the slug
+    router.push(
+      `/student/tests/mixed?name=${encodeURIComponent(
+        studentName
+      )}&class=${encodeURIComponent(studentClass)}`
+    );
   };
 
+  // Simple loading state while query params are being read
+  if (!router.isReady) {
+    return (
+      <div style={outerStyle}>
+        <div style={cardStyle}>
+          <p style={{ fontSize: "1.2rem" }}>Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background:
-          "radial-gradient(circle at top, #facc15 0, #0f172a 35%, #020617 100%)",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        color: "white",
-        padding: "1.5rem",
-        fontFamily:
-          "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-      }}
-    >
+    <div style={outerStyle}>
+      <div style={cardStyle}>
+        {/* Header / branding */}
+        <Header />
+
+        <div style={{ marginTop: "1.75rem" }}>
+          <h1
+            style={{
+              fontSize: "2.1rem",
+              fontWeight: 800,
+              color: "#facc15",
+              marginBottom: "0.5rem",
+            }}
+          >
+            Maths Test
+          </h1>
+
+          <p style={{ color: "#e5e7eb", marginBottom: "0.5rem" }}>
+            This test includes <strong>mixed times tables</strong>.
+          </p>
+
+          {studentName && (
+            <p style={{ color: "#9ca3af", marginTop: "0.25rem" }}>
+              Pupil: <strong>{studentName}</strong>
+              {studentClass && (
+                <>
+                  {" "}
+                  – Class <strong>{studentClass}</strong>
+                </>
+              )}
+            </p>
+          )}
+
+          <ul
+            style={{
+              marginTop: "1rem",
+              color: "#d1d5db",
+              fontSize: "0.95rem",
+              paddingLeft: "1.2rem",
+            }}
+          >
+            <li>There are 25 questions.</li>
+            <li>You will see one question at a time.</li>
+            <li>You can press <strong>Enter</strong> instead of clicking.</li>
+          </ul>
+
+          <button
+            type="button"
+            onClick={handleStart}
+            style={{
+              marginTop: "1.75rem",
+              padding: "14px 34px",
+              fontSize: "1.1rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.12em",
+              borderRadius: "999px",
+              border: "none",
+              cursor: "pointer",
+              background: "linear-gradient(135deg,#3b82f6,#60a5fa)",
+              color: "white",
+              boxShadow: "0 12px 30px rgba(37,99,235,0.6)",
+            }}
+          >
+            Start Test
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Shared layout styles (match the test page) ---------- */
+
+const outerStyle = {
+  minHeight: "100vh",
+  background:
+    "radial-gradient(circle at top, #facc15 0, #0f172a 35%, #020617 100%)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "1.5rem",
+  color: "white",
+};
+
+const cardStyle = {
+  background: "rgba(3,7,18,0.9)",
+  borderRadius: "22px",
+  padding: "2rem 2.5rem",
+  maxWidth: "700px",
+  width: "100%",
+  boxShadow: "0 25px 60px rgba(0,0,0,0.45)",
+  border: "1px solid rgba(148,163,184,0.3)",
+  fontFamily:
+    "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+};
+
+/* ---------- Simple Header (same style family as test page) ---------- */
+
+function Header() {
+  return (
+    <div>
       <div
         style={{
-          background: "rgba(3, 7, 18, 0.9)",
-          padding: "2.5rem 3rem",
-          borderRadius: "20px",
-          maxWidth: "600px",
-          width: "100%",
-          textAlign: "center",
-          boxShadow: "0 25px 60px rgba(0,0,0,0.6)",
-          border: "1px solid rgba(148,163,184,0.3)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: "1rem",
         }}
       >
-        {/* Logo */}
-        <div
-          style={{
-            width: "80px",
-            height: "80px",
-            margin: "0 auto",
-            borderRadius: "999px",
-            background: "#f9fafb",
-            border: "2px solid #facc15",
-            overflow: "hidden",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            marginBottom: "1rem",
-          }}
-        >
-          <img
-            src="/bushey-logo.png"
-            alt="Bushey Manor"
-            style={{ width: "100%", height: "100%", objectFit: "cover" }}
-          />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <div
+            style={{
+              width: "60px",
+              height: "60px",
+              borderRadius: "50%",
+              background: "white",
+              border: "3px solid #facc15",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {/* Placeholder logo initials */}
+            <span
+              style={{
+                fontWeight: 800,
+                fontSize: "1.3rem",
+                color: "#0f172a",
+              }}
+            >
+              BM
+            </span>
+          </div>
+          <div>
+            <div style={{ fontSize: "0.75rem", color: "#e5e7eb" }}>
+              Bushey Manor
+            </div>
+            <div
+              style={{
+                fontSize: "1.25rem",
+                fontWeight: "bold",
+                color: "#facc15",
+              }}
+            >
+              Times Tables Arena
+            </div>
+          </div>
         </div>
-
-        <h1
-          style={{
-            fontSize: "2.5rem",
-            fontWeight: 800,
-            color: "#facc15",
-            marginBottom: "0.5rem",
-          }}
-        >
-          Welcome {name}
-        </h1>
-
-        <p style={{ fontSize: "1.1rem", color: "#e5e7eb", marginBottom: "1rem" }}>
-          Class: {className}
-        </p>
-
-        <p style={{ fontSize: "1.1rem", color: "#cbd5e1" }}>
-          You are about to begin your <strong>Mixed Times Tables Test</strong>.
-        </p>
-
-        <p style={{ fontSize: "1.1rem", color: "#cbd5e1", marginTop: "0.25rem" }}>
-          You will have <strong>6 seconds to get ready</strong> and then each
-          question will automatically move on after a short delay.
-        </p>
-
-        <button
-          onClick={start}
-          style={{
-            marginTop: "2rem",
-            padding: "14px 32px",
-            fontSize: "1.2rem",
-            fontWeight: 700,
-            borderRadius: "999px",
-            border: "none",
-            cursor: "pointer",
-            background: "linear-gradient(135deg,#f59e0b,#facc15)",
-            color: "#111827",
-            boxShadow: "0 0 18px rgba(250,204,21,0.5)",
-          }}
-        >
-          Start Test
-        </button>
       </div>
     </div>
   );
