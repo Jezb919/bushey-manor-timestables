@@ -4,7 +4,12 @@ import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Server-side Supabase client with service role key
+if (!supabaseUrl || !serviceRoleKey) {
+  console.warn(
+    "Supabase env vars missing – check NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
+  );
+}
+
 const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 export default async function handler(req, res) {
@@ -22,35 +27,32 @@ export default async function handler(req, res) {
       .json({ ok: false, error: "Missing name or className" });
   }
 
-  // We’re going to store:
-  //   first_name = child’s name (what they type)
-  //   last_name  = class name (3M, 4B, etc.)
   const firstName = String(name).trim();
   const classText = String(className).trim();
 
   try {
-    // 🔍 1) Look for an existing pupil with same first_name + last_name
+    // 1) Look for an existing student with same first_name + last_name (class)
     const { data: existing, error: selectError } = await supabase
       .from("students")
-      .select("id")
+      .select("id, first_name, last_name")
       .eq("first_name", firstName)
       .eq("last_name", classText)
-      .maybeSingle();
+      .maybeSingle(); // <- important: 0 or 1 row
 
     if (selectError) {
-      console.error("Supabase students SELECT error:", selectError);
+      console.error("Supabase SELECT students error:", selectError);
       return res.status(500).json({
         ok: false,
-        error: selectError.message || "Select from students failed",
+        error: selectError.message || "Failed to read students table",
       });
     }
 
     if (existing) {
-      // Found them – return the id
+      // Already have this pupil
       return res.status(200).json({ ok: true, studentId: existing.id });
     }
 
-    // ➕ 2) Not found – create a new record
+    // 2) Not found – create them
     const { data: inserted, error: insertError } = await supabase
       .from("students")
       .insert({
@@ -61,16 +63,16 @@ export default async function handler(req, res) {
       .single();
 
     if (insertError) {
-      console.error("Supabase students INSERT error:", insertError);
+      console.error("Supabase INSERT students error:", insertError);
       return res.status(500).json({
         ok: false,
-        error: insertError.message || "Insert into students failed",
+        error: insertError.message || "Failed to insert into students table",
       });
     }
 
     return res.status(200).json({ ok: true, studentId: inserted.id });
   } catch (err) {
-    console.error("Unexpected error in /api/student/session:", err);
+    console.error("Unexpected /api/student/session error:", err);
     return res
       .status(500)
       .json({ ok: false, error: "Unexpected server error" });
