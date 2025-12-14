@@ -6,42 +6,28 @@ const DEFAULT_DAYS = 30;
 export default function TeacherDashboard() {
   const [classLabel, setClassLabel] = useState(DEFAULT_CLASS);
   const [days, setDays] = useState(DEFAULT_DAYS);
-  const [search, setSearch] = useState("");
-
-  // scope: class | year | school
-  const [scope, setScope] = useState("class");
-
-  // student drilldown
-  const [selectedStudentId, setSelectedStudentId] = useState(null);
-  const [selectedStudentName, setSelectedStudentName] = useState("");
-
-  // table drilldown
-  const [selectedTable, setSelectedTable] = useState(null);
-
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [data, setData] = useState(null);
 
+  const [selectedTable, setSelectedTable] = useState(null);
+  const [search, setSearch] = useState("");
+
   const fetchOverview = async () => {
     setLoading(true);
     setErr("");
-
     try {
       const qs = new URLSearchParams();
       qs.set("class_label", classLabel);
       qs.set("days", String(days));
-      qs.set("scope", scope);
-
-      if (selectedStudentId) qs.set("student_id", selectedStudentId);
-      if (selectedTable) qs.set("table_num", String(selectedTable));
+      qs.set("scope", "class");
 
       const res = await fetch(`/api/teacher/overview?${qs.toString()}`);
       const json = await res.json();
 
       if (!res.ok || !json?.ok) {
-        throw new Error(json?.error || "Failed to load teacher overview");
+        throw new Error(json?.error || "Failed to load overview");
       }
-
       setData(json);
     } catch (e) {
       setErr(String(e?.message || e));
@@ -53,42 +39,24 @@ export default function TeacherDashboard() {
   useEffect(() => {
     fetchOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classLabel, days, scope, selectedStudentId, selectedTable]);
+  }, [classLabel, days]);
 
   const leaderboard = data?.leaderboard || [];
-  const classTrend = data?.classTrend || [];
   const tableHeat = data?.tableHeat || [];
-  const tableDrill = data?.tableDrill || null;
+  const classTrend = data?.classTrend || [];
+
+  const selectedTile = useMemo(() => {
+    if (!selectedTable) return null;
+    return (tableHeat || []).find((t) => Number(t.table_num) === Number(selectedTable)) || null;
+  }, [selectedTable, tableHeat]);
 
   const filteredLeaderboard = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return leaderboard;
-    return leaderboard.filter((row) =>
-      String(row.student || "").toLowerCase().includes(q)
+    return leaderboard.filter((r) =>
+      String(r.student || "").toLowerCase().includes(q)
     );
   }, [leaderboard, search]);
-
-  const top10 = useMemo(() => {
-    const rows = [...leaderboard]
-      .filter((r) => typeof r.percent === "number")
-      .sort((a, b) => b.percent - a.percent);
-    const cut = Math.max(1, Math.ceil(rows.length * 0.1));
-    return rows.slice(0, cut);
-  }, [leaderboard]);
-
-  const improved = useMemo(() => {
-    const rows = [...leaderboard]
-      .filter((r) => typeof r.delta_percent === "number")
-      .sort((a, b) => b.delta_percent - a.delta_percent);
-    return rows.slice(0, 5);
-  }, [leaderboard]);
-
-  const headingScopeLabel =
-    scope === "class"
-      ? `Class ${classLabel}`
-      : scope === "year"
-      ? `Year group (from ${classLabel})`
-      : "Whole school";
 
   return (
     <div style={page}>
@@ -103,9 +71,7 @@ export default function TeacherDashboard() {
               <div style={kicker}>Teacher dashboard</div>
               <div style={title}>Times Tables Arena</div>
               <div style={subTitle}>
-                {headingScopeLabel}
-                {selectedStudentName ? ` • Student: ${selectedStudentName}` : ""}
-                {selectedTable ? ` • Table: ${selectedTable}` : ""}
+                Class {classLabel} • Last {days} days
               </div>
             </div>
           </div>
@@ -118,57 +84,14 @@ export default function TeacherDashboard() {
         {/* Controls */}
         <div style={controls}>
           <div style={controlBlock}>
-            <div style={label}>Scope</div>
-            <div style={segRow}>
-              <SegButton
-                active={scope === "class"}
-                onClick={() => {
-                  setScope("class");
-                  setSelectedStudentId(null);
-                  setSelectedStudentName("");
-                  setSelectedTable(null);
-                }}
-              >
-                Class
-              </SegButton>
-              <SegButton
-                active={scope === "year"}
-                onClick={() => {
-                  setScope("year");
-                  setSelectedStudentId(null);
-                  setSelectedStudentName("");
-                  setSelectedTable(null);
-                }}
-              >
-                Year
-              </SegButton>
-              <SegButton
-                active={scope === "school"}
-                onClick={() => {
-                  setScope("school");
-                  setSelectedStudentId(null);
-                  setSelectedStudentName("");
-                  setSelectedTable(null);
-                }}
-              >
-                Whole school
-              </SegButton>
-            </div>
-          </div>
-
-          <div style={controlBlock}>
             <div style={label}>Class</div>
             <select
               value={classLabel}
               onChange={(e) => {
                 setClassLabel(e.target.value);
-                setSelectedStudentId(null);
-                setSelectedStudentName("");
                 setSelectedTable(null);
               }}
               style={select}
-              disabled={scope !== "class"}
-              title={scope !== "class" ? "Class is only used in Class scope" : ""}
             >
               <option value="M3">M3</option>
               <option value="B3">B3</option>
@@ -182,7 +105,7 @@ export default function TeacherDashboard() {
           </div>
 
           <div style={controlBlock}>
-            <div style={label}>Days (trend)</div>
+            <div style={label}>Days</div>
             <select
               value={days}
               onChange={(e) => {
@@ -200,7 +123,7 @@ export default function TeacherDashboard() {
           </div>
 
           <div style={controlBlockGrow}>
-            <div style={label}>Search</div>
+            <div style={label}>Search pupil</div>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -219,18 +142,16 @@ export default function TeacherDashboard() {
 
         {err ? (
           <div style={errorBox}>
-            <strong>Couldn’t load dashboard:</strong> {err}
+            <strong>Error:</strong> {err}
           </div>
         ) : null}
 
-        {/* Main grid */}
+        {/* Layout */}
         <div style={grid}>
-          {/* LEFT */}
+          {/* Leaderboard */}
           <div style={panel}>
             <div style={panelTitle}>Leaderboard</div>
-            <div style={panelHint}>
-              Click a student row to view their heatmap.
-            </div>
+            <div style={panelHint}>Latest result per pupil.</div>
 
             <div style={table}>
               <div style={{ ...row, ...rowHead }}>
@@ -238,132 +159,53 @@ export default function TeacherDashboard() {
                 <div>Latest</div>
                 <div>Score</div>
                 <div>%</div>
-                <div>Δ%</div>
                 <div>Attempts</div>
               </div>
 
               {filteredLeaderboard.map((r) => {
-                const active =
-                  selectedStudentId && r.student_id === selectedStudentId;
-
                 const pct = typeof r.percent === "number" ? r.percent : null;
-
                 return (
-                  <button
-                    key={`${r.student_id}-${r.student}-${r.class_label}`}
-                    onClick={() => {
-                      if (selectedStudentId === r.student_id) {
-                        setSelectedStudentId(null);
-                        setSelectedStudentName("");
-                        setSelectedTable(null);
-                      } else {
-                        setSelectedStudentId(r.student_id);
-                        setSelectedStudentName(r.student || "");
-                        setSelectedTable(null);
-                      }
-                    }}
+                  <div
+                    key={`${r.student_id}-${r.student}`}
                     style={{
-                      ...rowBtn,
-                      ...(active ? rowBtnActive : {}),
-                      ...(pct !== null ? bandByPercent(pct) : {}),
+                      ...row,
+                      background: "rgba(2,6,23,0.25)",
+                      borderTop: "1px solid rgba(148,163,184,0.08)",
                     }}
                   >
-                    <div style={cellStrong}>
+                    <div style={{ fontWeight: 900 }}>
                       {r.student || "—"}
-                      <div style={cellSub}>{r.class_label || "—"}</div>
+                      <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 700 }}>
+                        {r.class_label || "—"}
+                      </div>
                     </div>
+
                     <div style={cellMono}>
                       {r.latest_at ? formatDateTime(r.latest_at) : "—"}
                     </div>
+
                     <div style={cellMono}>
                       {typeof r.score === "number" && typeof r.total === "number"
                         ? `${r.score}/${r.total}`
                         : "—"}
                     </div>
+
                     <div>
-                      {pct === null ? (
-                        "—"
-                      ) : (
-                        <span style={pill(pct)}>{pct}%</span>
-                      )}
+                      {pct === null ? "—" : <span style={pill(pct)}>{pct}%</span>}
                     </div>
-                    <div style={cellMono}>
-                      {typeof r.delta_percent === "number"
-                        ? `${r.delta_percent > 0 ? "+" : ""}${r.delta_percent}`
-                        : "—"}
-                    </div>
+
                     <div style={cellMono}>{r.attempts_in_range ?? 0}</div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
-
-            <div style={{ marginTop: 18 }}>
-              <div style={panelTitle}>Most improved (top 5)</div>
-              {improved.length ? (
-                <ul style={list}>
-                  {improved.map((r) => (
-                    <li key={`imp-${r.student_id}`} style={listItem}>
-                      <span style={{ fontWeight: 800 }}>{r.student}</span>{" "}
-                      <span style={{ color: "#9ca3af" }}>({r.class_label})</span>{" "}
-                      <span
-                        style={{
-                          marginLeft: 8,
-                          color: "#22c55e",
-                          fontWeight: 800,
-                        }}
-                      >
-                        +{r.delta_percent}%
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <div style={muted}>
-                  Not enough history yet. Run a few more tests first.
-                </div>
-              )}
-            </div>
           </div>
 
-          {/* RIGHT */}
+          {/* Heatmap + Trend */}
           <div style={rightCol}>
             <div style={panel}>
-              <div style={panelTitle}>Trend ({days} days)</div>
-              <div style={panelHint}>Average % per day.</div>
-
-              {!classTrend.length ? (
-                <div style={muted}>No trend data yet.</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {classTrend.map((t) => (
-                    <div key={t.day} style={trendRow}>
-                      <div style={cellMono}>{t.day}</div>
-                      <div style={trendBarWrap}>
-                        <div
-                          style={{
-                            ...trendBar,
-                            width: `${Math.max(0, Math.min(100, t.avg_percent || 0))}%`,
-                          }}
-                        />
-                      </div>
-                      <div style={cellMono}>
-                        {Math.round(t.avg_percent || 0)}%
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div style={panel}>
-              <div style={panelTitle}>Times table heatmap (1–19)</div>
-              <div style={panelHint}>
-                Click a tile to drill down.{" "}
-                {selectedStudentName
-                  ? `Showing: ${selectedStudentName}`
-                  : "Showing current scope."}
-              </div>
+              <div style={panelTitle}>Heatmap (Tables 1–19)</div>
+              <div style={panelHint}>Click a table to highlight.</div>
 
               <HeatGrid
                 tiles={tableHeat}
@@ -371,96 +213,69 @@ export default function TeacherDashboard() {
                 onSelectTable={(n) => setSelectedTable((prev) => (prev === n ? null : n))}
               />
 
-              {selectedTable && (
-                <div style={{ marginTop: 14 }}>
-                  <div style={panelTitle}>
-                    Drill-down: Table {selectedTable}
+              {selectedTile && (
+                <div style={detailCard}>
+                  <div style={{ fontWeight: 900, fontSize: 16 }}>
+                    Table {selectedTile.table_num} breakdown
                   </div>
-                  <div style={panelHint}>
-                    Accuracy by student (within selected scope/time window).
+                  <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <span style={detailPill}>
+                      Total: <strong>{selectedTile.total}</strong>
+                    </span>
+                    <span style={detailPill}>
+                      Correct: <strong>{selectedTile.correct}</strong>
+                    </span>
+                    <span style={detailPill}>
+                      Accuracy:{" "}
+                      <strong>
+                        {selectedTile.accuracy === null ? "—" : `${selectedTile.accuracy}%`}
+                      </strong>
+                    </span>
                   </div>
-
-                  {!tableDrill ? (
-                    <div style={muted}>Loading…</div>
-                  ) : (
-                    <div style={drillBox}>
-                      {tableDrill.slice(0, 12).map((r) => (
-                        <div key={`td-${r.student_id}`} style={drillRow}>
-                          <div style={{ fontWeight: 900 }}>
-                            {r.student}
-                            <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 700 }}>
-                              {r.class_label}
-                            </div>
-                          </div>
-                          <div style={cellMono}>
-                            {r.total ? `${r.correct}/${r.total}` : "—"}
-                          </div>
-                          <div>{typeof r.accuracy === "number" ? <span style={pill(r.accuracy)}>{r.accuracy}%</span> : "—"}</div>
-                        </div>
-                      ))}
-                      <div style={{ marginTop: 10, color: "#94a3b8", fontSize: 12 }}>
-                        Tip: Run more tests to make the drill-down meaningful.
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
-
-              <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button
-                  onClick={() => {
-                    setSelectedStudentId(null);
-                    setSelectedStudentName("");
-                    setSelectedTable(null);
-                  }}
-                  style={secondaryBtn}
-                  disabled={!selectedStudentId}
-                  title={!selectedStudentId ? "No student selected" : "Back to scope heatmap"}
-                >
-                  Clear student filter
-                </button>
-
-                <button
-                  onClick={() => setSelectedTable(null)}
-                  style={secondaryBtn}
-                  disabled={!selectedTable}
-                  title={!selectedTable ? "No table selected" : "Clear table drill-down"}
-                >
-                  Clear table drill-down
-                </button>
-              </div>
             </div>
 
             <div style={panel}>
-              <div style={panelTitle}>Top 10%</div>
-              {top10.length ? (
-                <ul style={list}>
-                  {top10.map((r) => (
-                    <li key={`top-${r.student_id}`} style={listItem}>
-                      <span style={{ fontWeight: 800 }}>{r.student}</span>{" "}
-                      <span style={{ color: "#9ca3af" }}>({r.class_label})</span>{" "}
-                      <span style={{ marginLeft: 8, fontWeight: 800, color: "#facc15" }}>
-                        {r.percent}%
-                      </span>
-                    </li>
-                  ))}
-                </ul>
+              <div style={panelTitle}>Trend</div>
+              <div style={panelHint}>Average % per day.</div>
+
+              {!classTrend.length ? (
+                <div style={muted}>No trend data yet.</div>
               ) : (
-                <div style={muted}>No results yet.</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+                  {classTrend
+                    .slice()
+                    .sort((a, b) => (a.day < b.day ? -1 : 1))
+                    .map((t) => (
+                      <div key={t.day} style={trendRow}>
+                        <div style={cellMono}>{t.day}</div>
+                        <div style={trendBarWrap}>
+                          <div
+                            style={{
+                              ...trendBar,
+                              width: `${Math.max(0, Math.min(100, t.avg_percent || 0))}%`,
+                            }}
+                          />
+                        </div>
+                        <div style={cellMono}>{t.avg_percent ?? "—"}%</div>
+                      </div>
+                    ))}
+                </div>
               )}
             </div>
           </div>
         </div>
 
-        <div style={{ marginTop: 10, color: "#64748b", fontSize: 12 }}>
-          If you still see <code style={code}>bushey-logo.png</code> as 404 in Network — that’s fine for now.
+        <div style={{ marginTop: 14, color: "#64748b", fontSize: 12 }}>
+          Next step: make heatmap click show <strong>per-student</strong> breakdown and add <strong>year</strong> + <strong>whole school</strong> scope.
         </div>
       </div>
     </div>
   );
 }
 
-/* ---------------- Heatmap ---------------- */
+/* ---------------- Heatmap grid ---------------- */
 
 function HeatGrid({ tiles, selectedTable, onSelectTable }) {
   const byNum = useMemo(() => {
@@ -496,9 +311,8 @@ function HeatGrid({ tiles, selectedTable, onSelectTable }) {
             style={{
               ...heatTile,
               background: heatColour(acc),
-              ...(isActive ? { outline: "2px solid rgba(59,130,246,0.7)" } : {}),
+              ...(isActive ? { outline: "3px solid rgba(59,130,246,0.75)" } : {}),
             }}
-            title="Click to drill down"
           >
             <div style={heatTop}>
               <div style={heatLabel}>TABLE</div>
@@ -529,27 +343,13 @@ function HeatGrid({ tiles, selectedTable, onSelectTable }) {
 
 function heatColour(accuracy) {
   if (accuracy === null) return "rgba(15,23,42,0.55)";
-  if (accuracy >= 95) return "rgba(34,197,94,0.22)";
-  if (accuracy >= 80) return "rgba(250,204,21,0.22)";
+  if (accuracy >= 95) return "rgba(34,197,94,0.25)";
+  if (accuracy >= 80) return "rgba(250,204,21,0.24)";
   if (accuracy >= 60) return "rgba(249,115,22,0.22)";
   return "rgba(239,68,68,0.20)";
 }
 
-/* ---------------- UI helpers ---------------- */
-
-function SegButton({ active, onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        ...segBtn,
-        ...(active ? segBtnActive : {}),
-      }}
-    >
-      {children}
-    </button>
-  );
-}
+/* ---------------- helpers ---------------- */
 
 function formatDateTime(iso) {
   try {
@@ -559,8 +359,7 @@ function formatDateTime(iso) {
     const yyyy = d.getFullYear();
     const hh = String(d.getHours()).padStart(2, "0");
     const mins = String(d.getMinutes()).padStart(2, "0");
-    const ss = String(d.getSeconds()).padStart(2, "0");
-    return `${dd}/${mm}/${yyyy}, ${hh}:${mins}:${ss}`;
+    return `${dd}/${mm}/${yyyy} ${hh}:${mins}`;
   } catch {
     return iso;
   }
@@ -571,7 +370,7 @@ function pill(percent) {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 64,
+    minWidth: 60,
     padding: "6px 10px",
     borderRadius: 999,
     fontWeight: 900,
@@ -581,22 +380,13 @@ function pill(percent) {
   };
 }
 
-function bandByPercent(percent) {
-  if (percent >= 95) return { background: "rgba(34,197,94,0.14)" };
-  if (percent >= 80) return { background: "rgba(250,204,21,0.12)" };
-  if (percent >= 60) return { background: "rgba(249,115,22,0.10)" };
-  return { background: "rgba(239,68,68,0.10)" };
-}
-
-/* ---------------- Styles ---------------- */
+/* ---------------- styles ---------------- */
 
 const page = {
   minHeight: "100vh",
-  background:
-    "radial-gradient(circle at top, #0b1220 0, #020617 55%, #000 100%)",
+  background: "radial-gradient(circle at top, #0b1220 0, #020617 55%, #000 100%)",
   color: "white",
-  fontFamily:
-    "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
 };
 
 const wrap = {
@@ -632,19 +422,14 @@ const kicker = {
   textTransform: "uppercase",
   color: "#94a3b8",
 };
-const title = {
-  fontSize: 28,
-  fontWeight: 900,
-  color: "#facc15",
-  lineHeight: 1.05,
-};
+const title = { fontSize: 28, fontWeight: 900, color: "#facc15", lineHeight: 1.05 };
 const subTitle = { fontSize: 13, color: "#cbd5e1", marginTop: 6 };
 
 const homeLink = { color: "#93c5fd", textDecoration: "underline", fontWeight: 700 };
 
 const controls = {
   display: "grid",
-  gridTemplateColumns: "1.2fr 1fr 1fr 2fr 0.9fr",
+  gridTemplateColumns: "1fr 1fr 2fr 0.9fr",
   gap: 12,
   alignItems: "end",
   marginBottom: 18,
@@ -680,23 +465,6 @@ const searchBox = {
   outline: "none",
 };
 
-const segRow = { display: "flex", gap: 8, flexWrap: "wrap" };
-const segBtn = {
-  height: 42,
-  padding: "0 14px",
-  borderRadius: 999,
-  background: "rgba(2,6,23,0.35)",
-  border: "1px solid rgba(148,163,184,0.25)",
-  color: "#e5e7eb",
-  fontWeight: 800,
-  cursor: "pointer",
-};
-const segBtnActive = {
-  background: "rgba(59,130,246,0.22)",
-  border: "1px solid rgba(59,130,246,0.55)",
-  color: "#bfdbfe",
-};
-
 const primaryBtn = {
   height: 42,
   borderRadius: 999,
@@ -709,17 +477,6 @@ const primaryBtn = {
   cursor: "pointer",
 };
 
-const secondaryBtn = {
-  height: 40,
-  borderRadius: 999,
-  border: "1px solid rgba(148,163,184,0.25)",
-  background: "rgba(2,6,23,0.35)",
-  color: "#e5e7eb",
-  fontWeight: 800,
-  cursor: "pointer",
-  padding: "0 14px",
-};
-
 const errorBox = {
   padding: "10px 12px",
   borderRadius: 12,
@@ -729,12 +486,7 @@ const errorBox = {
   color: "#fecaca",
 };
 
-const grid = {
-  display: "grid",
-  gridTemplateColumns: "1.5fr 1fr",
-  gap: 16,
-};
-
+const grid = { display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 };
 const rightCol = { display: "flex", flexDirection: "column", gap: 16 };
 
 const panel = {
@@ -746,9 +498,7 @@ const panel = {
 };
 
 const panelTitle = { fontSize: 18, fontWeight: 900, color: "#facc15" };
-
 const panelHint = { marginTop: 6, fontSize: 13, color: "#cbd5e1" };
-
 const muted = { marginTop: 10, color: "#94a3b8", fontSize: 13 };
 
 const table = {
@@ -760,7 +510,7 @@ const table = {
 
 const row = {
   display: "grid",
-  gridTemplateColumns: "1.3fr 1fr 0.6fr 0.5fr 0.5fr 0.5fr",
+  gridTemplateColumns: "1.3fr 1fr 0.6fr 0.6fr 0.6fr",
   gap: 10,
   alignItems: "center",
   padding: "10px 12px",
@@ -775,29 +525,57 @@ const rowHead = {
   fontWeight: 900,
 };
 
-const rowBtn = {
-  ...row,
-  width: "100%",
-  textAlign: "left",
-  border: "none",
-  cursor: "pointer",
-  background: "rgba(2,6,23,0.25)",
-  color: "white",
-};
-
-const rowBtnActive = { outline: "2px solid rgba(59,130,246,0.6)" };
-
-const cellStrong = { fontWeight: 900 };
-const cellSub = {
-  marginTop: 2,
-  fontSize: 12,
-  color: "#94a3b8",
-  fontWeight: 700,
-};
 const cellMono = {
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   fontSize: 12,
   color: "#e2e8f0",
+};
+
+const heatWrap = {
+  marginTop: 14,
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(150px, 1fr))",
+  gap: 12,
+};
+
+const heatTile = {
+  minHeight: 132,
+  borderRadius: 16,
+  border: "1px solid rgba(148,163,184,0.18)",
+  padding: 14,
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "space-between",
+  boxShadow: "0 18px 40px rgba(0,0,0,0.25)",
+  cursor: "pointer",
+  color: "white",
+  textAlign: "left",
+};
+
+const heatTop = { display: "flex", alignItems: "baseline", justifyContent: "space-between" };
+const heatLabel = { fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#cbd5e1", fontWeight: 900 };
+const heatNum = { fontSize: 40, fontWeight: 900, lineHeight: 1, color: "#fff" };
+
+const heatStats = { display: "grid", gap: 10, marginTop: 10 };
+const heatSmall = { display: "flex", justifyContent: "space-between", gap: 10 };
+const heatKey = { fontSize: 13, color: "#cbd5e1", fontWeight: 800 };
+const heatVal = { fontSize: 13, color: "#fff", fontWeight: 900 };
+
+const detailCard = {
+  marginTop: 14,
+  borderRadius: 16,
+  background: "rgba(2,6,23,0.55)",
+  border: "1px solid rgba(148,163,184,0.18)",
+  padding: 14,
+};
+
+const detailPill = {
+  padding: "8px 10px",
+  borderRadius: 999,
+  border: "1px solid rgba(148,163,184,0.18)",
+  background: "rgba(15,23,42,0.7)",
+  color: "#e5e7eb",
+  fontSize: 13,
 };
 
 const trendRow = {
@@ -822,61 +600,4 @@ const trendBar = {
   height: "100%",
   borderRadius: 999,
   background: "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
-};
-
-const heatWrap = {
-  marginTop: 14,
-  display: "grid",
-  gridTemplateColumns: "repeat(5, minmax(128px, 1fr))",
-  gap: 12,
-};
-
-const heatTile = {
-  minHeight: 118,
-  borderRadius: 16,
-  border: "1px solid rgba(148,163,184,0.18)",
-  padding: 12,
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "space-between",
-  boxShadow: "0 18px 40px rgba(0,0,0,0.25)",
-  cursor: "pointer",
-  color: "white",
-  textAlign: "left",
-};
-
-const heatTop = { display: "flex", alignItems: "baseline", justifyContent: "space-between" };
-const heatLabel = { fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#cbd5e1", fontWeight: 900 };
-const heatNum = { fontSize: 36, fontWeight: 900, lineHeight: 1, color: "#fff" };
-
-const heatStats = { display: "grid", gap: 8, marginTop: 10 };
-const heatSmall = { display: "flex", justifyContent: "space-between", gap: 10 };
-const heatKey = { fontSize: 12, color: "#cbd5e1", fontWeight: 800 };
-const heatVal = { fontSize: 12, color: "#fff", fontWeight: 900 };
-
-const list = { marginTop: 10, marginBottom: 0, paddingLeft: 18 };
-const listItem = { marginBottom: 6, color: "#e5e7eb" };
-
-const code = {
-  background: "rgba(2,6,23,0.55)",
-  padding: "2px 6px",
-  borderRadius: 8,
-  border: "1px solid rgba(148,163,184,0.2)",
-};
-
-const drillBox = {
-  marginTop: 10,
-  borderRadius: 14,
-  border: "1px solid rgba(148,163,184,0.15)",
-  background: "rgba(2,6,23,0.35)",
-  padding: 12,
-};
-
-const drillRow = {
-  display: "grid",
-  gridTemplateColumns: "1.2fr 0.7fr 0.6fr",
-  gap: 10,
-  alignItems: "center",
-  padding: "10px 10px",
-  borderBottom: "1px solid rgba(148,163,184,0.10)",
 };
