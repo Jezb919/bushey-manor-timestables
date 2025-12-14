@@ -4,6 +4,7 @@ import { useRouter } from "next/router";
 const TOTAL_QUESTIONS = 3; // keep 3 while testing saving
 const READY_SECONDS = 6;
 const QUESTION_SECONDS = 6;
+const GAP_MS = 2000;
 
 export default function MixedTablePage() {
   const router = useRouter();
@@ -20,11 +21,17 @@ export default function MixedTablePage() {
   const [readySecondsLeft, setReadySecondsLeft] = useState(READY_SECONDS);
   const [questionSecondsLeft, setQuestionSecondsLeft] = useState(QUESTION_SECONDS);
 
+  // Store per-question answers in the format the API expects
+  // [{ givenAnswer: number|null, isCorrect: bool, responseTimeMs: number|null }]
   const [answers, setAnswers] = useState([]);
 
   const inputRef = useRef(null);
 
-  // All tables allowed for now
+  // Track timings
+  const startedAtRef = useRef(null);
+  const questionStartMsRef = useRef(null);
+
+  // All tables allowed for now (later teacher settings)
   const allowedTables = [1,2,3,4,5,6,7,8,9,10,11,12];
 
   // Generate questions once
@@ -45,6 +52,8 @@ export default function MixedTablePage() {
 
     if (readySecondsLeft <= 0) {
       setShowQuestion(true);
+      startedAtRef.current = new Date().toISOString(); // real start
+      questionStartMsRef.current = Date.now();
       return;
     }
 
@@ -52,54 +61,50 @@ export default function MixedTablePage() {
     return () => clearTimeout(t);
   }, [readySecondsLeft, showQuestion]);
 
-  // Focus helper
-  const focusInput = () => {
-    if (inputRef.current) {
-      inputRef.current.focus();
-      setTimeout(() => inputRef.current && inputRef.current.focus(), 10);
-    }
-  };
-
+  // Focus + reset timer at the start of each question
   useEffect(() => {
-    if (showQuestion && !waiting) focusInput();
-  }, [showQuestion, waiting, questionIndex]);
+    if (!showQuestion) return;
+    if (!current) return;
 
-  // Per-question timer + auto advance
+    setQuestionSecondsLeft(QUESTION_SECONDS);
+    questionStartMsRef.current = Date.now();
+
+    // strong focus
+    requestAnimationFrame(() => inputRef.current?.focus());
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }, [showQuestion, questionIndex, current]);
+
+  // Per-question timer + auto advance when time runs out
   useEffect(() => {
     if (!showQuestion) return;
     if (waiting) return;
     if (!current) return;
 
-    setQuestionSecondsLeft(QUESTION_SECONDS);
+    if (questionSecondsLeft <= 0) {
+      // time up => auto submit blank
+      submitAnswer(true);
+      return;
+    }
 
-    const interval = setInterval(() => {
-      setQuestionSecondsLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          submitAnswer(true); // auto = time up
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questionIndex, showQuestion, waiting, current]);
+    const t = setTimeout(() => setQuestionSecondsLeft((p) => p - 1), 1000);
+    return () => clearTimeout(t);
+  }, [showQuestion, waiting, current, questionSecondsLeft]);
 
   // Enter submits
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Enter" && showQuestion && !waiting) {
+        e.preventDefault();
         submitAnswer(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showQuestion, waiting, answer, current, questionIndex, score, answers]);
+  }, [showQuestion, waiting, current, answer]);
 
   const finishAndSave = async (finalScore, finalAnswers) => {
-    // Call server API to save everything (student + test + questions)
+    const finishedAt = new Date().toISOString();
+
     try {
       const res = await fetch("/api/tests/submit", {
         method: "POST",
@@ -109,16 +114,22 @@ export default function MixedTablePage() {
           className: typeof className === "string" ? decodeURIComponent(className) : "",
           score: finalScore,
           total: questions.length,
-          questionTime: QUESTION_SECONDS,
-          tablesUsed: Array.from(new Set(questions.map((q) => q.b))),
-          questions: finalAnswers,
+          started_at: startedAtRef.current,
+          finished_at: finishedAt,
+
+          // IMPORTANT: send QUESTIONS and ANSWERS separately
+          questions: questions,         // [{a,b,correct}]
+          answers: finalAnswers,        // [{givenAnswer,isCorrect,responseTimeMs}]
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
 
-      if (!res.ok || !data.ok) {
-        alert("Save failed: " + (data.error || "Unknown error"));
+      if (!res.ok || !data?.ok) {
+        alert("Save failed: " + (data?.error || data?.details || "Unknown error"));
+      } else if (data?.warning) {
+        // attempt saved but question_records failed
+        alert("Saved attempt, but question saving failed: " + (data.details || ""));
       }
     } catch (err) {
       alert("Save failed: " + err.message);
@@ -134,21 +145,23 @@ export default function MixedTablePage() {
   const submitAnswer = (auto = false) => {
     if (waiting || !current) return;
 
-    const parsed =
-      answer === "" || answer === null ? null : parseInt(answer, 10);
+    const typed = String(answer ?? "").trim();
+    const parsed = typed === "" ? null : parseInt(typed, 10);
 
-    const isCorrect = !auto && parsed === current.correct;
-    const newScore = isCorrect ? score + 1 : score;
+    // In your spec: if time runs out and blank => incorrect
+    const isCorrect = parsed !== null && parsed === current.correct;
 
-    if (isCorrect) setScore(newScore);
+    const responseTimeMs =
+      questionStartMsRef.current ? Date.now() - questionStartMsRef.current : null;
 
-    const questionResult = {
-      a: current.a,
-      b: current.b,
-      correct_answer: current.correct,
-      student_answer: auto ? null : parsed,
-      was_correct: isCorrect,
+    const answerRecord = {
+      givenAnswer: auto ? null : parsed,   // auto timeout => null
+      isCorrect: !auto && isCorrect,       // timeout always counts false
+      responseTimeMs,
     };
+
+    // Update score safely
+    setScore((prev) => (!auto && isCorrect ? prev + 1 : prev));
 
     setAnswer("");
     setWaiting(true);
@@ -156,14 +169,20 @@ export default function MixedTablePage() {
     setTimeout(() => {
       setWaiting(false);
 
-      if (questionIndex + 1 < questions.length) {
-        setAnswers((prev) => [...prev, questionResult]);
-        setQuestionIndex((prev) => prev + 1);
-      } else {
-        const all = [...answers, questionResult];
-        finishAndSave(newScore, all);
-      }
-    }, 2000);
+      setAnswers((prev) => {
+        const updated = [...prev, answerRecord];
+
+        // Move next or finish using the updated answers list
+        if (questionIndex + 1 < questions.length) {
+          setQuestionIndex((p) => p + 1);
+        } else {
+          const finalScore = updated.filter((x) => x.isCorrect).length;
+          finishAndSave(finalScore, updated);
+        }
+
+        return updated;
+      });
+    }, GAP_MS);
   };
 
   if (!questions.length) {
@@ -194,24 +213,25 @@ export default function MixedTablePage() {
 
   // MAIN
   const progress = (questionIndex + 1) / questions.length;
+  const timeBar = Math.max(0, questionSecondsLeft / QUESTION_SECONDS) * 100;
 
   return (
     <div style={outerStyle}>
       <div style={cardStyle}>
         <Header question={questionIndex + 1} total={questions.length} progress={progress} />
 
-        <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
-          <div
-            style={{
-              fontSize: "1.1rem",
-              fontWeight: 700,
-              marginBottom: "0.4rem",
-              color: questionSecondsLeft <= 2 ? "#f97316" : "#facc15",
-            }}
-          >
-            Time left: {questionSecondsLeft}s
+        {/* Time bar */}
+        <div style={{ marginTop: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", color: "#9ca3af" }}>
+            <span>Time</span>
+            <span style={{ fontWeight: 800, color: "#facc15" }}>{questionSecondsLeft}s</span>
           </div>
+          <div style={barOuter}>
+            <div style={{ ...barInner, width: `${timeBar}%` }} />
+          </div>
+        </div>
 
+        <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
           <div style={{ color: "#9ca3af", marginBottom: "0.5rem" }}>
             Question {questionIndex + 1} of {questions.length}
           </div>
@@ -225,6 +245,7 @@ export default function MixedTablePage() {
             disabled={waiting}
             onChange={(e) => setAnswer(e.target.value)}
             style={inputStyle}
+            inputMode="numeric"
           />
 
           <div style={{ marginTop: "1.25rem" }}>
@@ -243,6 +264,8 @@ export default function MixedTablePage() {
     </div>
   );
 }
+
+/* ---------- Styles ---------- */
 
 const outerStyle = {
   minHeight: "100vh",
@@ -301,6 +324,20 @@ const readyNumberStyle = (n) => ({
   color: n <= 2 ? "#f97316" : "#facc15",
   textShadow: "0 0 20px rgba(250,204,21,0.7)",
 });
+
+const barOuter = {
+  height: "10px",
+  borderRadius: "999px",
+  background: "#020617",
+  overflow: "hidden",
+  boxShadow: "0 0 10px rgba(15,23,42,0.8)",
+};
+
+const barInner = {
+  height: "100%",
+  background: "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
+  transition: "width 0.25s ease-out",
+};
 
 function Header({ question, total, progress }) {
   return (
