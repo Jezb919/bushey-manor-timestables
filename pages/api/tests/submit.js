@@ -3,7 +3,6 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Runs ONLY on the server (safe in /api)
 const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
@@ -14,14 +13,16 @@ export default async function handler(req, res) {
   try {
     const body = req.body || {};
 
-    // Frontend sometimes sends class or className — accept either
+    // Accept a few possible keys from the frontend
     const first_name = String(body.name || body.first_name || "").trim();
-    const class_name = String(body.className || body.class || body.class_name || "").trim();
+    const class_name = String(
+      body.className || body.class || body.class_name || ""
+    ).trim();
 
     const score = Number.isFinite(Number(body.score)) ? Number(body.score) : 0;
     const total = Number.isFinite(Number(body.total)) ? Number(body.total) : 0;
 
-    // optional extra info if you send it later
+    // Optional extras (safe to ignore if you don't send them)
     const answers = body.answers ?? null;
     const settings = body.settings ?? null;
     const started_at = body.started_at ?? body.startedAt ?? null;
@@ -40,7 +41,10 @@ export default async function handler(req, res) {
       .maybeSingle();
 
     if (findErr) {
-      return res.status(500).json({ error: "Error checking student", details: findErr.message });
+      return res.status(500).json({
+        error: "Error checking student",
+        details: findErr.message,
+      });
     }
 
     let student = existingStudent;
@@ -54,36 +58,77 @@ export default async function handler(req, res) {
         .single();
 
       if (createErr) {
-        return res.status(500).json({ error: "Could not create student", details: createErr.message });
+        return res.status(500).json({
+          error: "Could not create student",
+          details: createErr.message,
+        });
       }
 
       student = createdStudent;
     }
 
-    // 3) Save attempt
-    // IMPORTANT: This assumes attempts.student_id is an int that matches students.student_id
-    const attemptRow = {
-      student_id: student.student_id,
-      score,
-      total,
-      answers,
-      settings,
-      started_at,
-      finished_at,
-    };
+    // 3) Save test attempt into the CORRECT table: test_attempts
+    // We keep the insert minimal to avoid column mismatch issues.
+    // This assumes test_attempts has columns:
+    // - student_id (int4) OR student_uuid (uuid)  (we try both)
+    // - score (int)
+    // - total (int)
+    //
+    // We'll try UUID first, then INT as a fallback.
+    let attempt = null;
 
-    const { data: attempt, error: attemptErr } = await supabaseAdmin
-      .from("attempts")
-      .insert([attemptRow])
+    // Try: student UUID (students.id) in test_attempts.student_id
+    const { data: a1, error: e1 } = await supabaseAdmin
+      .from("test_attempts")
+      .insert([
+        {
+          student_id: student.id,
+          score,
+          total,
+          answers,
+          settings,
+          started_at,
+          finished_at,
+        },
+      ])
       .select("*")
       .single();
 
-    if (attemptErr) {
-      return res.status(500).json({ error: "Could not save attempt", details: attemptErr.message });
+    if (!e1) {
+      attempt = a1;
+    } else {
+      // Retry: student INT id (students.student_id) in test_attempts.student_id
+      const { data: a2, error: e2 } = await supabaseAdmin
+        .from("test_attempts")
+        .insert([
+          {
+            student_id: student.student_id,
+            score,
+            total,
+            answers,
+            settings,
+            started_at,
+            finished_at,
+          },
+        ])
+        .select("*")
+        .single();
+
+      if (e2) {
+        return res.status(500).json({
+          error: "Could not save attempt",
+          details: `UUID insert failed: ${e1.message} | INT insert failed: ${e2.message}`,
+        });
+      }
+
+      attempt = a2;
     }
 
     return res.status(200).json({ ok: true, student, attempt });
   } catch (err) {
-    return res.status(500).json({ error: "Server error", details: String(err?.message || err) });
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err?.message || err),
+    });
   }
 }
