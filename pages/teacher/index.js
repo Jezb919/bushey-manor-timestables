@@ -1,329 +1,403 @@
 import { useEffect, useMemo, useState } from "react";
 
-export default function TeacherDashboard() {
-  const [classLabel, setClassLabel] = useState("M4"); // default
-  const [days, setDays] = useState(30);
-  const [search, setSearch] = useState("");
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [showTop10, setShowTop10] = useState(false);
+const DEFAULT_CLASS = "M4";
+const DEFAULT_DAYS = 30;
 
-  const load = async () => {
+export default function TeacherDashboard() {
+  const [classLabel, setClassLabel] = useState(DEFAULT_CLASS);
+  const [days, setDays] = useState(DEFAULT_DAYS);
+  const [search, setSearch] = useState("");
+
+  // Scope: "class" | "year" | "school"
+  const [scope, setScope] = useState("class");
+
+  // Click a student row to drill down their heatmap
+  const [selectedStudentId, setSelectedStudentId] = useState(null);
+  const [selectedStudentName, setSelectedStudentName] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const [data, setData] = useState(null);
+
+  const fetchOverview = async () => {
     setLoading(true);
+    setErr("");
+
     try {
-      const res = await fetch(
-        `/api/teacher/overview?class_label=${encodeURIComponent(
-          classLabel
-        )}&days=${encodeURIComponent(days)}`
-      );
+      const qs = new URLSearchParams();
+      qs.set("class_label", classLabel);
+      qs.set("days", String(days));
+      qs.set("scope", scope);
+
+      // If a student is selected, ask the API for a per-student heatmap
+      if (selectedStudentId) qs.set("student_id", selectedStudentId);
+
+      const res = await fetch(`/api/teacher/overview?${qs.toString()}`);
       const json = await res.json();
+
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error || "Failed to load teacher overview");
+      }
+
       setData(json);
     } catch (e) {
-      setData({ ok: false, error: String(e?.message || e) });
+      setErr(String(e?.message || e));
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    load();
+    fetchOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classLabel, days]);
+  }, [classLabel, days, scope, selectedStudentId]);
 
-  const leaderboard = useMemo(() => {
-    const list = data?.leaderboard || [];
+  const leaderboard = data?.leaderboard || [];
+  const classTrend = data?.classTrend || [];
+  const tableHeat = data?.tableHeat || [];
 
-    // remove totally empty rows (no attempts)
-    const cleaned = list.filter((r) => r.student);
-
-    // search filter
-    const searched = cleaned.filter((r) =>
-      String(r.student || "")
-        .toLowerCase()
-        .includes(search.trim().toLowerCase())
+  const filteredLeaderboard = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return leaderboard;
+    return leaderboard.filter((row) =>
+      String(row.student || "").toLowerCase().includes(q)
     );
+  }, [leaderboard, search]);
 
-    // only include people with a score for ranking
-    const withScores = searched.filter((r) => typeof r.percent === "number");
+  const top10 = useMemo(() => {
+    const rows = [...leaderboard]
+      .filter((r) => typeof r.percent === "number")
+      .sort((a, b) => b.percent - a.percent);
+    const cut = Math.max(1, Math.ceil(rows.length * 0.1));
+    return rows.slice(0, cut);
+  }, [leaderboard]);
 
-    // Sort by percent desc, then latest date desc
-    const sorted = [...searched].sort((a, b) => {
-      const ap = typeof a.percent === "number" ? a.percent : -1;
-      const bp = typeof b.percent === "number" ? b.percent : -1;
-      if (bp !== ap) return bp - ap;
-      const ad = a.latest_at ? new Date(a.latest_at).getTime() : 0;
-      const bd = b.latest_at ? new Date(b.latest_at).getTime() : 0;
-      return bd - ad;
-    });
+  const improved = useMemo(() => {
+    // Simple top 5 improvement: delta_percent desc
+    const rows = [...leaderboard]
+      .filter((r) => typeof r.delta_percent === "number")
+      .sort((a, b) => b.delta_percent - a.delta_percent);
+    return rows.slice(0, 5);
+  }, [leaderboard]);
 
-    if (!showTop10) return sorted;
+  const headingScopeLabel =
+    scope === "class" ? `Class ${classLabel}` : scope === "year" ? "Year group" : "Whole school";
 
-    // Top 10% (rounded up, minimum 1)
-    const n = Math.max(1, Math.ceil(withScores.length * 0.1));
-    const topIds = new Set(
-      withScores
-        .sort((a, b) => (b.percent ?? -1) - (a.percent ?? -1))
-        .slice(0, n)
-        .map((x) => x.student_id)
-    );
+  return (
+    <div style={page}>
+      <div style={wrap}>
+        {/* Header */}
+        <div style={headerRow}>
+          <div style={brand}>
+            <div style={logoCircle}>
+              <span style={logoText}>BM</span>
+            </div>
+            <div>
+              <div style={kicker}>Teacher dashboard</div>
+              <div style={title}>Times Tables Arena</div>
+              <div style={subTitle}>
+                {headingScopeLabel}
+                {selectedStudentName ? ` • Student: ${selectedStudentName}` : ""}
+              </div>
+            </div>
+          </div>
 
-    return sorted.filter((x) => topIds.has(x.student_id));
-  }, [data, search, showTop10]);
+          <a href="/" style={homeLink}>Home</a>
+        </div>
 
-  const mostImproved = useMemo(() => {
-    const list = (data?.leaderboard || []).filter(
-      (r) => typeof r.delta_percent === "number"
-    );
-    if (!list.length) return null;
-    const sorted = [...list].sort((a, b) => (b.delta_percent ?? 0) - (a.delta_percent ?? 0));
-    return sorted.slice(0, 5);
-  }, [data]);
+        {/* Controls */}
+        <div style={controls}>
+          <div style={controlBlock}>
+            <div style={label}>Scope</div>
+            <div style={segRow}>
+              <SegButton active={scope === "class"} onClick={() => { setScope("class"); setSelectedStudentId(null); setSelectedStudentName(""); }}>
+                Class
+              </SegButton>
+              <SegButton active={scope === "year"} onClick={() => { setScope("year"); setSelectedStudentId(null); setSelectedStudentName(""); }}>
+                Year
+              </SegButton>
+              <SegButton active={scope === "school"} onClick={() => { setScope("school"); setSelectedStudentId(null); setSelectedStudentName(""); }}>
+                Whole school
+              </SegButton>
+            </div>
+          </div>
 
-  if (data && data.ok === false) {
+          <div style={controlBlock}>
+            <div style={label}>Class</div>
+            <select
+              value={classLabel}
+              onChange={(e) => { setClassLabel(e.target.value); setSelectedStudentId(null); setSelectedStudentName(""); }}
+              style={select}
+              disabled={scope !== "class"}
+              title={scope !== "class" ? "Class is only used in Class scope" : ""}
+            >
+              {/* You can add more classes here */}
+              <option value="M3">M3</option>
+              <option value="B3">B3</option>
+              <option value="M4">M4</option>
+              <option value="B4">B4</option>
+              <option value="M5">M5</option>
+              <option value="B5">B5</option>
+              <option value="M6">M6</option>
+              <option value="B6">B6</option>
+            </select>
+          </div>
+
+          <div style={controlBlock}>
+            <div style={label}>Days (trend)</div>
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))} style={select}>
+              <option value={7}>7</option>
+              <option value={14}>14</option>
+              <option value={30}>30</option>
+              <option value={60}>60</option>
+              <option value={90}>90</option>
+            </select>
+          </div>
+
+          <div style={controlBlockGrow}>
+            <div style={label}>Search</div>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Type a name…"
+              style={searchBox}
+            />
+          </div>
+
+          <div style={controlBlock}>
+            <div style={label}>&nbsp;</div>
+            <button onClick={fetchOverview} style={primaryBtn}>
+              {loading ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+        </div>
+
+        {err ? (
+          <div style={errorBox}>
+            <strong>Couldn’t load dashboard:</strong> {err}
+          </div>
+        ) : null}
+
+        {/* Main grid */}
+        <div style={grid}>
+          {/* LEFT: leaderboard */}
+          <div style={panel}>
+            <div style={panelTitle}>Leaderboard</div>
+            <div style={panelHint}>
+              Click a student row to view their heatmap. (Click again to clear.)
+            </div>
+
+            <div style={table}>
+              <div style={{ ...row, ...rowHead }}>
+                <div>Student</div>
+                <div>Latest</div>
+                <div>Score</div>
+                <div>%</div>
+                <div>Δ%</div>
+                <div>Attempts</div>
+              </div>
+
+              {filteredLeaderboard.map((r) => {
+                const active = selectedStudentId && r.student_id === selectedStudentId;
+                const pct = typeof r.percent === "number" ? r.percent : null;
+
+                return (
+                  <button
+                    key={`${r.student_id}-${r.student}-${r.class_label}`}
+                    onClick={() => {
+                      if (selectedStudentId === r.student_id) {
+                        setSelectedStudentId(null);
+                        setSelectedStudentName("");
+                      } else {
+                        setSelectedStudentId(r.student_id);
+                        setSelectedStudentName(r.student || "");
+                      }
+                    }}
+                    style={{
+                      ...rowBtn,
+                      ...(active ? rowBtnActive : {}),
+                      ...(pct !== null ? bandByPercent(pct, r.total) : {}),
+                    }}
+                  >
+                    <div style={cellStrong}>
+                      {r.student || "—"}
+                      <div style={cellSub}>{r.class_label || classLabel}</div>
+                    </div>
+                    <div style={cellMono}>
+                      {r.latest_at ? formatDateTime(r.latest_at) : "—"}
+                    </div>
+                    <div style={cellMono}>
+                      {typeof r.score === "number" && typeof r.total === "number"
+                        ? `${r.score}/${r.total}`
+                        : "—"}
+                    </div>
+                    <div>
+                      {pct === null ? (
+                        "—"
+                      ) : (
+                        <span style={pill(pct)}>{pct}%</span>
+                      )}
+                    </div>
+                    <div style={cellMono}>
+                      {typeof r.delta_percent === "number" ? `${r.delta_percent > 0 ? "+" : ""}${r.delta_percent}` : "—"}
+                    </div>
+                    <div style={cellMono}>{r.attempts_in_range ?? 0}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div style={{ marginTop: 18 }}>
+              <div style={panelTitle}>Most improved (top 5)</div>
+              {improved.length ? (
+                <ul style={list}>
+                  {improved.map((r) => (
+                    <li key={`imp-${r.student_id}`} style={listItem}>
+                      <span style={{ fontWeight: 800 }}>{r.student}</span>{" "}
+                      <span style={{ color: "#9ca3af" }}>({r.class_label})</span>{" "}
+                      <span style={{ marginLeft: 8, color: "#22c55e", fontWeight: 800 }}>
+                        +{r.delta_percent}%
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div style={muted}>Not enough history yet. Run a few more tests first.</div>
+              )}
+            </div>
+          </div>
+
+          {/* RIGHT: trend + heatmap */}
+          <div style={rightCol}>
+            <div style={panel}>
+              <div style={panelTitle}>
+                Trend ({days} days)
+              </div>
+              <div style={panelHint}>Average % per day.</div>
+
+              {!classTrend.length ? (
+                <div style={muted}>No trend data yet.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {classTrend.map((t) => (
+                    <div key={t.day} style={trendRow}>
+                      <div style={cellMono}>{t.day}</div>
+                      <div style={trendBarWrap}>
+                        <div style={{ ...trendBar, width: `${Math.max(0, Math.min(100, t.avg_percent || 0))}%` }} />
+                      </div>
+                      <div style={cellMono}>{Math.round(t.avg_percent || 0)}%</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={panel}>
+              <div style={panelTitle}>
+                Times table heatmap (1–19)
+              </div>
+              <div style={panelHint}>
+                {selectedStudentName
+                  ? `Showing tables for: ${selectedStudentName}`
+                  : "Showing tables for current scope."}
+              </div>
+
+              <HeatGrid tiles={tableHeat} />
+
+              <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => { setSelectedStudentId(null); setSelectedStudentName(""); }}
+                  style={secondaryBtn}
+                  disabled={!selectedStudentId}
+                  title={!selectedStudentId ? "No student selected" : "Back to scope heatmap"}
+                >
+                  Clear student filter
+                </button>
+
+                <button
+                  onClick={() => alert("Next step: we’ll make tiles open a student table breakdown view.")}
+                  style={secondaryBtn}
+                >
+                  Heatmap drill-down (next)
+                </button>
+              </div>
+            </div>
+
+            <div style={panel}>
+              <div style={panelTitle}>Top 10%</div>
+              {top10.length ? (
+                <ul style={list}>
+                  {top10.map((r) => (
+                    <li key={`top-${r.student_id}`} style={listItem}>
+                      <span style={{ fontWeight: 800 }}>{r.student}</span>{" "}
+                      <span style={{ color: "#9ca3af" }}>({r.class_label})</span>{" "}
+                      <span style={{ marginLeft: 8, fontWeight: 800, color: "#facc15" }}>
+                        {r.percent}%
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div style={muted}>No results yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10, color: "#64748b", fontSize: 12 }}>
+          Tip: the logo 404 is because <code style={code}>/public/bushey-logo.png</code> isn’t in your repo yet — not critical.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Heatmap ---------------- */
+
+function HeatGrid({ tiles }) {
+  // tiles format expected: [{table_num, total, correct, accuracy}]
+  const byNum = useMemo(() => {
+    const m = new Map();
+    (tiles || []).forEach((t) => m.set(Number(t.table_num), t));
+    return m;
+  }, [tiles]);
+
+  const all = Array.from({ length: 19 }).map((_, i) => {
+    const n = i + 1;
     return (
-      <div style={pageStyle}>
-        <Card>
-          <h1 style={h1}>Teacher Dashboard</h1>
-          <p style={muted}>Could not load data.</p>
-          <pre style={preStyle}>{JSON.stringify(data, null, 2)}</pre>
-        </Card>
-      </div>
+      byNum.get(n) || {
+        table_num: n,
+        total: 0,
+        correct: 0,
+        accuracy: null,
+      }
     );
-  }
+  });
 
   return (
-    <div style={pageStyle}>
-      <Card>
-        <Header />
+    <div style={heatWrap}>
+      {all.map((t) => {
+        const acc = t.accuracy === null || typeof t.accuracy !== "number" ? null : t.accuracy;
+        const bg = heatColour(acc);
 
-        <div style={{ marginTop: 18 }}>
-          <div style={controlsRow}>
-            <div style={{ flex: 1 }}>
-              <label style={label}>Class</label>
-              <select
-                value={classLabel}
-                onChange={(e) => setClassLabel(e.target.value)}
-                style={input}
-              >
-                {/* Your preferred format: M4, B4, M3, B3, M5, B5, M6, B6 */}
-                {["M3","B3","M4","B4","M5","B5","M6","B6"].map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ width: 170 }}>
-              <label style={label}>Days (trend)</label>
-              <select
-                value={days}
-                onChange={(e) => setDays(Number(e.target.value))}
-                style={input}
-              >
-                <option value={7}>7</option>
-                <option value={14}>14</option>
-                <option value={30}>30</option>
-                <option value={90}>90</option>
-              </select>
-            </div>
-
-            <div style={{ flex: 1 }}>
-              <label style={label}>Search</label>
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Type a name…"
-                style={input}
-              />
-            </div>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
-              <button
-                onClick={() => setShowTop10((p) => !p)}
-                style={button(showTop10 ? "gold" : "dark")}
-              >
-                {showTop10 ? "Showing Top 10%" : "Top 10%"}
-              </button>
-
-              <button onClick={load} style={button("blue")}>
-                {loading ? "Loading…" : "Refresh"}
-              </button>
-            </div>
-          </div>
-
-          <div style={twoCol}>
-            <div>
-              <h2 style={h2}>Class leaderboard</h2>
-              <p style={muted}>
-                Colour bands: <strong>full marks</strong>, 20–24, 15–19, 10–14, below 10.
-              </p>
-
-              <div style={tableWrap}>
-                <table style={table}>
-                  <thead>
-                    <tr>
-                      <th style={th}>Student</th>
-                      <th style={th}>Latest</th>
-                      <th style={th}>Score</th>
-                      <th style={th}>%</th>
-                      <th style={th}>Δ%</th>
-                      <th style={th}>Attempts</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leaderboard.map((r) => {
-                      const pct = typeof r.percent === "number" ? r.percent : null;
-                      const band = bandForPercent(pct, r.total);
-                      return (
-                        <tr key={r.student_id} style={{ background: band.bg }}>
-                          <td style={td}>
-                            <div style={{ fontWeight: 700 }}>{r.student || "—"}</div>
-                            <div style={{ fontSize: 12, color: "#94a3b8" }}>
-                              {r.class_label || classLabel}
-                            </div>
-                          </td>
-                          <td style={td}>
-                            {r.latest_at
-                              ? new Date(r.latest_at).toLocaleString()
-                              : "—"}
-                          </td>
-                          <td style={td}>
-                            {typeof r.score === "number" && typeof r.total === "number"
-                              ? `${r.score}/${r.total}`
-                              : "—"}
-                          </td>
-                          <td style={td}>
-                            {pct === null ? "—" : (
-                              <span style={pill(band.pill)}>{pct}%</span>
-                            )}
-                          </td>
-                          <td style={td}>
-                            {typeof r.delta_percent === "number"
-                              ? `${r.delta_percent > 0 ? "+" : ""}${r.delta_percent}%`
-                              : "—"}
-                          </td>
-                          <td style={td}>{r.attempts_in_range ?? 0}</td>
-                        </tr>
-                      );
-                    })}
-                    {!leaderboard.length && (
-                      <tr>
-                        <td style={td} colSpan={6}>
-                          No results yet for this class.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              <div style={{ marginTop: 16 }}>
-                <h2 style={h2}>Most improved (top 5)</h2>
-                {!mostImproved ? (
-                  <p style={muted}>
-                    Not enough history yet to calculate improvement. Run a few more tests first.
-                  </p>
-                ) : (
-                  <ul style={{ margin: 0, paddingLeft: 18 }}>
-                    {mostImproved.map((r) => (
-                      <li key={r.student_id} style={{ marginBottom: 6 }}>
-                        <strong>{r.student}</strong> —{" "}
-                        <span style={{ color: "#22c55e", fontWeight: 800 }}>
-                          +{r.delta_percent}%
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <h2 style={h2}>Class trend</h2>
-              <p style={muted}>Average % per day (last {days} days).</p>
-              <TrendChart trend={data?.classTrend || []} />
-
-              <div style={{ marginTop: 18 }}>
-                <h2 style={h2}>Times table heatmap (1–19)</h2>
-                <p style={muted}>Shows strongest/weakest tables based on answered questions.</p>
-                <HeatMap items={data?.tableHeat || []} />
-              </div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 18 }}>
-            <details>
-              <summary style={{ cursor: "pointer", color: "#93c5fd" }}>
-                Debug: view raw JSON
-              </summary>
-              <pre style={preStyle}>{JSON.stringify(data, null, 2)}</pre>
-            </details>
-          </div>
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-/* ---------------- UI bits ---------------- */
-
-function Header() {
-  return (
-    <div style={topRow}>
-      <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <div style={logoCircle}>
-          <span style={{ fontWeight: 900, fontSize: 18, color: "#0f172a" }}>BM</span>
-        </div>
-        <div>
-          <div style={{ fontSize: 12, letterSpacing: "0.16em", textTransform: "uppercase", color: "#e5e7eb" }}>
-            Teacher dashboard
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 900, color: "#facc15" }}>
-            Times Tables Arena
-          </div>
-        </div>
-      </div>
-
-      <a href="/" style={{ color: "#93c5fd", textDecoration: "underline" }}>
-        Home
-      </a>
-    </div>
-  );
-}
-
-function Card({ children }) {
-  return <div style={cardStyle}>{children}</div>;
-}
-
-function TrendChart({ trend }) {
-  // trend: [{day:"YYYY-MM-DD", avg_percent:number, attempts:number}]
-  if (!trend.length) {
-    return <div style={miniCard}><p style={muted}>No trend data yet.</p></div>;
-  }
-
-  const max = Math.max(...trend.map((t) => t.avg_percent ?? 0), 1);
-
-  return (
-    <div style={miniCard}>
-      {trend.map((t) => {
-        const w = Math.round(((t.avg_percent ?? 0) / max) * 100);
         return (
-          <div key={t.day} style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 8 }}>
-            <div style={{ width: 92, fontSize: 12, color: "#cbd5e1" }}>
-              {t.day}
+          <div key={t.table_num} style={{ ...heatTile, background: bg }}>
+            <div style={heatTop}>
+              <div style={heatLabel}>TABLE</div>
+              <div style={heatNum}>{t.table_num}</div>
             </div>
-            <div style={{ flex: 1, background: "#0b1220", borderRadius: 999, overflow: "hidden", height: 10 }}>
-              <div
-                style={{
-                  width: `${w}%`,
-                  height: "100%",
-                  background: "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
-                }}
-              />
-            </div>
-            <div style={{ width: 60, textAlign: "right", fontSize: 12, color: "#e2e8f0" }}>
-              {Math.round(t.avg_percent ?? 0)}%
+
+            <div style={heatStats}>
+              <div style={heatSmall}>
+                <span style={heatKey}>Correct</span>
+                <span style={heatVal}>{t.correct}/{t.total}</span>
+              </div>
+
+              <div style={heatSmall}>
+                <span style={heatKey}>Accuracy</span>
+                <span style={heatVal}>{acc === null ? "—" : `${Math.round(acc)}%`}</span>
+              </div>
             </div>
           </div>
         );
@@ -332,228 +406,314 @@ function TrendChart({ trend }) {
   );
 }
 
-function HeatMap({ items }) {
-  // items: [{table_num, total, correct, accuracy}]
-  if (!items.length) {
-    return <div style={miniCard}><p style={muted}>No heatmap data yet.</p></div>;
-  }
+function heatColour(accuracy) {
+  // colour-blind friendly-ish gradient bands
+  if (accuracy === null) return "rgba(15,23,42,0.55)";
+  if (accuracy >= 95) return "rgba(34,197,94,0.22)";   // green
+  if (accuracy >= 80) return "rgba(250,204,21,0.22)";  // yellow
+  if (accuracy >= 60) return "rgba(249,115,22,0.22)";  // orange
+  return "rgba(239,68,68,0.20)";                       // red
+}
 
+/* ---------------- UI helpers ---------------- */
+
+function SegButton({ active, onClick, children }) {
   return (
-    <div style={miniCard}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10 }}>
-        {items.map((t) => {
-          const acc = typeof t.accuracy === "number" ? t.accuracy : null;
-          const bg = heatColour(acc);
-          return (
-            <div key={t.table_num} style={{ padding: 12, borderRadius: 14, background: bg, border: "1px solid rgba(148,163,184,0.25)" }}>
-              <div style={{ fontSize: 12, color: "#e2e8f0", letterSpacing: "0.12em", textTransform: "uppercase" }}>
-                Table
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 900, marginTop: 2 }}>{t.table_num}</div>
-              <div style={{ marginTop: 6, fontSize: 12, color: "#e2e8f0" }}>
-                {t.correct ?? 0}/{t.total ?? 0} correct
-              </div>
-              <div style={{ marginTop: 2, fontSize: 12, color: "#e2e8f0" }}>
-                Accuracy: {acc === null ? "—" : `${Math.round(acc)}%`}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <button
+      onClick={onClick}
+      style={{
+        ...segBtn,
+        ...(active ? segBtnActive : {}),
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
-/* ---------------- helpers ---------------- */
-
-function bandForPercent(percent, total) {
-  // Colour bands you requested. Using clear but friendly colours.
-  // Full marks = percent 100 (or score==total when total is small).
-  const full = typeof percent === "number" && percent >= 100;
-
-  if (full) return { bg: "rgba(34,197,94,0.18)", pill: "green" };       // Green
-  if (typeof percent !== "number") return { bg: "transparent", pill: "grey" };
-
-  if (percent >= 80) return { bg: "rgba(250,204,21,0.16)", pill: "gold" };  // Gold
-  if (percent >= 60) return { bg: "rgba(59,130,246,0.14)", pill: "blue" };  // Blue
-  if (percent >= 40) return { bg: "rgba(249,115,22,0.14)", pill: "orange" };// Orange
-  return { bg: "rgba(239,68,68,0.14)", pill: "red" };                       // Red
+function formatDateTime(iso) {
+  try {
+    const d = new Date(iso);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mins = String(d.getMinutes()).padStart(2, "0");
+    const ss = String(d.getSeconds()).padStart(2, "0");
+    return `${dd}/${mm}/${yyyy}, ${hh}:${mins}:${ss}`;
+  } catch {
+    return iso;
+  }
 }
 
-function pill(kind) {
-  const map = {
-    green: "rgba(34,197,94,0.25)",
-    gold: "rgba(250,204,21,0.25)",
-    blue: "rgba(59,130,246,0.25)",
-    orange: "rgba(249,115,22,0.25)",
-    red: "rgba(239,68,68,0.25)",
-    grey: "rgba(148,163,184,0.18)",
-  };
-
+function pill(percent) {
   return {
-    display: "inline-block",
-    padding: "4px 10px",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 64,
+    padding: "6px 10px",
     borderRadius: 999,
-    fontWeight: 800,
-    background: map[kind] || map.grey,
-    border: "1px solid rgba(148,163,184,0.25)",
+    fontWeight: 900,
+    background: "rgba(2,6,23,0.55)",
+    border: `1px solid rgba(148,163,184,0.35)`,
+    color: percent >= 80 ? "#facc15" : "#e5e7eb",
   };
 }
 
-function heatColour(acc) {
-  // Map accuracy → background colour
-  if (acc === null || typeof acc !== "number") return "rgba(148,163,184,0.10)";
-  if (acc >= 90) return "rgba(34,197,94,0.20)";
-  if (acc >= 75) return "rgba(250,204,21,0.20)";
-  if (acc >= 50) return "rgba(249,115,22,0.20)";
-  return "rgba(239,68,68,0.20)";
+function bandByPercent(percent, total) {
+  // your bands: full marks, 20–24, 15–19, 10–14, below 10
+  // This uses percent OR (score bands if total 25). We colour by percent so it still works for total=3/10/60 etc.
+  if (percent >= 95) return { background: "rgba(34,197,94,0.14)" };      // green
+  if (percent >= 80) return { background: "rgba(250,204,21,0.12)" };     // yellow
+  if (percent >= 60) return { background: "rgba(249,115,22,0.10)" };     // orange
+  return { background: "rgba(239,68,68,0.10)" };                         // red
 }
 
-/* ---------------- styles ---------------- */
+/* ---------------- Styles ---------------- */
 
-const pageStyle = {
+const page = {
   minHeight: "100vh",
-  background:
-    "radial-gradient(circle at top, #facc15 0, #0f172a 35%, #020617 100%)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "1.5rem",
+  background: "radial-gradient(circle at top, #0b1220 0, #020617 55%, #000 100%)",
   color: "white",
   fontFamily:
     "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
 };
 
-const cardStyle = {
-  background: "rgba(3,7,18,0.92)",
-  borderRadius: 22,
-  padding: "1.75rem 2rem",
-  maxWidth: 1100,
-  width: "100%",
-  boxShadow: "0 25px 60px rgba(0,0,0,0.55)",
-  border: "1px solid rgba(148,163,184,0.35)",
+const wrap = {
+  maxWidth: 1200,
+  margin: "0 auto",
+  padding: "28px 18px 40px",
 };
 
-const miniCard = {
-  background: "rgba(2,6,23,0.75)",
-  borderRadius: 18,
-  border: "1px solid rgba(148,163,184,0.25)",
-  padding: 14,
-};
-
-const topRow = {
+const headerRow = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  gap: 12,
+  marginBottom: 18,
 };
+
+const brand = { display: "flex", gap: 14, alignItems: "center" };
 
 const logoCircle = {
-  width: 56,
-  height: 56,
+  width: 64,
+  height: 64,
   borderRadius: 999,
-  background: "#f8fafc",
+  background: "#fff",
   border: "3px solid #facc15",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const controlsRow = {
-  display: "flex",
-  gap: 14,
-  flexWrap: "wrap",
-  alignItems: "center",
-};
-
-const twoCol = {
   display: "grid",
-  gridTemplateColumns: "1.2fr 0.8fr",
-  gap: 18,
-  marginTop: 18,
+  placeItems: "center",
 };
 
-const h1 = { margin: 0, fontSize: 28, fontWeight: 900 };
-const h2 = { margin: "14px 0 8px", fontSize: 18, fontWeight: 900, color: "#facc15" };
-const muted = { margin: "6px 0", color: "#cbd5e1", fontSize: 13 };
+const logoText = { fontWeight: 900, fontSize: 20, color: "#0f172a" };
 
-const label = { display: "block", marginBottom: 6, color: "#e2e8f0", fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase" };
+const kicker = { fontSize: 12, letterSpacing: "0.18em", textTransform: "uppercase", color: "#94a3b8" };
+const title = { fontSize: 28, fontWeight: 900, color: "#facc15", lineHeight: 1.05 };
+const subTitle = { fontSize: 13, color: "#cbd5e1", marginTop: 6 };
 
-const input = {
-  width: "100%",
-  padding: "10px 12px",
+const homeLink = { color: "#93c5fd", textDecoration: "underline", fontWeight: 700 };
+
+const controls = {
+  display: "grid",
+  gridTemplateColumns: "1.2fr 1fr 1fr 2fr 0.9fr",
+  gap: 12,
+  alignItems: "end",
+  marginBottom: 18,
+};
+
+const controlBlock = { display: "flex", flexDirection: "column", gap: 6 };
+const controlBlockGrow = { display: "flex", flexDirection: "column", gap: 6 };
+
+const label = { fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase", color: "#94a3b8" };
+
+const select = {
+  height: 42,
   borderRadius: 999,
-  border: "1px solid rgba(148,163,184,0.35)",
+  background: "rgba(2,6,23,0.55)",
+  color: "white",
+  border: "1px solid rgba(148,163,184,0.25)",
+  padding: "0 14px",
   outline: "none",
-  background: "rgba(2,6,23,0.9)",
+};
+
+const searchBox = {
+  height: 42,
+  borderRadius: 999,
+  background: "rgba(2,6,23,0.55)",
+  color: "white",
+  border: "1px solid rgba(148,163,184,0.25)",
+  padding: "0 14px",
+  outline: "none",
+};
+
+const segRow = { display: "flex", gap: 8, flexWrap: "wrap" };
+const segBtn = {
+  height: 42,
+  padding: "0 14px",
+  borderRadius: 999,
+  background: "rgba(2,6,23,0.35)",
+  border: "1px solid rgba(148,163,184,0.25)",
+  color: "#e5e7eb",
+  fontWeight: 800,
+  cursor: "pointer",
+};
+const segBtnActive = {
+  background: "rgba(59,130,246,0.22)",
+  border: "1px solid rgba(59,130,246,0.55)",
+  color: "#bfdbfe",
+};
+
+const primaryBtn = {
+  height: 42,
+  borderRadius: 999,
+  border: "none",
+  background: "linear-gradient(135deg,#3b82f6,#60a5fa)",
+  color: "white",
+  fontWeight: 900,
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+  cursor: "pointer",
+};
+
+const secondaryBtn = {
+  height: 40,
+  borderRadius: 999,
+  border: "1px solid rgba(148,163,184,0.25)",
+  background: "rgba(2,6,23,0.35)",
+  color: "#e5e7eb",
+  fontWeight: 800,
+  cursor: "pointer",
+  padding: "0 14px",
+};
+
+const errorBox = {
+  padding: "10px 12px",
+  borderRadius: 12,
+  background: "rgba(239,68,68,0.12)",
+  border: "1px solid rgba(239,68,68,0.35)",
+  marginBottom: 16,
+  color: "#fecaca",
+};
+
+const grid = {
+  display: "grid",
+  gridTemplateColumns: "1.5fr 1fr",
+  gap: 16,
+};
+
+const rightCol = { display: "flex", flexDirection: "column", gap: 16 };
+
+const panel = {
+  background: "rgba(3,7,18,0.8)",
+  border: "1px solid rgba(148,163,184,0.18)",
+  borderRadius: 18,
+  padding: 16,
+  boxShadow: "0 25px 60px rgba(0,0,0,0.35)",
+};
+
+const panelTitle = {
+  fontSize: 18,
+  fontWeight: 900,
+  color: "#facc15",
+};
+
+const panelHint = {
+  marginTop: 6,
+  fontSize: 13,
+  color: "#cbd5e1",
+};
+
+const muted = { marginTop: 10, color: "#94a3b8", fontSize: 13 };
+
+const table = { marginTop: 12, borderRadius: 14, overflow: "hidden", border: "1px solid rgba(148,163,184,0.15)" };
+
+const row = {
+  display: "grid",
+  gridTemplateColumns: "1.3fr 1fr 0.6fr 0.5fr 0.5fr 0.5fr",
+  gap: 10,
+  alignItems: "center",
+  padding: "10px 12px",
+};
+
+const rowHead = {
+  background: "rgba(2,6,23,0.55)",
+  color: "#e2e8f0",
+  fontSize: 12,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  fontWeight: 900,
+};
+
+const rowBtn = {
+  ...row,
+  width: "100%",
+  textAlign: "left",
+  border: "none",
+  cursor: "pointer",
+  background: "rgba(2,6,23,0.25)",
   color: "white",
 };
 
-const tableWrap = {
-  overflowX: "auto",
-  borderRadius: 16,
-  border: "1px solid rgba(148,163,184,0.25)",
+const rowBtnActive = {
+  outline: "2px solid rgba(59,130,246,0.6)",
 };
 
-const table = {
-  width: "100%",
-  borderCollapse: "collapse",
-  minWidth: 720,
-};
+const cellStrong = { fontWeight: 900 };
+const cellSub = { marginTop: 2, fontSize: 12, color: "#94a3b8", fontWeight: 700 };
+const cellMono = { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace", fontSize: 12, color: "#e2e8f0" };
 
-const th = {
-  textAlign: "left",
+const trendRow = {
+  display: "grid",
+  gridTemplateColumns: "1fr 2fr 0.6fr",
+  alignItems: "center",
+  gap: 10,
   padding: "10px 12px",
-  fontSize: 12,
-  color: "#cbd5e1",
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
-  borderBottom: "1px solid rgba(148,163,184,0.25)",
-  background: "rgba(2,6,23,0.85)",
-};
-
-const td = {
-  padding: "10px 12px",
-  borderBottom: "1px solid rgba(148,163,184,0.18)",
-  fontSize: 13,
-};
-
-const preStyle = {
-  background: "rgba(2,6,23,0.85)",
   borderRadius: 14,
-  border: "1px solid rgba(148,163,184,0.25)",
-  padding: 12,
-  overflowX: "auto",
-  marginTop: 10,
-  fontSize: 12,
-  color: "#e2e8f0",
+  background: "rgba(2,6,23,0.35)",
+  border: "1px solid rgba(148,163,184,0.12)",
 };
 
-function button(kind) {
-  const styles = {
-    blue: {
-      background: "linear-gradient(135deg,#3b82f6,#60a5fa)",
-      color: "white",
-    },
-    dark: {
-      background: "rgba(148,163,184,0.15)",
-      color: "white",
-    },
-    gold: {
-      background: "linear-gradient(135deg,#f59e0b,#facc15)",
-      color: "#0f172a",
-    },
-  };
+const trendBarWrap = {
+  height: 12,
+  borderRadius: 999,
+  background: "rgba(15,23,42,0.7)",
+  overflow: "hidden",
+};
 
-  return {
-    padding: "10px 14px",
-    borderRadius: 999,
-    border: "none",
-    cursor: "pointer",
-    fontWeight: 900,
-    letterSpacing: "0.10em",
-    textTransform: "uppercase",
-    fontSize: 12,
-    ...styles[kind],
-  };
-}
+const trendBar = {
+  height: "100%",
+  borderRadius: 999,
+  background: "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
+};
+
+const heatWrap = {
+  marginTop: 14,
+  display: "grid",
+  gridTemplateColumns: "repeat(5, minmax(128px, 1fr))",
+  gap: 12,
+};
+
+const heatTile = {
+  minHeight: 118,
+  borderRadius: 16,
+  border: "1px solid rgba(148,163,184,0.18)",
+  padding: 12,
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "space-between",
+  boxShadow: "0 18px 40px rgba(0,0,0,0.25)",
+};
+
+const heatTop = { display: "flex", alignItems: "baseline", justifyContent: "space-between" };
+const heatLabel = { fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase", color: "#cbd5e1", fontWeight: 900 };
+const heatNum = { fontSize: 36, fontWeight: 900, lineHeight: 1, color: "#fff" };
+
+const heatStats = { display: "grid", gap: 8, marginTop: 10 };
+const heatSmall = { display: "flex", justifyContent: "space-between", gap: 10 };
+const heatKey = { fontSize: 12, color: "#cbd5e1", fontWeight: 800 };
+const heatVal = { fontSize: 12, color: "#fff", fontWeight: 900 };
+
+const list = { marginTop: 10, marginBottom: 0, paddingLeft: 18 };
+const listItem = { marginBottom: 6, color: "#e5e7eb" };
+
+const code = { background: "rgba(2,6,23,0.55)", padding: "2px 6px", borderRadius: 8, border: "1px solid rgba(148,163,184,0.2)" };
