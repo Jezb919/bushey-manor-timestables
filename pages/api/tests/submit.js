@@ -33,17 +33,11 @@ export default async function handler(req, res) {
     const score = Number.isFinite(Number(body.score)) ? Number(body.score) : 0;
     const total = Number.isFinite(Number(body.total)) ? Number(body.total) : 0;
 
-    // Optional timing info from the browser (if you send it)
-    const started_at_input = body.started_at || body.startedAt || null;
-    const finished_at_input = body.finished_at || body.finishedAt || null;
-    const avg_response_time_ms_input =
-      body.avg_response_time_ms || body.avgResponseTimeMs || null;
-
     if (!first_name || !class_label) {
       return res.status(400).json({ error: "Missing name or class" });
     }
 
-    // 1) Find student by first_name + class_label
+    // 1) Find or create student (students.first_name + students.class_label)
     const { data: existingStudent, error: findErr } = await supabaseAdmin
       .from("students")
       .select("id, first_name, class_label")
@@ -52,15 +46,11 @@ export default async function handler(req, res) {
       .maybeSingle();
 
     if (findErr) {
-      return res.status(500).json({
-        error: "Error checking student",
-        details: findErr.message,
-      });
+      return res.status(500).json({ error: "Error checking student", details: findErr.message });
     }
 
     let student = existingStudent;
 
-    // 2) Create student if missing
     if (!student) {
       const { data: createdStudent, error: createErr } = await supabaseAdmin
         .from("students")
@@ -69,44 +59,89 @@ export default async function handler(req, res) {
         .single();
 
       if (createErr) {
-        return res.status(500).json({
-          error: "Could not create student",
-          details: createErr.message,
-        });
+        return res.status(500).json({ error: "Could not create student", details: createErr.message });
       }
 
       student = createdStudent;
     }
 
-    // 3) Build attempt row matching your attempts table columns
+    // 2) Save attempt (your schema differs, so we try several column patterns)
     const nowIso = new Date().toISOString();
-    const started_at = started_at_input || nowIso;
-    const finished_at = finished_at_input || nowIso;
+    const percent = total > 0 ? Math.round((score / total) * 100) : 0;
 
-    const percentage = total > 0 ? Math.round((score / total) * 1000) / 10 : 0; // 1dp
-    const completed = true;
-
-    const avg_response_time_ms = Number.isFinite(Number(avg_response_time_ms_input))
-      ? Number(avg_response_time_ms_input)
-      : null;
-
-    const attemptRow = {
-      student_id: student.id,        // UUID
-      class_label: class_label,      // text
-      started_at,
-      finished_at,
-      score,
-      total,
-      percentage,
-      avg_response_time_ms,
-      completed,
+    const tryInsert = async (row) => {
+      const { data, error } = await supabaseAdmin
+        .from("attempts")
+        .insert([row])
+        .select("*")
+        .single();
+      return { data, error };
     };
 
-    const { data: attempt, error: attemptErr } = await supabaseAdmin
-      .from("attempts")
-      .insert([attemptRow])
-      .select("*")
-      .single();
+    // Attempt A: columns like score/total/percentage/completed/finished_at
+    let rowA = {
+      student_id: student.id,
+      class_label,
+      score,
+      total,
+      percentage: percent,
+      completed: true,
+      finished_at: nowIso,
+      started_at: nowIso,
+    };
+
+    let { data: attempt, error: attemptErr } = await tryInsert(rowA);
+
+    // Attempt B: column is called "percent" not "percentage"
+    if (attemptErr) {
+      const rowB = {
+        student_id: student.id,
+        class_label,
+        score,
+        total,
+        percent: percent,
+        completed: true,
+        finished_at: nowIso,
+        started_at: nowIso,
+      };
+
+      const r2 = await tryInsert(rowB);
+      attempt = r2.data;
+      attemptErr = r2.error;
+    }
+
+    // Attempt C: some schemas use max_score/max_sc... — set max_score = total
+    if (attemptErr) {
+      const rowC = {
+        student_id: student.id,
+        class_label,
+        score,
+        total,
+        max_score: total,
+        percent: percent,
+        completed: true,
+        finished_at: nowIso,
+        started_at: nowIso,
+      };
+
+      const r3 = await tryInsert(rowC);
+      attempt = r3.data;
+      attemptErr = r3.error;
+    }
+
+    // Attempt D (minimal): just save the essentials (this should always work)
+    if (attemptErr) {
+      const rowD = {
+        student_id: student.id,
+        class_label,
+        score,
+        total,
+      };
+
+      const r4 = await tryInsert(rowD);
+      attempt = r4.data;
+      attemptErr = r4.error;
+    }
 
     if (attemptErr) {
       return res.status(500).json({
