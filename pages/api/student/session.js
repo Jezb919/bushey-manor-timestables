@@ -12,6 +12,23 @@ if (!supabaseUrl || !serviceRoleKey) {
 
 const supabase = createClient(supabaseUrl, serviceRoleKey);
 
+/**
+ * Normalise class input so "4m", " 4M ", "4 m" all become "4M"
+ */
+function normaliseClassLabel(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+}
+
+/**
+ * Normalise name so we don't store weird spaces
+ */
+function normaliseName(value) {
+  return String(value || "").trim();
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res
@@ -27,17 +44,23 @@ export default async function handler(req, res) {
       .json({ ok: false, error: "Missing name or className" });
   }
 
-  const firstName = String(name).trim();
-  const classText = String(className).trim();
+  const firstName = normaliseName(name);
+  const classLabel = normaliseClassLabel(className);
+
+  if (!firstName || !classLabel) {
+    return res
+      .status(400)
+      .json({ ok: false, error: "Name/class cannot be blank" });
+  }
 
   try {
-    // 1) Look for an existing student with same first_name + last_name (class)
+    // 1) Look for an existing student with same first_name + class_label
     const { data: existing, error: selectError } = await supabase
       .from("students")
-      .select("id, first_name, last_name")
+      .select("id, first_name, class_label")
       .eq("first_name", firstName)
-      .eq("last_name", classText)
-      .maybeSingle(); // <- important: 0 or 1 row
+      .eq("class_label", classLabel)
+      .maybeSingle(); // 0 or 1 row
 
     if (selectError) {
       console.error("Supabase SELECT students error:", selectError);
@@ -48,7 +71,6 @@ export default async function handler(req, res) {
     }
 
     if (existing) {
-      // Already have this pupil
       return res.status(200).json({ ok: true, studentId: existing.id });
     }
 
@@ -57,7 +79,7 @@ export default async function handler(req, res) {
       .from("students")
       .insert({
         first_name: firstName,
-        last_name: classText,
+        class_label: classLabel,
       })
       .select("id")
       .single();
