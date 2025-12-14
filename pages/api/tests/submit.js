@@ -8,36 +8,29 @@ const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
-function normaliseClassLabel(value) {
-  return String(value || "")
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, "");
-}
-
-function normaliseName(value) {
-  return String(value || "").trim();
-}
-
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
 
   try {
     const body = req.body || {};
 
-    const first_name = normaliseName(body.name || body.first_name);
-    const class_label = normaliseClassLabel(
-      body.className || body.class || body.class_label || body.class_name
-    );
+    const first_name = String(body.name || "").trim();
+    const class_label = String(body.className || body.class || "").trim();
 
-    const score = Number.isFinite(Number(body.score)) ? Number(body.score) : 0;
-    const total = Number.isFinite(Number(body.total)) ? Number(body.total) : 0;
+    const score = Number(body.score ?? 0);
+    const total = Number(body.total ?? 0);
+
+    // These come from the test page:
+    // questions: [{a,b,correct}]
+    // answers: [{givenAnswer,isCorrect,responseTimeMs}]
+    const questions = Array.isArray(body.questions) ? body.questions : [];
+    const answers = Array.isArray(body.answers) ? body.answers : [];
 
     if (!first_name || !class_label) {
       return res.status(400).json({ error: "Missing name or class" });
     }
 
-    // 1) Find or create student (students.first_name + students.class_label)
+    // 1) Find or create student
     const { data: existingStudent, error: findErr } = await supabaseAdmin
       .from("students")
       .select("id, first_name, class_label")
@@ -61,93 +54,79 @@ export default async function handler(req, res) {
       if (createErr) {
         return res.status(500).json({ error: "Could not create student", details: createErr.message });
       }
-
       student = createdStudent;
     }
 
-    // 2) Save attempt (your schema differs, so we try several column patterns)
-    const nowIso = new Date().toISOString();
     const percent = total > 0 ? Math.round((score / total) * 100) : 0;
+    const nowIso = new Date().toISOString();
 
-    const tryInsert = async (row) => {
-      const { data, error } = await supabaseAdmin
-        .from("attempts")
-        .insert([row])
-        .select("*")
-        .single();
-      return { data, error };
-    };
-
-    // Attempt A: columns like score/total/percentage/completed/finished_at
-    let rowA = {
-      student_id: student.id,
-      class_label,
-      score,
-      total,
-      percentage: percent,
-      completed: true,
-      finished_at: nowIso,
-      started_at: nowIso,
-    };
-
-    let { data: attempt, error: attemptErr } = await tryInsert(rowA);
-
-    // Attempt B: column is called "percent" not "percentage"
-    if (attemptErr) {
-      const rowB = {
+    // 2) Create attempt row
+    const { data: attempt, error: attemptErr } = await supabaseAdmin
+      .from("attempts")
+      .insert([{
         student_id: student.id,
         class_label,
+        started_at: body.started_at || nowIso,
+        finished_at: body.finished_at || nowIso,
         score,
         total,
-        percent: percent,
+        percent,
         completed: true,
-        finished_at: nowIso,
-        started_at: nowIso,
-      };
-
-      const r2 = await tryInsert(rowB);
-      attempt = r2.data;
-      attemptErr = r2.error;
-    }
-
-    // Attempt C: some schemas use max_score/max_sc... — set max_score = total
-    if (attemptErr) {
-      const rowC = {
-        student_id: student.id,
-        class_label,
-        score,
-        total,
-        max_score: total,
-        percent: percent,
-        completed: true,
-        finished_at: nowIso,
-        started_at: nowIso,
-      };
-
-      const r3 = await tryInsert(rowC);
-      attempt = r3.data;
-      attemptErr = r3.error;
-    }
-
-    // Attempt D (minimal): just save the essentials (this should always work)
-    if (attemptErr) {
-      const rowD = {
-        student_id: student.id,
-        class_label,
-        score,
-        total,
-      };
-
-      const r4 = await tryInsert(rowD);
-      attempt = r4.data;
-      attemptErr = r4.error;
-    }
+      }])
+      .select("*")
+      .single();
 
     if (attemptErr) {
-      return res.status(500).json({
-        error: "Could not save attempt",
-        details: attemptErr.message,
+      return res.status(500).json({ error: "Could not save attempt", details: attemptErr.message });
+    }
+
+    // 3) Save per-question records (optional but recommended)
+    // Only do this if we actually received question + answer arrays.
+    if (questions.length && answers.length && questions.length === answers.length) {
+      const rows = questions.map((q, i) => {
+        const a = Number(q.a);
+        const b = Number(q.b);
+        const correct_answer = Number(q.correct);
+        const given_answer =
+          answers[i]?.givenAnswer === null || answers[i]?.givenAnswer === undefined || answers[i]?.givenAnswer === ""
+            ? null
+            : Number(answers[i]?.givenAnswer);
+
+        const is_correct = Boolean(answers[i]?.isCorrect);
+        const response_time_ms =
+          answers[i]?.responseTimeMs === null || answers[i]?.responseTimeMs === undefined
+            ? null
+            : Number(answers[i]?.responseTimeMs);
+
+        return {
+          attempt_id: attempt.id,
+          student_id: student.id,
+          question_index: i + 1,
+          a,
+          b,
+          table_num: b, // using "b" as the times-table number
+          correct_answer,
+          given_answer,
+          is_correct,
+          response_time_ms,
+        };
       });
+
+      const { error: qrErr } = await supabaseAdmin
+        .from("question_records")
+        .insert(rows);
+
+      if (qrErr) {
+        // We won't fail the whole request if question_records insert fails,
+        // but we WILL tell you in the response so you can see it.
+        return res.status(200).json({
+          ok: true,
+          student,
+          attempt,
+          warning: "Attempt saved but question_records failed",
+          details: qrErr.message,
+        });
+      }
     }
 
     return res.status(200).json({ ok: true, student, attempt });
