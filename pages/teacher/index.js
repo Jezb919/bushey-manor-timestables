@@ -10,7 +10,7 @@ export default function TeacherDashboard() {
   const [year, setYear] = useState(DEFAULT_YEAR);
   const [days, setDays] = useState(DEFAULT_DAYS);
 
-  const [selectedStudent, setSelectedStudent] = useState(null); // {id,name,class_label}
+  const [selectedStudent, setSelectedStudent] = useState(null); // { id, name, class_label }
   const [selectedTable, setSelectedTable] = useState(null);
 
   const [loading, setLoading] = useState(false);
@@ -37,6 +37,7 @@ export default function TeacherDashboard() {
       if (!res.ok || !json?.ok) {
         throw new Error(json?.error || "Failed to load overview");
       }
+
       setData(json);
     } catch (e) {
       setErr(String(e?.message || e));
@@ -45,7 +46,7 @@ export default function TeacherDashboard() {
     }
   };
 
-  // When scope changes, clear table selection
+  // Refresh on changes
   useEffect(() => {
     setSelectedTable(null);
     fetchOverview();
@@ -53,8 +54,13 @@ export default function TeacherDashboard() {
   }, [scope, classLabel, year, days, selectedStudent?.id]);
 
   const leaderboard = data?.leaderboard || [];
-  const tableHeat = data?.tableHeat || [];
-  const classTrend = data?.classTrend || [];
+  const tableBreakdown = data?.tableBreakdown || [];
+
+  const filteredLeaderboard = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return leaderboard;
+    return leaderboard.filter((r) => String(r.student || "").toLowerCase().includes(q));
+  }, [leaderboard, search]);
 
   const subtitle = useMemo(() => {
     if (scope === "school") return `Whole school • Last ${days} days`;
@@ -67,16 +73,34 @@ export default function TeacherDashboard() {
     return `Last ${days} days`;
   }, [scope, year, classLabel, days, selectedStudent]);
 
-  const selectedTile = useMemo(() => {
-    if (!selectedTable) return null;
-    return (tableHeat || []).find((t) => Number(t.table_num) === Number(selectedTable)) || null;
-  }, [selectedTable, tableHeat]);
+  const sortedByAccuracy = useMemo(() => {
+    // Only keep tables that have any attempts, so "strongest/weakest" is meaningful
+    const withData = (tableBreakdown || []).filter((t) => typeof t.accuracy === "number");
+    const asc = withData.slice().sort((a, b) => a.accuracy - b.accuracy);
+    const desc = withData.slice().sort((a, b) => b.accuracy - a.accuracy);
+    return { asc, desc };
+  }, [tableBreakdown]);
 
-  const filteredLeaderboard = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return leaderboard;
-    return leaderboard.filter((r) => String(r.student || "").toLowerCase().includes(q));
-  }, [leaderboard, search]);
+  const weakest = sortedByAccuracy.asc.slice(0, 5);
+  const strongest = sortedByAccuracy.desc.slice(0, 5);
+
+  const heatTiles = useMemo(() => {
+    // Ensure we always have 1..19 tiles
+    const map = new Map();
+    (tableBreakdown || []).forEach((t) => map.set(Number(t.table), t));
+    return Array.from({ length: 19 }).map((_, i) => {
+      const tableNum = i + 1;
+      const t = map.get(tableNum);
+      return (
+        t || {
+          table: tableNum,
+          total: 0,
+          correct: 0,
+          accuracy: null,
+        }
+      );
+    });
+  }, [tableBreakdown]);
 
   const selectStudentAndDrill = (row) => {
     if (!row?.student_id) return;
@@ -115,10 +139,7 @@ export default function TeacherDashboard() {
           <Tab
             label="Student"
             active={scope === "student"}
-            onClick={() => {
-              // Only allow if selectedStudent exists; otherwise keep current scope
-              if (selectedStudent?.id) setScope("student");
-            }}
+            onClick={() => selectedStudent?.id && setScope("student")}
             disabled={!selectedStudent?.id}
           />
         </div>
@@ -188,19 +209,18 @@ export default function TeacherDashboard() {
           </div>
         ) : null}
 
-        {/* Layout */}
+        {/* Main grid */}
         <div style={grid}>
-          {/* Leaderboard */}
+          {/* Left: Leaderboard */}
           <div style={panel}>
             <div style={panelTitle}>Leaderboard</div>
             <div style={panelHint}>
-              Click a pupil row to drill into <strong>Student</strong> heatmap.
+              Click a pupil row to drill into <strong>Student</strong> view.
             </div>
 
             <div style={table}>
               <div style={{ ...row, ...rowHead }}>
                 <div>Student</div>
-                <div>Latest</div>
                 <div>Score</div>
                 <div>%</div>
                 <div>Attempts</div>
@@ -208,15 +228,11 @@ export default function TeacherDashboard() {
 
               {filteredLeaderboard.map((r) => {
                 const pct = typeof r.percent === "number" ? r.percent : null;
-
                 return (
                   <button
                     key={`${r.student_id}-${r.student}`}
                     onClick={() => selectStudentAndDrill(r)}
-                    style={{
-                      ...rowBtn,
-                      ...(r.student_id ? {} : { cursor: "default" }),
-                    }}
+                    style={rowBtn}
                     disabled={!r.student_id}
                     title={r.student_id ? "Click to view this pupil" : ""}
                   >
@@ -227,110 +243,162 @@ export default function TeacherDashboard() {
                       </div>
                     </div>
 
-                    <div style={cellMono}>{r.latest_at ? formatDateTime(r.latest_at) : "—"}</div>
-
                     <div style={cellMono}>
-                      {typeof r.score === "number" && typeof r.total === "number" ? `${r.score}/${r.total}` : "—"}
+                      {typeof r.score === "number" && typeof r.total === "number"
+                        ? `${r.score}/${r.total}`
+                        : "—"}
                     </div>
 
                     <div>{pct === null ? "—" : <span style={pill(pct)}>{pct}%</span>}</div>
 
-                    <div style={cellMono}>{r.attempts_in_range ?? 0}</div>
+                    <div style={cellMono}>{r.attempts ?? 0}</div>
                   </button>
                 );
               })}
             </div>
 
             {scope === "student" && selectedStudent?.id && (
-              <div style={{ marginTop: 12 }}>
-                <button
-                  style={secondaryBtn}
-                  onClick={() => {
-                    // return to class view by default
-                    setScope("class");
-                  }}
-                >
-                  ← Back to Class view
+              <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button style={secondaryBtn} onClick={() => setScope("class")}>
+                  ← Back to Class
+                </button>
+                <button style={secondaryBtn} onClick={() => setScope("year")}>
+                  View Year
+                </button>
+                <button style={secondaryBtn} onClick={() => setScope("school")}>
+                  View School
                 </button>
               </div>
             )}
           </div>
 
-          {/* Heatmap + Trend */}
+          {/* Right: Heatmap + Breakdown */}
           <div style={rightCol}>
             <div style={panel}>
               <div style={panelTitle}>Heatmap (Tables 1–19)</div>
-              <div style={panelHint}>Click a table to highlight.</div>
+              <div style={panelHint}>Click a tile to highlight.</div>
 
-              <HeatGrid
-                tiles={tableHeat}
-                selectedTable={selectedTable}
-                onSelectTable={(n) => setSelectedTable((prev) => (prev === n ? null : n))}
-              />
+              <div style={heatWrap}>
+                {heatTiles.map((t) => {
+                  const acc = typeof t.accuracy === "number" ? t.accuracy : null;
+                  const active = selectedTable === t.table;
 
-              {selectedTile && (
+                  return (
+                    <button
+                      key={t.table}
+                      onClick={() => setSelectedTable((p) => (p === t.table ? null : t.table))}
+                      style={{
+                        ...heatTile,
+                        background: heatColour(acc),
+                        ...(active ? { outline: "3px solid rgba(59,130,246,0.75)" } : {}),
+                      }}
+                    >
+                      <div style={heatTop}>
+                        <div style={heatLabel}>TABLE</div>
+                        <div style={heatNum}>{t.table}</div>
+                      </div>
+
+                      <div style={heatStats}>
+                        <div style={heatSmall}>
+                          <span style={heatKey}>Correct</span>
+                          <span style={heatVal}>
+                            {t.correct}/{t.total}
+                          </span>
+                        </div>
+
+                        <div style={heatSmall}>
+                          <span style={heatKey}>Accuracy</span>
+                          <span style={heatVal}>{acc === null ? "—" : `${acc}%`}</span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Highlight panel */}
+              {selectedTable && (
                 <div style={detailCard}>
-                  <div style={{ fontWeight: 900, fontSize: 16 }}>
-                    Table {selectedTile.table_num} breakdown
-                  </div>
-                  <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <span style={detailPill}>
-                      Total: <strong>{selectedTile.total}</strong>
-                    </span>
-                    <span style={detailPill}>
-                      Correct: <strong>{selectedTile.correct}</strong>
-                    </span>
-                    <span style={detailPill}>
-                      Accuracy:{" "}
-                      <strong>
-                        {selectedTile.accuracy === null ? "—" : `${selectedTile.accuracy}%`}
-                      </strong>
-                    </span>
-                  </div>
+                  {(() => {
+                    const hit = heatTiles.find((x) => x.table === selectedTable);
+                    if (!hit) return null;
+                    return (
+                      <>
+                        <div style={{ fontWeight: 900, fontSize: 16 }}>
+                          Table {selectedTable} details
+                        </div>
+                        <div style={{ marginTop: 8, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          <span style={detailPill}>
+                            Total: <strong>{hit.total}</strong>
+                          </span>
+                          <span style={detailPill}>
+                            Correct: <strong>{hit.correct}</strong>
+                          </span>
+                          <span style={detailPill}>
+                            Accuracy: <strong>{hit.accuracy === null ? "—" : `${hit.accuracy}%`}</strong>
+                          </span>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
+
+              {/* Strong/weak panels */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14 }}>
+                <div style={miniPanel}>
+                  <div style={miniTitle}>Weakest tables</div>
+                  {weakest.length ? (
+                    weakest.map((t) => (
+                      <div key={`w-${t.table}`} style={miniRow}>
+                        <span style={miniLeft}>×{t.table}</span>
+                        <span style={miniMid}>{t.accuracy}%</span>
+                        <span style={miniRight}>{t.correct}/{t.total}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={muted}>No data yet.</div>
+                  )}
+                </div>
+
+                <div style={miniPanel}>
+                  <div style={miniTitle}>Strongest tables</div>
+                  {strongest.length ? (
+                    strongest.map((t) => (
+                      <div key={`s-${t.table}`} style={miniRow}>
+                        <span style={miniLeft}>×{t.table}</span>
+                        <span style={miniMid}>{t.accuracy}%</span>
+                        <span style={miniRight}>{t.correct}/{t.total}</span>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={muted}>No data yet.</div>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div style={panel}>
-              <div style={panelTitle}>Trend</div>
-              <div style={panelHint}>Average % per day.</div>
-
-              {!classTrend.length ? (
-                <div style={muted}>No trend data yet.</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
-                  {classTrend
-                    .slice()
-                    .sort((a, b) => (a.day < b.day ? -1 : 1))
-                    .map((t) => (
-                      <div key={t.day} style={trendRow}>
-                        <div style={cellMono}>{t.day}</div>
-                        <div style={trendBarWrap}>
-                          <div
-                            style={{
-                              ...trendBar,
-                              width: `${Math.max(0, Math.min(100, t.avg_percent || 0))}%`,
-                            }}
-                          />
-                        </div>
-                        <div style={cellMono}>{t.avg_percent ?? "—"}%</div>
-                      </div>
-                    ))}
-                </div>
-              )}
+              <div style={panelTitle}>What this means</div>
+              <div style={panelHint}>
+                Use <strong>Weakest</strong> to target next practice, and <strong>Strongest</strong> to push speed/fluency.
+              </div>
+              <div style={{ marginTop: 10, color: "#cbd5e1", fontSize: 13, lineHeight: 1.5 }}>
+                Tip: Run the same settings weekly. Over time this becomes a really clear picture of progress for each pupil, class and year group.
+              </div>
             </div>
           </div>
         </div>
 
         <div style={{ marginTop: 14, color: "#64748b", fontSize: 12 }}>
-          Next step: we’ll add “per-student table breakdown” panels and then Year + School leaderboards.
+          Next: colour-coded achievement bands + progress-over-time charts + teacher test controls.
         </div>
       </div>
     </div>
   );
 }
 
-/* ---------------- Tabs ---------------- */
+/* ---------------- helpers ---------------- */
 
 function Tab({ label, active, onClick, disabled }) {
   return (
@@ -348,94 +416,12 @@ function Tab({ label, active, onClick, disabled }) {
   );
 }
 
-/* ---------------- Heatmap grid ---------------- */
-
-function HeatGrid({ tiles, selectedTable, onSelectTable }) {
-  const byNum = useMemo(() => {
-    const m = new Map();
-    (tiles || []).forEach((t) => m.set(Number(t.table_num), t));
-    return m;
-  }, [tiles]);
-
-  const all = Array.from({ length: 19 }).map((_, i) => {
-    const n = i + 1;
-    return (
-      byNum.get(n) || {
-        table_num: n,
-        total: 0,
-        correct: 0,
-        accuracy: null,
-      }
-    );
-  });
-
-  return (
-    <div style={heatWrap}>
-      {all.map((t) => {
-        const acc =
-          t.accuracy === null || typeof t.accuracy !== "number" ? null : t.accuracy;
-
-        const isActive = selectedTable === t.table_num;
-
-        return (
-          <button
-            key={t.table_num}
-            onClick={() => onSelectTable(t.table_num)}
-            style={{
-              ...heatTile,
-              background: heatColour(acc),
-              ...(isActive ? { outline: "3px solid rgba(59,130,246,0.75)" } : {}),
-            }}
-          >
-            <div style={heatTop}>
-              <div style={heatLabel}>TABLE</div>
-              <div style={heatNum}>{t.table_num}</div>
-            </div>
-
-            <div style={heatStats}>
-              <div style={heatSmall}>
-                <span style={heatKey}>Correct</span>
-                <span style={heatVal}>
-                  {t.correct}/{t.total}
-                </span>
-              </div>
-
-              <div style={heatSmall}>
-                <span style={heatKey}>Accuracy</span>
-                <span style={heatVal}>
-                  {acc === null ? "—" : `${Math.round(acc)}%`}
-                </span>
-              </div>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function heatColour(accuracy) {
   if (accuracy === null) return "rgba(15,23,42,0.55)";
   if (accuracy >= 95) return "rgba(34,197,94,0.25)";
   if (accuracy >= 80) return "rgba(250,204,21,0.24)";
   if (accuracy >= 60) return "rgba(249,115,22,0.22)";
   return "rgba(239,68,68,0.20)";
-}
-
-/* ---------------- helpers ---------------- */
-
-function formatDateTime(iso) {
-  try {
-    const d = new Date(iso);
-    const dd = String(d.getDate()).padStart(2, "0");
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mins = String(d.getMinutes()).padStart(2, "0");
-    return `${dd}/${mm}/${yyyy} ${hh}:${mins}`;
-  } catch {
-    return iso;
-  }
 }
 
 function pill(percent) {
@@ -500,12 +486,7 @@ const subTitle = { fontSize: 13, color: "#cbd5e1", marginTop: 6 };
 
 const homeLink = { color: "#93c5fd", textDecoration: "underline", fontWeight: 700 };
 
-const tabs = {
-  display: "flex",
-  gap: 10,
-  marginBottom: 14,
-  flexWrap: "wrap",
-};
+const tabs = { display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" };
 
 const tabBtn = {
   padding: "10px 14px",
@@ -525,10 +506,7 @@ const tabActive = {
   color: "#facc15",
 };
 
-const tabDisabled = {
-  opacity: 0.45,
-  cursor: "not-allowed",
-};
+const tabDisabled = { opacity: 0.45, cursor: "not-allowed" };
 
 const controls = {
   display: "grid",
@@ -600,7 +578,7 @@ const errorBox = {
   color: "#fecaca",
 };
 
-const grid = { display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 16 };
+const grid = { display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 16 };
 const rightCol = { display: "flex", flexDirection: "column", gap: 16 };
 
 const panel = {
@@ -615,16 +593,11 @@ const panelTitle = { fontSize: 18, fontWeight: 900, color: "#facc15" };
 const panelHint = { marginTop: 6, fontSize: 13, color: "#cbd5e1" };
 const muted = { marginTop: 10, color: "#94a3b8", fontSize: 13 };
 
-const table = {
-  marginTop: 12,
-  borderRadius: 14,
-  overflow: "hidden",
-  border: "1px solid rgba(148,163,184,0.15)",
-};
+const table = { marginTop: 12, borderRadius: 14, overflow: "hidden", border: "1px solid rgba(148,163,184,0.15)" };
 
 const row = {
   display: "grid",
-  gridTemplateColumns: "1.3fr 1fr 0.6fr 0.6fr 0.6fr",
+  gridTemplateColumns: "1.2fr 0.8fr 0.6fr 0.6fr",
   gap: 10,
   alignItems: "center",
   padding: "10px 12px",
@@ -647,6 +620,7 @@ const rowBtn = {
   borderTop: "1px solid rgba(148,163,184,0.08)",
   color: "white",
   cursor: "pointer",
+  textAlign: "left",
 };
 
 const cellMono = {
@@ -702,26 +676,27 @@ const detailPill = {
   fontSize: 13,
 };
 
-const trendRow = {
+const miniPanel = {
+  borderRadius: 16,
+  background: "rgba(2,6,23,0.55)",
+  border: "1px solid rgba(148,163,184,0.18)",
+  padding: 14,
+};
+
+const miniTitle = { fontWeight: 900, color: "#facc15", marginBottom: 10 };
+
+const miniRow = {
   display: "grid",
-  gridTemplateColumns: "1fr 2fr 0.6fr",
-  alignItems: "center",
+  gridTemplateColumns: "0.6fr 0.8fr 1fr",
   gap: 10,
-  padding: "10px 12px",
-  borderRadius: 14,
-  background: "rgba(2,6,23,0.35)",
+  padding: "8px 10px",
+  borderRadius: 12,
   border: "1px solid rgba(148,163,184,0.12)",
+  background: "rgba(2,6,23,0.35)",
+  marginBottom: 8,
+  alignItems: "center",
 };
 
-const trendBarWrap = {
-  height: 12,
-  borderRadius: 999,
-  background: "rgba(15,23,42,0.7)",
-  overflow: "hidden",
-};
-
-const trendBar = {
-  height: "100%",
-  borderRadius: 999,
-  background: "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
-};
+const miniLeft = { fontWeight: 900, color: "#e2e8f0" };
+const miniMid = { fontWeight: 900, color: "#facc15", textAlign: "center" };
+const miniRight = { fontWeight: 900, color: "#cbd5e1", textAlign: "right" };
