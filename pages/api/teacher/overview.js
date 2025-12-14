@@ -12,7 +12,7 @@ export default async function handler(req, res) {
     const {
       class_label,
       scope = "class", // class | year | school | student
-      year,            // e.g. 4 (we infer using class labels like M4/B4)
+      year,
       student_id,
       days = 30,
     } = req.query;
@@ -38,10 +38,7 @@ export default async function handler(req, res) {
       studentsQuery = studentsQuery.eq("id", student_id);
     }
 
-    // school scope = no filter (all students)
-
     const { data: students, error: studentsError } = await studentsQuery;
-
     if (studentsError) {
       return res.status(500).json({
         ok: false,
@@ -61,12 +58,10 @@ export default async function handler(req, res) {
     if (studentIds.length > 0) {
       attemptsQuery = attemptsQuery.in("student_id", studentIds);
     } else if (scope !== "school") {
-      // no students matched for class/year/student filters
       attemptsQuery = attemptsQuery.limit(0);
     }
 
     const { data: attempts, error: attemptsError } = await attemptsQuery;
-
     if (attemptsError) {
       return res.status(500).json({
         ok: false,
@@ -125,7 +120,6 @@ export default async function handler(req, res) {
     }
 
     const { data: records, error: qrError } = await qrQuery;
-
     if (qrError) {
       return res.status(500).json({
         ok: false,
@@ -146,9 +140,9 @@ export default async function handler(req, res) {
       const tableNum = r.table_num ?? r.table ?? r.multiplier ?? r.times_table;
       if (!tableNum || tableNum < 1 || tableNum > 19) continue;
 
-      const wasCorrect =
-        r.was_correct ??
+      const isCorrect =
         r.is_correct ??
+        r.was_correct ??
         r.correct ??
         r.wasCorrect ??
         r.isCorrect ??
@@ -156,13 +150,21 @@ export default async function handler(req, res) {
 
       const cell = tableHeat[Number(tableNum) - 1];
       cell.total += 1;
-      if (wasCorrect) cell.correct += 1;
+      if (isCorrect) cell.correct += 1;
     }
 
     for (const cell of tableHeat) {
       cell.accuracy =
         cell.total > 0 ? Math.round((cell.correct / cell.total) * 100) : null;
     }
+
+    // ✅ ADD: tableBreakdown (shape the teacher UI expects)
+    const tableBreakdown = tableHeat.map((t) => ({
+      table: t.table_num,
+      total: t.total,
+      correct: t.correct,
+      accuracy: t.accuracy,
+    }));
 
     return res.status(200).json({
       ok: true,
@@ -173,6 +175,7 @@ export default async function handler(req, res) {
       leaderboard,
       classTrend,
       tableHeat,
+      tableBreakdown, // ✅ NEW
     });
   } catch (err) {
     return res.status(500).json({
