@@ -1,16 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 
 const DEFAULT_CLASS = "M4";
+const DEFAULT_YEAR = 4;
 const DEFAULT_DAYS = 30;
 
 export default function TeacherDashboard() {
+  const [scope, setScope] = useState("class"); // school | year | class | student
   const [classLabel, setClassLabel] = useState(DEFAULT_CLASS);
+  const [year, setYear] = useState(DEFAULT_YEAR);
   const [days, setDays] = useState(DEFAULT_DAYS);
+
+  const [selectedStudent, setSelectedStudent] = useState(null); // {id,name,class_label}
+  const [selectedTable, setSelectedTable] = useState(null);
+
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [data, setData] = useState(null);
 
-  const [selectedTable, setSelectedTable] = useState(null);
   const [search, setSearch] = useState("");
 
   const fetchOverview = async () => {
@@ -18,9 +24,12 @@ export default function TeacherDashboard() {
     setErr("");
     try {
       const qs = new URLSearchParams();
-      qs.set("class_label", classLabel);
+      qs.set("scope", scope);
       qs.set("days", String(days));
-      qs.set("scope", "class");
+
+      if (scope === "class") qs.set("class_label", classLabel);
+      if (scope === "year") qs.set("year", String(year));
+      if (scope === "student" && selectedStudent?.id) qs.set("student_id", selectedStudent.id);
 
       const res = await fetch(`/api/teacher/overview?${qs.toString()}`);
       const json = await res.json();
@@ -36,14 +45,27 @@ export default function TeacherDashboard() {
     }
   };
 
+  // When scope changes, clear table selection
   useEffect(() => {
+    setSelectedTable(null);
     fetchOverview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classLabel, days]);
+  }, [scope, classLabel, year, days, selectedStudent?.id]);
 
   const leaderboard = data?.leaderboard || [];
   const tableHeat = data?.tableHeat || [];
   const classTrend = data?.classTrend || [];
+
+  const subtitle = useMemo(() => {
+    if (scope === "school") return `Whole school • Last ${days} days`;
+    if (scope === "year") return `Year ${year} • Last ${days} days`;
+    if (scope === "class") return `Class ${classLabel} • Last ${days} days`;
+    if (scope === "student") {
+      const s = selectedStudent;
+      return s ? `Pupil: ${s.name} (${s.class_label}) • Last ${days} days` : `Pupil • Last ${days} days`;
+    }
+    return `Last ${days} days`;
+  }, [scope, year, classLabel, days, selectedStudent]);
 
   const selectedTile = useMemo(() => {
     if (!selectedTable) return null;
@@ -53,10 +75,18 @@ export default function TeacherDashboard() {
   const filteredLeaderboard = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return leaderboard;
-    return leaderboard.filter((r) =>
-      String(r.student || "").toLowerCase().includes(q)
-    );
+    return leaderboard.filter((r) => String(r.student || "").toLowerCase().includes(q));
   }, [leaderboard, search]);
+
+  const selectStudentAndDrill = (row) => {
+    if (!row?.student_id) return;
+    setSelectedStudent({
+      id: row.student_id,
+      name: row.student || "Unknown",
+      class_label: row.class_label || "—",
+    });
+    setScope("student");
+  };
 
   return (
     <div style={page}>
@@ -70,50 +100,34 @@ export default function TeacherDashboard() {
             <div>
               <div style={kicker}>Teacher dashboard</div>
               <div style={title}>Times Tables Arena</div>
-              <div style={subTitle}>
-                Class {classLabel} • Last {days} days
-              </div>
+              <div style={subTitle}>{subtitle}</div>
             </div>
           </div>
 
-          <a href="/" style={homeLink}>
-            Home
-          </a>
+          <a href="/" style={homeLink}>Home</a>
+        </div>
+
+        {/* Scope Tabs */}
+        <div style={tabs}>
+          <Tab label="School" active={scope === "school"} onClick={() => setScope("school")} />
+          <Tab label="Year" active={scope === "year"} onClick={() => setScope("year")} />
+          <Tab label="Class" active={scope === "class"} onClick={() => setScope("class")} />
+          <Tab
+            label="Student"
+            active={scope === "student"}
+            onClick={() => {
+              // Only allow if selectedStudent exists; otherwise keep current scope
+              if (selectedStudent?.id) setScope("student");
+            }}
+            disabled={!selectedStudent?.id}
+          />
         </div>
 
         {/* Controls */}
         <div style={controls}>
           <div style={controlBlock}>
-            <div style={label}>Class</div>
-            <select
-              value={classLabel}
-              onChange={(e) => {
-                setClassLabel(e.target.value);
-                setSelectedTable(null);
-              }}
-              style={select}
-            >
-              <option value="M3">M3</option>
-              <option value="B3">B3</option>
-              <option value="M4">M4</option>
-              <option value="B4">B4</option>
-              <option value="M5">M5</option>
-              <option value="B5">B5</option>
-              <option value="M6">M6</option>
-              <option value="B6">B6</option>
-            </select>
-          </div>
-
-          <div style={controlBlock}>
             <div style={label}>Days</div>
-            <select
-              value={days}
-              onChange={(e) => {
-                setDays(Number(e.target.value));
-                setSelectedTable(null);
-              }}
-              style={select}
-            >
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))} style={select}>
               <option value={7}>7</option>
               <option value={14}>14</option>
               <option value={30}>30</option>
@@ -121,6 +135,34 @@ export default function TeacherDashboard() {
               <option value={90}>90</option>
             </select>
           </div>
+
+          {scope === "year" && (
+            <div style={controlBlock}>
+              <div style={label}>Year</div>
+              <select value={year} onChange={(e) => setYear(Number(e.target.value))} style={select}>
+                <option value={3}>3</option>
+                <option value={4}>4</option>
+                <option value={5}>5</option>
+                <option value={6}>6</option>
+              </select>
+            </div>
+          )}
+
+          {scope === "class" && (
+            <div style={controlBlock}>
+              <div style={label}>Class</div>
+              <select value={classLabel} onChange={(e) => setClassLabel(e.target.value)} style={select}>
+                <option value="M3">M3</option>
+                <option value="B3">B3</option>
+                <option value="M4">M4</option>
+                <option value="B4">B4</option>
+                <option value="M5">M5</option>
+                <option value="B5">B5</option>
+                <option value="M6">M6</option>
+                <option value="B6">B6</option>
+              </select>
+            </div>
+          )}
 
           <div style={controlBlockGrow}>
             <div style={label}>Search pupil</div>
@@ -151,7 +193,9 @@ export default function TeacherDashboard() {
           {/* Leaderboard */}
           <div style={panel}>
             <div style={panelTitle}>Leaderboard</div>
-            <div style={panelHint}>Latest result per pupil.</div>
+            <div style={panelHint}>
+              Click a pupil row to drill into <strong>Student</strong> heatmap.
+            </div>
 
             <div style={table}>
               <div style={{ ...row, ...rowHead }}>
@@ -164,41 +208,52 @@ export default function TeacherDashboard() {
 
               {filteredLeaderboard.map((r) => {
                 const pct = typeof r.percent === "number" ? r.percent : null;
+
                 return (
-                  <div
+                  <button
                     key={`${r.student_id}-${r.student}`}
+                    onClick={() => selectStudentAndDrill(r)}
                     style={{
-                      ...row,
-                      background: "rgba(2,6,23,0.25)",
-                      borderTop: "1px solid rgba(148,163,184,0.08)",
+                      ...rowBtn,
+                      ...(r.student_id ? {} : { cursor: "default" }),
                     }}
+                    disabled={!r.student_id}
+                    title={r.student_id ? "Click to view this pupil" : ""}
                   >
-                    <div style={{ fontWeight: 900 }}>
+                    <div style={{ fontWeight: 900, textAlign: "left" }}>
                       {r.student || "—"}
                       <div style={{ fontSize: 12, color: "#94a3b8", fontWeight: 700 }}>
                         {r.class_label || "—"}
                       </div>
                     </div>
 
-                    <div style={cellMono}>
-                      {r.latest_at ? formatDateTime(r.latest_at) : "—"}
-                    </div>
+                    <div style={cellMono}>{r.latest_at ? formatDateTime(r.latest_at) : "—"}</div>
 
                     <div style={cellMono}>
-                      {typeof r.score === "number" && typeof r.total === "number"
-                        ? `${r.score}/${r.total}`
-                        : "—"}
+                      {typeof r.score === "number" && typeof r.total === "number" ? `${r.score}/${r.total}` : "—"}
                     </div>
 
-                    <div>
-                      {pct === null ? "—" : <span style={pill(pct)}>{pct}%</span>}
-                    </div>
+                    <div>{pct === null ? "—" : <span style={pill(pct)}>{pct}%</span>}</div>
 
                     <div style={cellMono}>{r.attempts_in_range ?? 0}</div>
-                  </div>
+                  </button>
                 );
               })}
             </div>
+
+            {scope === "student" && selectedStudent?.id && (
+              <div style={{ marginTop: 12 }}>
+                <button
+                  style={secondaryBtn}
+                  onClick={() => {
+                    // return to class view by default
+                    setScope("class");
+                  }}
+                >
+                  ← Back to Class view
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Heatmap + Trend */}
@@ -268,10 +323,28 @@ export default function TeacherDashboard() {
         </div>
 
         <div style={{ marginTop: 14, color: "#64748b", fontSize: 12 }}>
-          Next step: make heatmap click show <strong>per-student</strong> breakdown and add <strong>year</strong> + <strong>whole school</strong> scope.
+          Next step: we’ll add “per-student table breakdown” panels and then Year + School leaderboards.
         </div>
       </div>
     </div>
+  );
+}
+
+/* ---------------- Tabs ---------------- */
+
+function Tab({ label, active, onClick, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...tabBtn,
+        ...(active ? tabActive : {}),
+        ...(disabled ? tabDisabled : {}),
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -399,7 +472,7 @@ const headerRow = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  marginBottom: 18,
+  marginBottom: 14,
 };
 
 const brand = { display: "flex", gap: 14, alignItems: "center" };
@@ -426,6 +499,36 @@ const title = { fontSize: 28, fontWeight: 900, color: "#facc15", lineHeight: 1.0
 const subTitle = { fontSize: 13, color: "#cbd5e1", marginTop: 6 };
 
 const homeLink = { color: "#93c5fd", textDecoration: "underline", fontWeight: 700 };
+
+const tabs = {
+  display: "flex",
+  gap: 10,
+  marginBottom: 14,
+  flexWrap: "wrap",
+};
+
+const tabBtn = {
+  padding: "10px 14px",
+  borderRadius: 999,
+  border: "1px solid rgba(148,163,184,0.25)",
+  background: "rgba(2,6,23,0.55)",
+  color: "white",
+  fontWeight: 900,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  cursor: "pointer",
+};
+
+const tabActive = {
+  border: "1px solid rgba(250,204,21,0.55)",
+  boxShadow: "0 0 0 3px rgba(250,204,21,0.12)",
+  color: "#facc15",
+};
+
+const tabDisabled = {
+  opacity: 0.45,
+  cursor: "not-allowed",
+};
 
 const controls = {
   display: "grid",
@@ -477,6 +580,17 @@ const primaryBtn = {
   cursor: "pointer",
 };
 
+const secondaryBtn = {
+  height: 40,
+  borderRadius: 999,
+  border: "1px solid rgba(148,163,184,0.25)",
+  background: "rgba(2,6,23,0.55)",
+  color: "#e2e8f0",
+  fontWeight: 900,
+  cursor: "pointer",
+  padding: "0 14px",
+};
+
 const errorBox = {
   padding: "10px 12px",
   borderRadius: 12,
@@ -523,6 +637,16 @@ const rowHead = {
   letterSpacing: "0.14em",
   textTransform: "uppercase",
   fontWeight: 900,
+};
+
+const rowBtn = {
+  ...row,
+  width: "100%",
+  border: "none",
+  background: "rgba(2,6,23,0.25)",
+  borderTop: "1px solid rgba(148,163,184,0.08)",
+  color: "white",
+  cursor: "pointer",
 };
 
 const cellMono = {
