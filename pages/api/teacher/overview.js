@@ -11,9 +11,9 @@ export default async function handler(req, res) {
   try {
     const {
       class_label,
-      days = 30,
-      scope = "class", // class | year | school | student
+      scope = "class", // class | student | school
       student_id,
+      days = 30,
     } = req.query;
 
     const since = new Date();
@@ -23,7 +23,7 @@ export default async function handler(req, res) {
 
     let studentsQuery = supabase
       .from("students")
-      .select("id, first_name, class_label, year_group");
+      .select("id, first_name, class_label");
 
     if (scope === "class" && class_label) {
       studentsQuery = studentsQuery.eq("class_label", class_label);
@@ -33,10 +33,14 @@ export default async function handler(req, res) {
       studentsQuery = studentsQuery.eq("id", student_id);
     }
 
-    const { data: students, error: studentErr } = await studentsQuery;
+    const { data: students, error: studentsError } = await studentsQuery;
 
-    if (studentErr) {
-      return res.status(500).json({ ok: false, error: studentErr.message });
+    if (studentsError) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load students",
+        details: studentsError.message,
+      });
     }
 
     const studentIds = students.map((s) => s.id);
@@ -50,26 +54,28 @@ export default async function handler(req, res) {
       )
       .gte("created_at", since.toISOString());
 
-    if (studentIds.length) {
+    if (studentIds.length > 0) {
       attemptsQuery = attemptsQuery.in("student_id", studentIds);
     }
 
-    const { data: attempts, error: attemptErr } = await attemptsQuery;
+    const { data: attempts, error: attemptsError } = await attemptsQuery;
 
-    if (attemptErr) {
-      return res.status(500).json({ ok: false, error: attemptErr.message });
+    if (attemptsError) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load attempts",
+        details: attemptsError.message,
+      });
     }
 
     /* ---------------- LEADERBOARD ---------------- */
 
     const leaderboard = students.map((s) => {
-      const studentAttempts = attempts.filter(
-        (a) => a.student_id === s.id
-      );
+      const studentAttempts = attempts
+        .filter((a) => a.student_id === s.id)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-      const latest = studentAttempts.sort(
-        (a, b) => new Date(b.created_at) - new Date(a.created_at)
-      )[0];
+      const latest = studentAttempts[0];
 
       return {
         student_id: s.id,
@@ -87,20 +93,22 @@ export default async function handler(req, res) {
     /* ---------------- CLASS TREND ---------------- */
 
     const trendMap = {};
+
     for (const a of attempts) {
+      if (typeof a.percent !== "number") continue;
       const day = a.created_at.slice(0, 10);
+
       if (!trendMap[day]) {
-        trendMap[day] = { totalPercent: 0, count: 0 };
+        trendMap[day] = { sum: 0, count: 0 };
       }
-      if (typeof a.percent === "number") {
-        trendMap[day].totalPercent += a.percent;
-        trendMap[day].count += 1;
-      }
+
+      trendMap[day].sum += a.percent;
+      trendMap[day].count += 1;
     }
 
     const classTrend = Object.entries(trendMap).map(([day, v]) => ({
       day,
-      avg_percent: v.count ? Math.round(v.totalPercent / v.count) : null,
+      avg_percent: Math.round(v.sum / v.count),
       attempts: v.count,
     }));
 
@@ -111,21 +119,21 @@ export default async function handler(req, res) {
       .select("*")
       .gte("created_at", since.toISOString());
 
-    if (studentIds.length) {
+    if (studentIds.length > 0) {
       qrQuery = qrQuery.in("student_id", studentIds);
     }
 
-    const { data: records, error: qrErr } = await qrQuery;
+    const { data: records, error: qrError } = await qrQuery;
 
-    if (qrErr) {
+    if (qrError) {
       return res.status(500).json({
         ok: false,
         error: "Failed to read question_records",
-        details: qrErr.message,
+        details: qrError.message,
       });
     }
 
-    /* ---------------- HEATMAP (1–19) ---------------- */
+    /* ---------------- HEATMAP (TABLES 1–19) ---------------- */
 
     const tableHeat = Array.from({ length: 19 }).map((_, i) => ({
       table_num: i + 1,
@@ -135,7 +143,9 @@ export default async function handler(req, res) {
     }));
 
     for (const r of records || []) {
-      const tableNum = r.table_num ?? r.table ?? r.multiplier;
+      const tableNum =
+        r.table_num ?? r.table ?? r.multiplier ?? r.times_table;
+
       if (!tableNum || tableNum < 1 || tableNum > 19) continue;
 
       const wasCorrect =
@@ -153,7 +163,9 @@ export default async function handler(req, res) {
 
     for (const cell of tableHeat) {
       cell.accuracy =
-        cell.total > 0 ? Math.round((cell.correct / cell.total) * 100) : null;
+        cell.total > 0
+          ? Math.round((cell.correct / cell.total) * 100)
+          : null;
     }
 
     /* ---------------- RESPONSE ---------------- */
