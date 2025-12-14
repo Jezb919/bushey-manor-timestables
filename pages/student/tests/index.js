@@ -1,119 +1,67 @@
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
 
-export default function StudentTestStart() {
+export default function TestStart() {
   const router = useRouter();
   const { name, class: className } = router.query;
 
-  const [studentName, setStudentName] = useState("");
-  const [studentClass, setStudentClass] = useState("");
+  const safeName = typeof name === "string" ? name.trim() : "";
+  const safeClass = typeof className === "string" ? className.trim() : "";
 
-  // When the query is ready, store a nice version of name/class
-  useEffect(() => {
-    if (!router.isReady) return;
-
-    if (typeof name === "string") {
-      setStudentName(decodeURIComponent(name));
-    }
-    if (typeof className === "string") {
-      setStudentClass(decodeURIComponent(className));
-    }
-  }, [router.isReady, name, className]);
-
-  const handleStart = () => {
-    // Go to the dynamic [table] route – we use "mixed" as the slug
+  const goToTest = () => {
+    // Send them to the REAL test page
     router.push(
-      `/student/tests/mixed?name=${encodeURIComponent(
-        studentName
-      )}&class=${encodeURIComponent(studentClass)}`
+      `/student/tests/mixed?name=${encodeURIComponent(safeName)}&class=${encodeURIComponent(
+        safeClass
+      )}`
     );
   };
-
-  // Simple loading state while query params are being read
-  if (!router.isReady) {
-    return (
-      <div style={outerStyle}>
-        <div style={cardStyle}>
-          <p style={{ fontSize: "1.2rem" }}>Loading…</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div style={outerStyle}>
       <div style={cardStyle}>
-        {/* Header / branding */}
         <Header />
 
-        <div style={{ marginTop: "1.75rem" }}>
-          <h1
-            style={{
-              fontSize: "2.1rem",
-              fontWeight: 800,
-              color: "#facc15",
-              marginBottom: "0.5rem",
-            }}
-          >
-            Maths Test
-          </h1>
+        <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
+          <h1 style={{ margin: 0, fontSize: "2.2rem" }}>Maths Test</h1>
 
-          <p style={{ color: "#e5e7eb", marginBottom: "0.5rem" }}>
+          <p style={{ color: "#d1d5db", marginTop: "0.75rem" }}>
             This test includes <strong>mixed times tables</strong>.
           </p>
 
-          {studentName && (
-            <p style={{ color: "#9ca3af", marginTop: "0.25rem" }}>
-              Pupil: <strong>{studentName}</strong>
-              {studentClass && (
-                <>
-                  {" "}
-                  – Class <strong>{studentClass}</strong>
-                </>
-              )}
-            </p>
+          {/* If they arrived without name/class, send them back */}
+          {(!safeName || !safeClass) && (
+            <div style={{ marginTop: "1rem" }}>
+              <p style={{ color: "#fca5a5", marginBottom: "0.75rem" }}>
+                Name and class missing — please go back and enter them.
+              </p>
+              <a href="/student" style={linkStyle}>
+                Go to Student Login
+              </a>
+            </div>
           )}
 
-          <ul
-            style={{
-              marginTop: "1rem",
-              color: "#d1d5db",
-              fontSize: "0.95rem",
-              paddingLeft: "1.2rem",
-            }}
-          >
-            <li>There are 25 questions.</li>
-            <li>You will see one question at a time.</li>
-            <li>You can press <strong>Enter</strong> instead of clicking.</li>
-          </ul>
+          <div style={{ marginTop: "1.75rem" }}>
+            <button
+              onClick={goToTest}
+              disabled={!safeName || !safeClass}
+              style={buttonStyle(!safeName || !safeClass)}
+            >
+              Start Test
+            </button>
+          </div>
 
-          <button
-            type="button"
-            onClick={handleStart}
-            style={{
-              marginTop: "1.75rem",
-              padding: "14px 34px",
-              fontSize: "1.1rem",
-              fontWeight: 700,
-              textTransform: "uppercase",
-              letterSpacing: "0.12em",
-              borderRadius: "999px",
-              border: "none",
-              cursor: "pointer",
-              background: "linear-gradient(135deg,#3b82f6,#60a5fa)",
-              color: "white",
-              boxShadow: "0 12px 30px rgba(37,99,235,0.6)",
-            }}
-          >
-            Start Test
-          </button>
+          <div style={{ marginTop: "1.25rem" }}>
+            <a href="/student" style={linkStyle}>
+              Back to Student Login
+            </a>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-/* ---------- Shared layout styles (match the test page) ---------- */
+/* ---------- styles ---------- */
 
 const outerStyle = {
   minHeight: "100vh",
@@ -124,71 +72,82 @@ const outerStyle = {
   justifyContent: "center",
   padding: "1.5rem",
   color: "white",
-};
-
-const cardStyle = {
-  background: "rgba(3,7,18,0.9)",
-  borderRadius: "22px",
-  padding: "2rem 2.5rem",
-  maxWidth: "700px",
-  width: "100%",
-  boxShadow: "0 25px 60px rgba(0,0,0,0.45)",
-  border: "1px solid rgba(148,163,184,0.3)",
   fontFamily:
     "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
 };
 
-/* ---------- Simple Header (same style family as test page) ---------- */
+const cardStyle = {
+  background: "rgba(3,7,18,0.95)",
+  borderRadius: "22px",
+  padding: "2rem 2.5rem",
+  maxWidth: "680px",
+  width: "100%",
+  boxShadow: "0 25px 60px rgba(0,0,0,0.55)",
+  border: "1px solid rgba(148,163,184,0.35)",
+};
+
+const buttonStyle = (disabled) => ({
+  padding: "14px 28px",
+  fontSize: "1.05rem",
+  fontWeight: 800,
+  borderRadius: "999px",
+  border: "none",
+  width: "240px",
+  cursor: disabled ? "not-allowed" : "pointer",
+  background: disabled
+    ? "#4b5563"
+    : "linear-gradient(135deg,#f59e0b,#facc15)",
+  color: disabled ? "#e5e7eb" : "#111827",
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+});
+
+const linkStyle = {
+  fontSize: "0.9rem",
+  color: "#9ca3af",
+  textDecoration: "underline",
+};
 
 function Header() {
   return (
-    <div>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "0.8rem",
+        justifyContent: "center",
+      }}
+    >
       <div
         style={{
+          width: "56px",
+          height: "56px",
+          borderRadius: "50%",
+          background: "white",
+          border: "3px solid #facc15",
           display: "flex",
-          justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: "1rem",
+          justifyContent: "center",
+          fontWeight: 900,
+          color: "#0f172a",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-          <div
-            style={{
-              width: "60px",
-              height: "60px",
-              borderRadius: "50%",
-              background: "white",
-              border: "3px solid #facc15",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {/* Placeholder logo initials */}
-            <span
-              style={{
-                fontWeight: 800,
-                fontSize: "1.3rem",
-                color: "#0f172a",
-              }}
-            >
-              BM
-            </span>
-          </div>
-          <div>
-            <div style={{ fontSize: "0.75rem", color: "#e5e7eb" }}>
-              Bushey Manor
-            </div>
-            <div
-              style={{
-                fontSize: "1.25rem",
-                fontWeight: "bold",
-                color: "#facc15",
-              }}
-            >
-              Times Tables Arena
-            </div>
-          </div>
+        BM
+      </div>
+
+      <div style={{ textAlign: "left" }}>
+        <div
+          style={{
+            fontSize: "0.75rem",
+            letterSpacing: "0.16em",
+            textTransform: "uppercase",
+            color: "#e5e7eb",
+          }}
+        >
+          Bushey Manor
+        </div>
+        <div style={{ fontSize: "1.3rem", fontWeight: 900, color: "#facc15" }}>
+          Times Tables Arena
         </div>
       </div>
     </div>
