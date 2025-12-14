@@ -1,3 +1,4 @@
+// pages/api/tests/submit.js
 import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -7,37 +8,47 @@ const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 
+function normaliseClassLabel(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+}
+
+function normaliseName(value) {
+  return String(value || "").trim();
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
 
   try {
     const body = req.body || {};
 
-    // From your student login page the query is name & class
-    const first_name = String(body.name || body.first_name || "").trim();
-    const class_name = String(
-      body.className || body.class || body.class_name || ""
-    ).trim();
+    const first_name = normaliseName(body.name || body.first_name);
+    const class_label = normaliseClassLabel(
+      body.className || body.class || body.class_label || body.class_name
+    );
 
     const score = Number.isFinite(Number(body.score)) ? Number(body.score) : 0;
     const total = Number.isFinite(Number(body.total)) ? Number(body.total) : 0;
 
-    // Optional extras (only saved if your attempts table has these columns)
-    const answers = body.answers ?? null;
-    const settings = body.settings ?? null;
-    const started_at = body.started_at ?? body.startedAt ?? null;
-    const finished_at = body.finished_at ?? body.finishedAt ?? null;
+    // Optional timing info from the browser (if you send it)
+    const started_at_input = body.started_at || body.startedAt || null;
+    const finished_at_input = body.finished_at || body.finishedAt || null;
+    const avg_response_time_ms_input =
+      body.avg_response_time_ms || body.avgResponseTimeMs || null;
 
-    if (!first_name || !class_name) {
+    if (!first_name || !class_label) {
       return res.status(400).json({ error: "Missing name or class" });
     }
 
-    // 1) Find student (by first_name + class_name)
+    // 1) Find student by first_name + class_label
     const { data: existingStudent, error: findErr } = await supabaseAdmin
       .from("students")
-      .select("id, student_id, first_name, class_name")
+      .select("id, first_name, class_label")
       .eq("first_name", first_name)
-      .eq("class_name", class_name)
+      .eq("class_label", class_label)
       .maybeSingle();
 
     if (findErr) {
@@ -53,8 +64,8 @@ export default async function handler(req, res) {
     if (!student) {
       const { data: createdStudent, error: createErr } = await supabaseAdmin
         .from("students")
-        .insert([{ first_name, class_name }])
-        .select("id, student_id, first_name, class_name")
+        .insert([{ first_name, class_label }])
+        .select("id, first_name, class_label")
         .single();
 
       if (createErr) {
@@ -67,60 +78,35 @@ export default async function handler(req, res) {
       student = createdStudent;
     }
 
-    // 3) Save attempt into YOUR table: attempts
-    // We try a few common column patterns because your schema may differ.
-    // We keep it minimal first: student_id + score + total.
-    const tryInsert = async (row) => {
-      const { data, error } = await supabaseAdmin
-        .from("attempts")
-        .insert([row])
-        .select("*")
-        .single();
-      return { data, error };
-    };
+    // 3) Build attempt row matching your attempts table columns
+    const nowIso = new Date().toISOString();
+    const started_at = started_at_input || nowIso;
+    const finished_at = finished_at_input || nowIso;
 
-    // Attempt A: attempts.student_id is UUID (students.id)
-    let attemptRow = {
-      student_id: student.id,
-      score,
-      total,
-      answers,
-      settings,
+    const percentage = total > 0 ? Math.round((score / total) * 1000) / 10 : 0; // 1dp
+    const completed = true;
+
+    const avg_response_time_ms = Number.isFinite(Number(avg_response_time_ms_input))
+      ? Number(avg_response_time_ms_input)
+      : null;
+
+    const attemptRow = {
+      student_id: student.id,        // UUID
+      class_label: class_label,      // text
       started_at,
       finished_at,
+      score,
+      total,
+      percentage,
+      avg_response_time_ms,
+      completed,
     };
 
-    let { data: attempt, error: attemptErr } = await tryInsert(attemptRow);
-
-    // Attempt B: attempts.student_id is INT (students.student_id)
-    if (attemptErr) {
-      attemptRow = {
-        student_id: student.student_id,
-        score,
-        total,
-        answers,
-        settings,
-        started_at,
-        finished_at,
-      };
-
-      const r2 = await tryInsert(attemptRow);
-      attempt = r2.data;
-      attemptErr = r2.error;
-    }
-
-    // Attempt C: table doesn’t have answers/settings/timestamps – try minimal
-    if (attemptErr) {
-      attemptRow = {
-        student_id: student.student_id ?? student.id,
-        score,
-        total,
-      };
-
-      const r3 = await tryInsert(attemptRow);
-      attempt = r3.data;
-      attemptErr = r3.error;
-    }
+    const { data: attempt, error: attemptErr } = await supabaseAdmin
+      .from("attempts")
+      .insert([attemptRow])
+      .select("*")
+      .single();
 
     if (attemptErr) {
       return res.status(500).json({
