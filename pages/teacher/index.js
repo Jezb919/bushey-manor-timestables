@@ -4,8 +4,7 @@ const DEFAULT_CLASS = "M4";
 const DEFAULT_DAYS = 30;
 
 export default function TeacherDashboard() {
-  // Scope: class | year | school
-  const [scope, setScope] = useState("class");
+  const [scope, setScope] = useState("class"); // class | year | school
   const [classLabel, setClassLabel] = useState(DEFAULT_CLASS);
   const [year, setYear] = useState(4);
   const [days, setDays] = useState(DEFAULT_DAYS);
@@ -13,29 +12,21 @@ export default function TeacherDashboard() {
   const [search, setSearch] = useState("");
   const [top10, setTop10] = useState(false);
 
-  // Drill down to student
+  // Student drilldown
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [selectedStudentName, setSelectedStudentName] = useState(null);
 
-  // Selected table tile (for breakdown)
+  // Heatmap click
   const [selectedTableNum, setSelectedTableNum] = useState(null);
 
-  // Overview data (leaderboard + trend)
+  // Data
   const [overview, setOverview] = useState(null);
-  const [loadingOverview, setLoadingOverview] = useState(false);
-  const [overviewErr, setOverviewErr] = useState(null);
-
-  // Heatmap data (tableHeat)
   const [heat, setHeat] = useState(null);
-  const [loadingHeat, setLoadingHeat] = useState(false);
-  const [heatErr, setHeatErr] = useState(null);
-
-  // Table breakdown data
   const [breakdown, setBreakdown] = useState(null);
-  const [loadingBreakdown, setLoadingBreakdown] = useState(false);
-  const [breakdownErr, setBreakdownErr] = useState(null);
 
-  // When a student is selected, we switch to student scope automatically
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
   const effectiveScope = selectedStudentId ? "student" : scope;
 
   const baseParams = useMemo(() => {
@@ -49,21 +40,20 @@ export default function TeacherDashboard() {
       p.set("class_label", classLabel);
     } else if (effectiveScope === "year") {
       p.set("year", String(year));
-    } else {
-      // school: no extra params
     }
+
     return p;
   }, [effectiveScope, days, selectedStudentId, classLabel, year]);
 
-  const overviewUrl = useMemo(() => {
-    const p = new URLSearchParams(baseParams.toString());
-    return `/api/teacher/overview?${p.toString()}`;
-  }, [baseParams]);
+  const overviewUrl = useMemo(
+    () => `/api/teacher/overview?${baseParams.toString()}`,
+    [baseParams]
+  );
 
-  const heatUrl = useMemo(() => {
-    const p = new URLSearchParams(baseParams.toString());
-    return `/api/teacher/heatmap?${p.toString()}`;
-  }, [baseParams]);
+  const heatUrl = useMemo(
+    () => `/api/teacher/heatmap?${baseParams.toString()}`,
+    [baseParams]
+  );
 
   const breakdownUrl = useMemo(() => {
     if (!selectedTableNum) return null;
@@ -72,97 +62,126 @@ export default function TeacherDashboard() {
     return `/api/teacher/table_breakdown?${p.toString()}`;
   }, [baseParams, selectedTableNum]);
 
-  const refreshOverviewAndHeat = async () => {
-    // Overview
-    setLoadingOverview(true);
-    setOverviewErr(null);
-    try {
-      const r = await fetch(overviewUrl);
-      const j = await r.json();
-      if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Overview failed");
-      setOverview(j);
-    } catch (e) {
-      setOverviewErr(e.message || String(e));
-      setOverview(null);
-    } finally {
-      setLoadingOverview(false);
-    }
+  const refreshAll = async () => {
+    setLoading(true);
+    setErr(null);
 
-    // Heatmap
-    setLoadingHeat(true);
-    setHeatErr(null);
     try {
-      const r = await fetch(heatUrl);
-      const j = await r.json();
-      if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Heatmap failed");
-      setHeat(j);
+      const [oRes, hRes] = await Promise.all([fetch(overviewUrl), fetch(heatUrl)]);
+      const oJson = await oRes.json();
+      const hJson = await hRes.json();
+
+      if (!oRes.ok || !oJson.ok) throw new Error(oJson?.details || oJson?.error || "Overview failed");
+      if (!hRes.ok || !hJson.ok) throw new Error(hJson?.details || hJson?.error || "Heatmap failed");
+
+      setOverview(oJson);
+      setHeat(hJson);
     } catch (e) {
-      setHeatErr(e.message || String(e));
+      setErr(e.message || String(e));
+      setOverview(null);
       setHeat(null);
     } finally {
-      setLoadingHeat(false);
+      setLoading(false);
     }
   };
 
   const refreshBreakdown = async () => {
     if (!breakdownUrl) {
       setBreakdown(null);
-      setBreakdownErr(null);
       return;
     }
-    setLoadingBreakdown(true);
-    setBreakdownErr(null);
     try {
       const r = await fetch(breakdownUrl);
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Breakdown failed");
       setBreakdown(j);
     } catch (e) {
-      setBreakdownErr(e.message || String(e));
       setBreakdown(null);
-    } finally {
-      setLoadingBreakdown(false);
     }
   };
 
-  // Refresh overview + heat on URL changes
   useEffect(() => {
-    refreshOverviewAndHeat();
+    refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overviewUrl, heatUrl]);
 
-  // Refresh breakdown when selected table or scope changes
   useEffect(() => {
     refreshBreakdown();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [breakdownUrl]);
 
-  // Clear breakdown when changing scope/student
   useEffect(() => {
     setSelectedTableNum(null);
     setBreakdown(null);
-    setBreakdownErr(null);
   }, [effectiveScope, classLabel, year, days, selectedStudentId]);
 
-  const pageTitle = useMemo(() => {
-    if (selectedStudentId && selectedStudentName) return `Student: ${selectedStudentName}`;
-    if (scope === "class") return `Class: ${classLabel}`;
-    if (scope === "year") return `Year: ${year}`;
-    return "Whole School";
-  }, [selectedStudentId, selectedStudentName, scope, classLabel, year]);
-
   const rowsAll = overview?.leaderboard || [];
+  const trend = overview?.classTrend || [];
+  const tableHeat = heat?.tableHeat || [];
+  const breakdownRows = breakdown?.breakdown || [];
 
-  // Filter + sort for main table
+  // ---------- CLASS LEADERBOARD BANDS ----------
+  // Works for ANY total (10–60). Uses % but labels match your 25-question example.
+  const bandFromScore = (score, total) => {
+    if (typeof score !== "number" || typeof total !== "number" || total <= 0) {
+      return { label: "—", colour: "#94a3b8", bg: "rgba(148,163,184,0.08)", border: "rgba(148,163,184,0.22)" };
+    }
+
+    if (score === total) {
+      return { label: "FULL MARKS", colour: "#22c55e", bg: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.45)" };
+    }
+
+    const pct = (score / total) * 100;
+
+    // Map your 25-Q bands to percentage ranges
+    if (pct >= 80) return { label: "20–24", colour: "#60a5fa", bg: "rgba(59,130,246,0.14)", border: "rgba(59,130,246,0.38)" };
+    if (pct >= 60) return { label: "15–19", colour: "#facc15", bg: "rgba(250,204,21,0.12)", border: "rgba(250,204,21,0.36)" };
+    if (pct >= 40) return { label: "10–14", colour: "#fb923c", bg: "rgba(249,115,22,0.12)", border: "rgba(249,115,22,0.36)" };
+    return { label: "<10", colour: "#ef4444", bg: "rgba(239,68,68,0.12)", border: "rgba(239,68,68,0.36)" };
+  };
+
+  // Band counts (for a “band summary” box)
+  const bandCounts = useMemo(() => {
+    const counts = {
+      FULL: 0,
+      B20: 0,
+      B15: 0,
+      B10: 0,
+      LOW: 0,
+      NONE: 0,
+    };
+
+    for (const r of rowsAll) {
+      const score = r.score;
+      const total = r.total;
+
+      if (typeof score !== "number" || typeof total !== "number" || total <= 0) {
+        counts.NONE += 1;
+        continue;
+      }
+
+      if (score === total) counts.FULL += 1;
+      else {
+        const pct = (score / total) * 100;
+        if (pct >= 80) counts.B20 += 1;
+        else if (pct >= 60) counts.B15 += 1;
+        else if (pct >= 40) counts.B10 += 1;
+        else counts.LOW += 1;
+      }
+    }
+
+    return counts;
+  }, [rowsAll]);
+
+  // Search/top10 filter
   const leaderboard = useMemo(() => {
-    const rows = rowsAll.slice();
     const q = search.trim().toLowerCase();
+    let list = q
+      ? rowsAll.filter((r) => String(r.student || "").toLowerCase().includes(q))
+      : rowsAll.slice();
 
-    let filtered = q
-      ? rows.filter((r) => String(r.student || "").toLowerCase().includes(q))
-      : rows;
-
-    filtered.sort((a, b) => {
+    // Sort by percent desc, then score desc
+    list.sort((a, b) => {
       const ap = typeof a.percent === "number" ? a.percent : -1;
       const bp = typeof b.percent === "number" ? b.percent : -1;
       if (bp !== ap) return bp - ap;
@@ -172,59 +191,19 @@ export default function TeacherDashboard() {
       return bs - as;
     });
 
-    if (top10 && filtered.length) {
-      const n = Math.max(1, Math.ceil(filtered.length * 0.1));
-      filtered = filtered.slice(0, n);
+    if (top10 && list.length) {
+      const n = Math.max(1, Math.ceil(list.length * 0.1));
+      list = list.slice(0, n);
     }
-    return filtered;
+    return list;
   }, [rowsAll, search, top10]);
 
-  // Podium = top 3 by percent (ignoring nulls)
-  const podium = useMemo(() => {
-    const has = rowsAll
-      .filter((r) => typeof r.percent === "number")
-      .sort((a, b) => (b.percent || 0) - (a.percent || 0));
-    return {
-      first: has[0] || null,
-      second: has[1] || null,
-      third: has[2] || null,
-    };
-  }, [rowsAll]);
-
-  // Most improved (uses delta_percent if your overview provides it; else uses a fallback)
-  const mostImproved = useMemo(() => {
-    // If your API has delta_percent per student: use it (best).
-    const withDelta = rowsAll
-      .filter((r) => typeof r.delta_percent === "number" && r.attempts_in_range >= 2)
-      .sort((a, b) => (b.delta_percent || 0) - (a.delta_percent || 0));
-
-    if (withDelta.length > 0) return withDelta.slice(0, 10);
-
-    // Fallback: if no delta_percent yet, show “most attempts” (still useful)
-    const fallback = rowsAll
-      .slice()
-      .sort((a, b) => (b.attempts_in_range || 0) - (a.attempts_in_range || 0));
-    return fallback.slice(0, 10);
-  }, [rowsAll]);
-
-  const trend = overview?.classTrend || [];
-  const tableHeat = heat?.tableHeat || [];
-  const breakdownRows = breakdown?.breakdown || [];
-
-  // ---------- SCORE BAND LOGIC ----------
-  const scoreBand = (score, total) => {
-    if (typeof score !== "number" || typeof total !== "number" || total <= 0) {
-      return { tag: "—", bg: "rgba(148,163,184,0.10)", border: "rgba(148,163,184,0.22)", colour: "#94a3b8" };
-    }
-    if (score === total) {
-      return { tag: "FULL MARKS", bg: "rgba(34,197,94,0.18)", border: "rgba(34,197,94,0.45)", colour: "#22c55e" };
-    }
-    const pct = (score / total) * 100;
-    if (pct >= 80) return { tag: "20–24", bg: "rgba(59,130,246,0.16)", border: "rgba(59,130,246,0.38)", colour: "#60a5fa" };
-    if (pct >= 60) return { tag: "15–19", bg: "rgba(250,204,21,0.14)", border: "rgba(250,204,21,0.38)", colour: "#facc15" };
-    if (pct >= 40) return { tag: "10–14", bg: "rgba(249,115,22,0.14)", border: "rgba(249,115,22,0.38)", colour: "#fb923c" };
-    return { tag: "<10", bg: "rgba(239,68,68,0.14)", border: "rgba(239,68,68,0.40)", colour: "#ef4444" };
-  };
+  const pageTitle = useMemo(() => {
+    if (selectedStudentId && selectedStudentName) return `Student: ${selectedStudentName}`;
+    if (scope === "class") return `Class: ${classLabel}`;
+    if (scope === "year") return `Year: ${year}`;
+    return "Whole School";
+  }, [selectedStudentId, selectedStudentName, scope, classLabel, year]);
 
   const heatColour = (acc) => {
     if (acc === null || typeof acc !== "number") return "rgba(148,163,184,0.10)";
@@ -330,7 +309,7 @@ export default function TeacherDashboard() {
             TOP 10%
           </button>
 
-          <button type="button" onClick={() => { setSelectedStudentId(null); setSelectedStudentName(null); refreshOverviewAndHeat(); }} style={primary}>
+          <button type="button" onClick={refreshAll} style={primary}>
             REFRESH
           </button>
         </div>
@@ -349,75 +328,29 @@ export default function TeacherDashboard() {
           </div>
         )}
 
-        {(overviewErr || heatErr || breakdownErr) && (
+        {err && (
           <div style={errorBox}>
-            <strong>Error:</strong> {overviewErr || heatErr || breakdownErr}
+            <strong>Error:</strong> {err}
           </div>
         )}
 
-        {/* NEW: PODIUM + MOST IMPROVED */}
-        <div style={topWidgets}>
-          <div style={widgetCard}>
-            <div style={widgetTitle}>Podium</div>
-            <div style={widgetSub}>Top 3 by latest %</div>
-
-            <div style={podiumRow}>
-              <PodiumCard place="2ND" colour="#60a5fa" row={podium.second} onClick={(r) => drill(r, setSelectedStudentId, setSelectedStudentName)} />
-              <PodiumCard place="1ST" colour="#facc15" row={podium.first} big onClick={(r) => drill(r, setSelectedStudentId, setSelectedStudentName)} />
-              <PodiumCard place="3RD" colour="#fb923c" row={podium.third} onClick={(r) => drill(r, setSelectedStudentId, setSelectedStudentName)} />
-            </div>
-          </div>
-
-          <div style={widgetCard}>
-            <div style={widgetTitle}>Most improved</div>
-            <div style={widgetSub}>
-              {mostImproved?.[0]?.delta_percent !== undefined
-                ? "Highest improvement over the selected range"
-                : "API doesn’t return improvement yet — showing most active instead"}
-            </div>
-
-            <div style={improveList}>
-              {(mostImproved || []).slice(0, 10).map((r) => {
-                const delta = typeof r.delta_percent === "number" ? r.delta_percent : null;
-                return (
-                  <button
-                    key={r.student_id}
-                    type="button"
-                    onClick={() => drill(r, setSelectedStudentId, setSelectedStudentName)}
-                    style={improveRowBtn}
-                    title="Click to drill into this student"
-                  >
-                    <div>
-                      <div style={{ fontWeight: 950, color: "#f8fafc" }}>{r.student || "—"}</div>
-                      <div style={{ fontSize: "0.85rem", color: "#94a3b8" }}>{r.class_label || "—"}</div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      {delta !== null ? (
-                        <div style={{ fontWeight: 1000, color: delta >= 0 ? "#22c55e" : "#ef4444" }}>
-                          {delta >= 0 ? `+${delta}%` : `${delta}%`}
-                        </div>
-                      ) : (
-                        <div style={{ fontWeight: 1000, color: "#60a5fa" }}>{r.attempts_in_range || 0} tests</div>
-                      )}
-                      <div style={{ fontSize: "0.85rem", color: "#cbd5e1" }}>
-                        Latest: {typeof r.percent === "number" ? `${r.percent}%` : "—"}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-              {(mostImproved || []).length === 0 && <div style={emptyBox}>No data yet.</div>}
-            </div>
-          </div>
+        {/* NEW: BAND SUMMARY */}
+        <div style={bandSummary}>
+          <BandChip colour="#22c55e" label="Full marks" value={bandCounts.FULL} />
+          <BandChip colour="#60a5fa" label="20–24 band" value={bandCounts.B20} />
+          <BandChip colour="#facc15" label="15–19 band" value={bandCounts.B15} />
+          <BandChip colour="#fb923c" label="10–14 band" value={bandCounts.B10} />
+          <BandChip colour="#ef4444" label="Below 10" value={bandCounts.LOW} />
+          <BandChip colour="#94a3b8" label="No data" value={bandCounts.NONE} />
         </div>
 
-        {/* Main grid */}
         <div style={grid}>
           {/* Leaderboard */}
           <div style={card}>
-            <div style={cardTitle}>Leaderboard</div>
+            <div style={cardTitle}>Class Leaderboard</div>
             <div style={cardSub}>
-              Colour bands are based on <strong>latest raw score</strong> (scaled correctly even if total questions changes).
+              Bands are <strong>percentage-based</strong> so they still work when total questions changes (10–60),
+              but the labels match your 25-question bands.
             </div>
 
             <div style={tableWrap}>
@@ -428,47 +361,63 @@ export default function TeacherDashboard() {
                     <th style={th}>LATEST</th>
                     <th style={th}>SCORE</th>
                     <th style={th}>BAND</th>
+                    <th style={th}>IMPROVEMENT</th>
                     <th style={th}>ATTEMPTS</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(loadingOverview || loadingHeat) && (
-                    <tr><td colSpan={5} style={tdMuted}>Loading…</td></tr>
+                  {loading && (
+                    <tr><td colSpan={6} style={tdMuted}>Loading…</td></tr>
                   )}
 
-                  {!loadingOverview && leaderboard.length === 0 && (
-                    <tr><td colSpan={5} style={tdMuted}>No students yet. Run a few tests first.</td></tr>
+                  {!loading && leaderboard.length === 0 && (
+                    <tr><td colSpan={6} style={tdMuted}>No students yet. Run some tests first.</td></tr>
                   )}
 
-                  {!loadingOverview &&
-                    leaderboard.map((r) => {
-                      const latest = r.latest_at ? formatDate(r.latest_at) : "—";
-                      const hasScore = typeof r.score === "number" && typeof r.total === "number";
-                      const scoreText = hasScore ? `${r.score}/${r.total}` : "—";
-                      const band = scoreBand(r.score, r.total);
+                  {!loading && leaderboard.map((r) => {
+                    const latest = r.latest_at ? formatDate(r.latest_at) : "—";
+                    const scoreText =
+                      typeof r.score === "number" && typeof r.total === "number"
+                        ? `${r.score}/${r.total}`
+                        : "—";
 
-                      return (
-                        <tr
-                          key={r.student_id}
-                          style={{ background: band.bg, cursor: "pointer" }}
-                          onClick={() => drill(r, setSelectedStudentId, setSelectedStudentName)}
-                          title="Click to drill down"
-                        >
-                          <td style={td}>
-                            <div style={{ fontWeight: 900, color: "#f8fafc" }}>{r.student || "—"}</div>
-                            <div style={{ fontSize: "0.85rem", color: "#94a3b8" }}>{r.class_label || "—"}</div>
-                          </td>
-                          <td style={td}>{latest}</td>
-                          <td style={td}>{scoreText}</td>
-                          <td style={td}>
-                            <span style={{ ...badge, borderColor: band.border, color: "#f8fafc" }}>
-                              <span style={{ color: band.colour, fontWeight: 1000 }}>{band.tag}</span>
+                    const band = bandFromScore(r.score, r.total);
+                    const delta = typeof r.delta_percent === "number" ? r.delta_percent : null;
+
+                    return (
+                      <tr
+                        key={r.student_id}
+                        style={{ background: band.bg, cursor: "pointer" }}
+                        onClick={() => {
+                          setSelectedStudentId(r.student_id);
+                          setSelectedStudentName(r.student || "Student");
+                        }}
+                        title="Click to drill down"
+                      >
+                        <td style={td}>
+                          <div style={{ fontWeight: 900, color: "#f8fafc" }}>{r.student || "—"}</div>
+                          <div style={{ fontSize: "0.85rem", color: "#94a3b8" }}>{r.class_label || "—"}</div>
+                        </td>
+                        <td style={td}>{latest}</td>
+                        <td style={td}>{scoreText}</td>
+                        <td style={td}>
+                          <span style={{ ...badge, borderColor: band.border }}>
+                            <span style={{ color: band.colour, fontWeight: 1000 }}>{band.label}</span>
+                          </span>
+                        </td>
+                        <td style={td}>
+                          {delta === null ? (
+                            <span style={{ color: "#94a3b8" }}>—</span>
+                          ) : (
+                            <span style={{ fontWeight: 900, color: delta >= 0 ? "#22c55e" : "#ef4444" }}>
+                              {delta >= 0 ? `+${delta}%` : `${delta}%`}
                             </span>
-                          </td>
-                          <td style={td}>{r.attempts_in_range ?? 0}</td>
-                        </tr>
-                      );
-                    })}
+                          )}
+                        </td>
+                        <td style={td}>{r.attempts_in_range ?? 0}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -476,18 +425,12 @@ export default function TeacherDashboard() {
 
           {/* Heatmap + breakdown */}
           <div style={card}>
-            <div style={cardTitle}>Times table heatmap (1–19)</div>
-            <div style={cardSub}>
-              Click a tile to see which pupils are weakest/strongest on that table.
-            </div>
+            <div style={cardTitle}>Times Table Heatmap (1–19)</div>
+            <div style={cardSub}>Click a tile for breakdown.</div>
 
-            {loadingHeat && <div style={emptyBox}>Loading heatmap…</div>}
-
-            {!loadingHeat && tableHeat.length === 0 && (
-              <div style={emptyBox}>No heatmap data yet. Run a few tests.</div>
-            )}
-
-            {!loadingHeat && tableHeat.length > 0 && (
+            {tableHeat.length === 0 ? (
+              <div style={emptyBox}>No heatmap data yet.</div>
+            ) : (
               <>
                 <div style={heatWrap}>
                   {tableHeat.map((cell) => {
@@ -495,7 +438,7 @@ export default function TeacherDashboard() {
                     const acc = cell.accuracy;
                     const total = cell.total || 0;
                     const correct = cell.correct || 0;
-                    const band = labelBand(acc);
+                    const b = labelBand(acc);
                     const selected = selectedTableNum === t;
 
                     return (
@@ -507,21 +450,17 @@ export default function TeacherDashboard() {
                           ...heatTile,
                           background: heatColour(acc),
                           border: selected ? "2px solid rgba(250,204,21,0.85)" : "1px solid rgba(148,163,184,0.18)",
-                          cursor: "pointer",
-                          textAlign: "left",
                         }}
-                        title={`Table ${t} — ${correct}/${total} correct`}
+                        title={`Table ${t}: ${correct}/${total}`}
                       >
                         <div style={heatTop}>
                           <div style={heatLabel}>TABLE</div>
                           <div style={heatNum}>{t}</div>
                         </div>
-
                         <div style={heatRow}>
-                          <div style={heatBadge(band.c)}>{band.t}</div>
+                          <div style={heatBadge(b.c)}>{b.t}</div>
                           <div style={heatPct}>{typeof acc === "number" ? `${acc}%` : "—"}</div>
                         </div>
-
                         <div style={heatMeta}>
                           <div style={heatLine}>
                             <span style={heatKey}>Correct</span>
@@ -538,14 +477,7 @@ export default function TeacherDashboard() {
                     <div>
                       <div style={breakKicker}>Table breakdown</div>
                       <div style={breakTitle}>{selectedTableNum ? `×${selectedTableNum}` : "Click a tile"}</div>
-                      {breakdown?.summary && selectedTableNum && (
-                        <div style={breakSummary}>
-                          Scope accuracy: <strong>{typeof breakdown.summary.accuracy === "number" ? `${breakdown.summary.accuracy}%` : "—"}</strong>{" "}
-                          ({breakdown.summary.correct}/{breakdown.summary.total})
-                        </div>
-                      )}
                     </div>
-
                     {selectedTableNum && (
                       <button type="button" onClick={() => setSelectedTableNum(null)} style={pill}>
                         Clear
@@ -553,21 +485,13 @@ export default function TeacherDashboard() {
                     )}
                   </div>
 
-                  {!selectedTableNum && (
-                    <div style={emptyBox}>Click a heatmap tile above to see pupil breakdown.</div>
+                  {!selectedTableNum && <div style={emptyBox}>Click a tile above to see breakdown.</div>}
+
+                  {selectedTableNum && breakdownRows.length === 0 && (
+                    <div style={emptyBox}>No breakdown data yet for ×{selectedTableNum}.</div>
                   )}
 
-                  {selectedTableNum && loadingBreakdown && (
-                    <div style={emptyBox}>Loading breakdown…</div>
-                  )}
-
-                  {selectedTableNum && !loadingBreakdown && breakdownRows.length === 0 && (
-                    <div style={emptyBox}>
-                      No question records for ×{selectedTableNum} in the last {days} days.
-                    </div>
-                  )}
-
-                  {selectedTableNum && !loadingBreakdown && breakdownRows.length > 0 && (
+                  {selectedTableNum && breakdownRows.length > 0 && (
                     <div style={breakTableWrap}>
                       <table style={{ ...table, minWidth: "620px" }}>
                         <thead>
@@ -582,18 +506,16 @@ export default function TeacherDashboard() {
                         <tbody>
                           {breakdownRows.map((r) => {
                             const acc = r.accuracy;
-                            const band = labelBand(acc);
+                            const b = labelBand(acc);
                             return (
                               <tr key={r.student_id} style={{ background: "rgba(148,163,184,0.06)" }}>
-                                <td style={td}>
-                                  <div style={{ fontWeight: 900, color: "#f8fafc" }}>{r.student || "—"}</div>
-                                </td>
+                                <td style={td}><strong>{r.student || "—"}</strong></td>
                                 <td style={td}>{r.class_label || "—"}</td>
                                 <td style={td}>{r.total ?? 0}</td>
                                 <td style={td}>{r.correct ?? 0}</td>
                                 <td style={td}>
                                   <span style={{ ...badge, borderColor: "rgba(148,163,184,0.25)" }}>
-                                    <span style={{ color: band.c, fontWeight: 1000 }}>{band.t}</span>
+                                    <span style={{ color: b.c, fontWeight: 1000 }}>{b.t}</span>
                                     <span style={{ marginLeft: 10, fontWeight: 1000 }}>
                                       {typeof acc === "number" ? `${acc}%` : "—"}
                                     </span>
@@ -620,7 +542,7 @@ export default function TeacherDashboard() {
               <div style={emptyBox}>No trend data yet.</div>
             ) : (
               <div style={trendStack}>
-                {trend.slice().sort((a, b) => (a.day > b.day ? 1 : -1)).map((t) => {
+                {trend.map((t) => {
                   const pct = typeof t.avg_percent === "number" ? t.avg_percent : 0;
                   return (
                     <div key={t.day} style={trendRow}>
@@ -641,31 +563,13 @@ export default function TeacherDashboard() {
   );
 }
 
-function drill(r, setSelectedStudentId, setSelectedStudentName) {
-  setSelectedStudentId(r.student_id);
-  setSelectedStudentName(r.student || "Student");
-}
-
-function PodiumCard({ place, colour, row, big, onClick }) {
-  const clickable = !!row?.student_id;
+function BandChip({ colour, label, value }) {
   return (
-    <button
-      type="button"
-      onClick={() => clickable && onClick(row)}
-      style={{
-        ...podiumCard,
-        transform: big ? "translateY(-8px)" : "none",
-        borderColor: `${colour}55`,
-        cursor: clickable ? "pointer" : "default",
-        opacity: row ? 1 : 0.55,
-      }}
-      title={clickable ? "Click to drill into student" : "No data yet"}
-    >
-      <div style={{ ...podiumPlace, color: colour }}>{place}</div>
-      <div style={podiumName}>{row?.student || "—"}</div>
-      <div style={podiumMeta}>{row?.class_label || "—"}</div>
-      <div style={{ ...podiumPct, color: colour }}>{typeof row?.percent === "number" ? `${row.percent}%` : "—"}</div>
-    </button>
+    <div style={{ ...chip, borderColor: `${colour}66` }}>
+      <div style={{ ...dot, background: colour }} />
+      <div style={{ color: "#e2e8f0", fontWeight: 900 }}>{label}</div>
+      <div style={{ marginLeft: "auto", fontWeight: 1000, color: "#f8fafc" }}>{value}</div>
+    </div>
   );
 }
 
@@ -688,7 +592,8 @@ function formatDate(iso) {
 
 const outer = {
   minHeight: "100vh",
-  background: "radial-gradient(circle at top, rgba(250,204,21,0.18) 0, #0b1220 40%, #050816 100%)",
+  background:
+    "radial-gradient(circle at top, rgba(250,204,21,0.18) 0, #0b1220 40%, #050816 100%)",
   padding: "1.5rem",
   color: "white",
   fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -715,7 +620,12 @@ const logoCircle = {
   justifyContent: "center",
 };
 
-const kicker = { fontSize: "0.8rem", letterSpacing: "0.22em", textTransform: "uppercase", color: "#cbd5e1" };
+const kicker = {
+  fontSize: "0.8rem",
+  letterSpacing: "0.22em",
+  textTransform: "uppercase",
+  color: "#cbd5e1",
+};
 const title = { fontSize: "1.65rem", fontWeight: 900, color: "#facc15", marginTop: "0.1rem" };
 const subtitle = { fontSize: "0.95rem", color: "#94a3b8", marginTop: "0.15rem" };
 const homeLink = { color: "#93c5fd", textDecoration: "underline", fontSize: "0.95rem", marginTop: "0.45rem" };
@@ -725,7 +635,7 @@ const controls = {
   gap: "0.75rem",
   flexWrap: "wrap",
   alignItems: "flex-end",
-  marginBottom: "1.25rem",
+  marginBottom: "1rem",
   padding: "1rem",
   borderRadius: "18px",
   background: "rgba(2,6,23,0.65)",
@@ -769,7 +679,7 @@ const pill = {
 const primary = { ...pill, background: "linear-gradient(135deg,#3b82f6,#60a5fa)", border: "none" };
 
 const banner = {
-  marginBottom: "1.25rem",
+  marginBottom: "1rem",
   padding: "0.9rem 1rem",
   borderRadius: "16px",
   background: "rgba(250,204,21,0.12)",
@@ -789,52 +699,24 @@ const errorBox = {
   color: "#fecaca",
 };
 
-const topWidgets = {
+const bandSummary = {
   display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: "1rem",
+  gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
+  gap: "0.7rem",
   marginBottom: "1rem",
 };
 
-const widgetCard = {
-  background: "rgba(2,6,23,0.72)",
-  border: "1px solid rgba(148,163,184,0.18)",
-  borderRadius: "18px",
-  padding: "1.1rem",
-  boxShadow: "0 18px 40px rgba(0,0,0,0.35)",
-};
-
-const widgetTitle = { fontSize: "1.15rem", fontWeight: 950, color: "#facc15" };
-const widgetSub = { marginTop: "0.25rem", color: "#cbd5e1", fontSize: "0.92rem" };
-
-const podiumRow = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.75rem", marginTop: "0.9rem" };
-const podiumCard = {
-  borderRadius: "18px",
-  border: "1px solid rgba(148,163,184,0.18)",
-  padding: "0.9rem",
-  background: "rgba(15,23,42,0.45)",
-  textAlign: "center",
-};
-const podiumPlace = { fontWeight: 1000, letterSpacing: "0.18em", textTransform: "uppercase", fontSize: "0.8rem" };
-const podiumName = { marginTop: "0.45rem", fontWeight: 1000, color: "#f8fafc", fontSize: "1.05rem" };
-const podiumMeta = { marginTop: "0.15rem", color: "#94a3b8", fontSize: "0.9rem" };
-const podiumPct = { marginTop: "0.55rem", fontWeight: 1100, fontSize: "1.25rem" };
-
-const improveList = { marginTop: "0.9rem", display: "flex", flexDirection: "column", gap: "0.55rem" };
-const improveRowBtn = {
-  width: "100%",
+const chip = {
+  display: "flex",
+  alignItems: "center",
+  gap: "0.6rem",
+  padding: "0.75rem 0.85rem",
   borderRadius: "16px",
   border: "1px solid rgba(148,163,184,0.18)",
-  padding: "0.75rem 0.85rem",
-  background: "rgba(15,23,42,0.45)",
-  color: "white",
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: "1rem",
-  cursor: "pointer",
-  textAlign: "left",
+  background: "rgba(2,6,23,0.65)",
 };
+
+const dot = { width: "10px", height: "10px", borderRadius: "999px" };
 
 const grid = {
   display: "grid",
@@ -854,7 +736,7 @@ const cardTitle = { fontSize: "1.25rem", fontWeight: 900, color: "#facc15" };
 const cardSub = { marginTop: "0.35rem", color: "#cbd5e1", fontSize: "0.92rem", lineHeight: 1.35 };
 
 const tableWrap = { overflowX: "auto", marginTop: "0.9rem", borderRadius: "14px", border: "1px solid rgba(148,163,184,0.12)" };
-const table = { width: "100%", borderCollapse: "collapse", minWidth: "720px" };
+const table = { width: "100%", borderCollapse: "collapse", minWidth: "900px" };
 
 const th = {
   textAlign: "left",
@@ -912,7 +794,17 @@ const trendInner = {
 const trendPct = { fontWeight: 900, textAlign: "right", color: "#e2e8f0" };
 
 const heatWrap = { marginTop: "0.9rem", display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: "0.75rem" };
-const heatTile = { width: "100%", minHeight: "112px", borderRadius: "16px", padding: "0.75rem", display: "flex", flexDirection: "column", justifyContent: "space-between" };
+const heatTile = {
+  width: "100%",
+  minHeight: "112px",
+  borderRadius: "16px",
+  padding: "0.75rem",
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "space-between",
+  cursor: "pointer",
+  textAlign: "left",
+};
 const heatTop = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.5rem" };
 const heatLabel = { fontSize: "0.7rem", letterSpacing: "0.18em", textTransform: "uppercase", color: "#e2e8f0", opacity: 0.9 };
 const heatNum = { fontSize: "1.55rem", fontWeight: 1000, color: "#f8fafc" };
@@ -938,5 +830,4 @@ const breakPanel = { marginTop: "1rem", padding: "1rem", borderRadius: "16px", b
 const breakHeader = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" };
 const breakKicker = { fontSize: "0.8rem", letterSpacing: "0.16em", textTransform: "uppercase", color: "#94a3b8" };
 const breakTitle = { fontSize: "1.25rem", fontWeight: 1000, color: "#facc15" };
-const breakSummary = { marginTop: "0.25rem", color: "#cbd5e1", fontSize: "0.95rem" };
 const breakTableWrap = { marginTop: "0.9rem", overflowX: "auto", borderRadius: "14px", border: "1px solid rgba(148,163,184,0.12)" };
