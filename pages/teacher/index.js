@@ -1,72 +1,74 @@
 import { useEffect, useMemo, useState } from "react";
 
 /**
- * Teacher Dashboard (Tabbed)
- * White, cleaner UI
+ * Teacher Dashboard (Tabbed, white UI)
  *
- * Uses existing APIs:
- *  - /api/teacher/overview
- *  - /api/teacher/heatmap
- *  - /api/teacher/table_breakdown
+ * Works with your existing APIs:
+ *  - /api/teacher/overview?scope=class&class_label=M4&days=30
+ *  - /api/teacher/heatmap?scope=class&class_label=M4&days=30
+ *  - /api/teacher/table_breakdown?scope=class&class_label=M4&days=30&table_num=6
  *
- * Settings are saved to localStorage (browser)
- * Next step (after this): wire student test to read these settings.
+ * Includes a Settings tab (B) that stores settings in localStorage (teacher browser).
+ * Next step: we wire mixed.js to read these settings automatically.
  */
 
 const DEFAULT_CLASS = "M4";
 const DEFAULT_DAYS = 30;
 
-const SETTINGS_KEY = "bmtt_settings_v1";
+const SETTINGS_KEY = "bmtt_teacher_settings_v2";
+
 const defaultSettings = {
   questionCount: 25, // 10–60
-  questionSeconds: 6, // 3–6
+  secondsPerQuestion: 6, // 3–6
+  tablesIncluded: Array.from({ length: 19 }, (_, i) => i + 1), // 1–19
 };
 
 export default function TeacherDashboard() {
-  // Tabs
-  const [tab, setTab] = useState("leaderboard"); // leaderboard | improved | heatmap | trend | settings
+  const [tab, setTab] = useState("overview"); // overview | leaderboard | improved | heatmap | settings
 
-  // Scope filters
+  // Scope filters (these affect the data you view)
   const [scope, setScope] = useState("class"); // class | year | school
   const [classLabel, setClassLabel] = useState(DEFAULT_CLASS);
   const [year, setYear] = useState(4);
   const [days, setDays] = useState(DEFAULT_DAYS);
 
-  // Search + top10 toggle (for leaderboard)
+  // Search
   const [search, setSearch] = useState("");
-  const [top10, setTop10] = useState(false);
-
-  // Heatmap breakdown selection
-  const [selectedTableNum, setSelectedTableNum] = useState(null);
-  const [breakdown, setBreakdown] = useState(null);
 
   // Data
   const [overview, setOverview] = useState(null);
   const [heat, setHeat] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState(null);
+  const [errorText, setErrorText] = useState("");
 
-  // Settings state (localStorage)
+  // Heatmap drilldown
+  const [selectedTableNum, setSelectedTableNum] = useState(null);
+  const [tableBreakdown, setTableBreakdown] = useState(null);
+  const [breakdownLoading, setBreakdownLoading] = useState(false);
+
+  // Settings (B)
   const [settings, setSettings] = useState(defaultSettings);
-  const [settingsSavedMsg, setSettingsSavedMsg] = useState("");
+  const [savedMsg, setSavedMsg] = useState("");
 
-  // Load settings once
+  // Load settings (teacher browser)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        setSettings({
-          questionCount:
-            typeof parsed.questionCount === "number"
-              ? clamp(parsed.questionCount, 10, 60)
-              : defaultSettings.questionCount,
-          questionSeconds:
-            typeof parsed.questionSeconds === "number"
-              ? clamp(parsed.questionSeconds, 3, 6)
-              : defaultSettings.questionSeconds,
-        });
-      }
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+
+      const safe = {
+        questionCount: clampNumber(parsed.questionCount, 10, 60, 25),
+        secondsPerQuestion: clampNumber(parsed.secondsPerQuestion, 3, 6, 6),
+        tablesIncluded: Array.isArray(parsed.tablesIncluded)
+          ? parsed.tablesIncluded
+              .map((n) => Number(n))
+              .filter((n) => Number.isInteger(n) && n >= 1 && n <= 19)
+          : defaultSettings.tablesIncluded,
+      };
+
+      if (!safe.tablesIncluded.length) safe.tablesIncluded = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+      setSettings(safe);
     } catch {
       // ignore
     }
@@ -74,16 +76,25 @@ export default function TeacherDashboard() {
 
   const saveSettings = () => {
     const safe = {
-      questionCount: clamp(Number(settings.questionCount || 25), 10, 60),
-      questionSeconds: clamp(Number(settings.questionSeconds || 6), 3, 6),
+      questionCount: clampNumber(settings.questionCount, 10, 60, 25),
+      secondsPerQuestion: clampNumber(settings.secondsPerQuestion, 3, 6, 6),
+      tablesIncluded: (settings.tablesIncluded || [])
+        .map((n) => Number(n))
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 19),
     };
-    setSettings(safe);
+
+    if (!safe.tablesIncluded.length) {
+      alert("Please select at least 1 times table (1–19).");
+      return;
+    }
+
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(safe));
-    setSettingsSavedMsg("Saved ✅");
-    setTimeout(() => setSettingsSavedMsg(""), 1500);
+    setSettings(safe);
+    setSavedMsg("Saved ✅");
+    setTimeout(() => setSavedMsg(""), 1400);
   };
 
-  // Build query params for APIs
+  // Query params for API
   const baseParams = useMemo(() => {
     const p = new URLSearchParams();
     p.set("scope", scope);
@@ -109,83 +120,85 @@ export default function TeacherDashboard() {
     return `/api/teacher/table_breakdown?${p.toString()}`;
   }, [baseParams, selectedTableNum]);
 
-  // Fetch overview+heatmap together
-  const refreshAll = async () => {
+  const refresh = async () => {
     setLoading(true);
-    setErr(null);
+    setErrorText("");
 
     try {
-      const [oRes, hRes] = await Promise.all([
-        fetch(overviewUrl),
-        fetch(heatUrl),
-      ]);
-
+      const [oRes, hRes] = await Promise.all([fetch(overviewUrl), fetch(heatUrl)]);
       const oJson = await oRes.json();
       const hJson = await hRes.json();
 
-      if (!oRes.ok || !oJson.ok) {
-        throw new Error(oJson?.details || oJson?.error || "Overview failed");
-      }
-      if (!hRes.ok || !hJson.ok) {
-        throw new Error(hJson?.details || hJson?.error || "Heatmap failed");
-      }
+      if (!oRes.ok || !oJson.ok) throw new Error(oJson?.details || oJson?.error || "Overview failed");
+      if (!hRes.ok || !hJson.ok) throw new Error(hJson?.details || hJson?.error || "Heatmap failed");
 
       setOverview(oJson);
       setHeat(hJson);
     } catch (e) {
-      setErr(e.message || String(e));
       setOverview(null);
       setHeat(null);
+      setErrorText(e?.message || String(e));
     } finally {
       setLoading(false);
     }
   };
 
-  // Refresh whenever scope filters change
+  // Load data when filters change
   useEffect(() => {
-    refreshAll();
+    refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overviewUrl, heatUrl]);
 
-  // Fetch breakdown when table tile is selected
+  // Load drilldown when a table tile is selected
   useEffect(() => {
     const run = async () => {
       if (!breakdownUrl) {
-        setBreakdown(null);
+        setTableBreakdown(null);
         return;
       }
+      setBreakdownLoading(true);
       try {
         const r = await fetch(breakdownUrl);
         const j = await r.json();
-        if (!r.ok || !j.ok) throw new Error(j?.details || j?.error);
-        setBreakdown(j);
+        if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Breakdown failed");
+        setTableBreakdown(j);
       } catch {
-        setBreakdown(null);
+        setTableBreakdown(null);
+      } finally {
+        setBreakdownLoading(false);
       }
     };
     run();
   }, [breakdownUrl]);
 
-  // Clear breakdown when scope changes
+  // Clean drilldown when scope changes
   useEffect(() => {
     setSelectedTableNum(null);
-    setBreakdown(null);
+    setTableBreakdown(null);
   }, [scope, classLabel, year, days]);
 
-  // Derived data
-  const rowsAll = overview?.leaderboard || [];
-  const trend = overview?.classTrend || [];
-  const tableHeat = heat?.tableHeat || [];
-  const breakdownRows = breakdown?.breakdown || [];
+  const subtitle = useMemo(() => {
+    if (scope === "class") return `Viewing: Class ${classLabel} • last ${days} days`;
+    if (scope === "year") return `Viewing: Year ${year} • last ${days} days`;
+    return `Viewing: Whole school • last ${days} days`;
+  }, [scope, classLabel, year, days]);
 
-  const leaderboard = useMemo(() => {
+  // Derived lists
+  const leaderboardRows = overview?.leaderboard || [];
+  const improvedRows = useMemo(() => {
+    return (leaderboardRows || [])
+      .filter((r) => typeof r.delta_percent === "number")
+      .slice()
+      .sort((a, b) => b.delta_percent - a.delta_percent);
+  }, [leaderboardRows]);
+
+  const filteredLeaderboard = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let list = q
-      ? rowsAll.filter((r) =>
-          String(r.student || "").toLowerCase().includes(q)
-        )
-      : rowsAll.slice();
+    const list = q
+      ? leaderboardRows.filter((r) => String(r.student || "").toLowerCase().includes(q))
+      : leaderboardRows.slice();
 
+    // Sort by percent desc, then score desc
     list.sort((a, b) => {
       const ap = typeof a.percent === "number" ? a.percent : -1;
       const bp = typeof b.percent === "number" ? b.percent : -1;
@@ -195,54 +208,37 @@ export default function TeacherDashboard() {
       return bs - as;
     });
 
-    if (top10 && list.length) {
-      const n = Math.max(1, Math.ceil(list.length * 0.1));
-      list = list.slice(0, n);
-    }
     return list;
-  }, [rowsAll, search, top10]);
+  }, [leaderboardRows, search]);
 
-  // Most improved: uses delta_percent if present; otherwise blank
-  const mostImproved = useMemo(() => {
-    const list = rowsAll
-      .filter((r) => typeof r.delta_percent === "number")
-      .slice()
-      .sort((a, b) => b.delta_percent - a.delta_percent);
-
-    return list;
-  }, [rowsAll]);
-
-  const pageSubtitle = useMemo(() => {
-    if (scope === "class") return `Class ${classLabel} • last ${days} days`;
-    if (scope === "year") return `Year ${year} • last ${days} days`;
-    return `Whole school • last ${days} days`;
-  }, [scope, classLabel, year, days]);
+  const tableHeat = heat?.tableHeat || [];
+  const breakdownRows = tableBreakdown?.breakdown || [];
 
   return (
-    <div style={styles.page}>
+    <div style={S.page}>
       {/* Top header */}
-      <div style={styles.topBar}>
+      <div style={S.header}>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <div style={styles.logoCircle}>BM</div>
+          <div style={S.logo}>BM</div>
           <div>
-            <div style={styles.kicker}>Teacher Dashboard</div>
-            <div style={styles.title}>Times Tables Arena</div>
-            <div style={styles.subTitle}>{pageSubtitle}</div>
+            <div style={S.kicker}>Teacher Dashboard</div>
+            <div style={S.title}>Times Tables Arena</div>
+            <div style={S.subtitle}>{subtitle}</div>
           </div>
         </div>
 
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <a href="/" style={styles.link}>
+          <a href="/" style={S.link}>
             Home
           </a>
-          <button onClick={refreshAll} style={styles.primaryBtn} type="button">
+          <button type="button" onClick={refresh} style={S.primaryBtn}>
             Refresh
           </button>
         </div>
       </div>
 
       {/* Filters */}
-      <div style={styles.filterCard}>
+      <div style={S.filters}>
         <FilterSelect
           label="Scope"
           value={scope}
@@ -299,429 +295,289 @@ export default function TeacherDashboard() {
       </div>
 
       {/* Tabs */}
-      <div style={styles.tabs}>
-        <TabButton active={tab === "leaderboard"} onClick={() => setTab("leaderboard")}>
+      <div style={S.tabs}>
+        <Tab active={tab === "overview"} onClick={() => setTab("overview")}>
+          Overview
+        </Tab>
+        <Tab active={tab === "leaderboard"} onClick={() => setTab("leaderboard")}>
           Leaderboard
-        </TabButton>
-        <TabButton active={tab === "improved"} onClick={() => setTab("improved")}>
-          Most Improved
-        </TabButton>
-        <TabButton active={tab === "heatmap"} onClick={() => setTab("heatmap")}>
-          Times Table Heat Map
-        </TabButton>
-        <TabButton active={tab === "trend"} onClick={() => setTab("trend")}>
-          Trend
-        </TabButton>
-        <TabButton active={tab === "settings"} onClick={() => setTab("settings")}>
+        </Tab>
+        <Tab active={tab === "improved"} onClick={() => setTab("improved")}>
+          Most improved
+        </Tab>
+        <Tab active={tab === "heatmap"} onClick={() => setTab("heatmap")}>
+          Times table heat map
+        </Tab>
+        <Tab active={tab === "settings"} onClick={() => setTab("settings")}>
           Settings
-        </TabButton>
+        </Tab>
       </div>
 
-      {/* Errors */}
-      {err && (
-        <div style={styles.errorBox}>
-          <strong>Error:</strong> {err}
-        </div>
-      )}
+      {errorText && <div style={S.errorBox}><strong>Error:</strong> {errorText}</div>}
 
       {/* Content */}
-      {tab === "leaderboard" && (
-        <div style={styles.card}>
-          <div style={styles.cardHeader}>
-            <div>
-              <div style={styles.cardTitle}>Leaderboard</div>
-              <div style={styles.cardSub}>
-                Search students, use Top 10%, and see latest results.
-              </div>
-            </div>
+      <div style={S.card}>
+        {loading && <div style={S.muted}>Loading…</div>}
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        {!loading && tab === "overview" && (
+          <OverviewPanel overview={overview} />
+        )}
+
+        {!loading && tab === "leaderboard" && (
+          <div>
+            <div style={S.rowBetween}>
+              <div>
+                <div style={S.h2}>Leaderboard</div>
+                <div style={S.muted}>Colour-banded results based on latest score.</div>
+              </div>
+
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search name…"
-                style={styles.search}
+                style={S.search}
               />
-              <button
-                type="button"
-                onClick={() => setTop10((p) => !p)}
-                style={{
-                  ...styles.chipBtn,
-                  background: top10 ? "#EEF2FF" : "#F8FAFC",
-                }}
-              >
-                TOP 10%
-              </button>
             </div>
+
+            <LeaderboardTable rows={filteredLeaderboard} />
           </div>
+        )}
 
-          <div style={styles.tableWrap}>
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Student</th>
-                  <th style={styles.th}>Class</th>
-                  <th style={styles.th}>Latest</th>
-                  <th style={styles.th}>Score</th>
-                  <th style={styles.th}>Percent</th>
-                  <th style={styles.th}>Attempts</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && (
-                  <tr>
-                    <td colSpan={6} style={styles.tdMuted}>Loading…</td>
-                  </tr>
-                )}
+        {!loading && tab === "improved" && (
+          <div>
+            <div style={S.h2}>Most improved</div>
+            <div style={S.muted}>Uses delta_percent (needs at least 2 attempts per pupil).</div>
+            <div style={{ height: 12 }} />
 
-                {!loading && leaderboard.length === 0 && (
-                  <tr>
-                    <td colSpan={6} style={styles.tdMuted}>
-                      No data yet — run some student tests.
-                    </td>
-                  </tr>
-                )}
-
-                {!loading &&
-                  leaderboard.map((r) => (
-                    <tr key={r.student_id}>
-                      <td style={styles.tdStrong}>{r.student || "—"}</td>
-                      <td style={styles.td}>{r.class_label || "—"}</td>
-                      <td style={styles.td}>
-                        {r.latest_at ? formatDate(r.latest_at) : "—"}
-                      </td>
-                      <td style={styles.td}>
-                        {typeof r.score === "number" && typeof r.total === "number"
-                          ? `${r.score}/${r.total}`
-                          : "—"}
-                      </td>
-                      <td style={styles.td}>
-                        {typeof r.percent === "number" ? (
-                          <span style={pillForPercent(r.percent)}>{r.percent}%</span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td style={styles.td}>{r.attempts_in_range ?? 0}</td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
+            {improvedRows.length === 0 ? (
+              <div style={S.muted}>No improvement data yet.</div>
+            ) : (
+              <ImprovedTable rows={improvedRows} />
+            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {tab === "improved" && (
-        <div style={styles.card}>
-          <div style={styles.cardHeader}>
-            <div>
-              <div style={styles.cardTitle}>Most Improved</div>
-              <div style={styles.cardSub}>
-                Uses <code>delta_percent</code> (change since previous attempt).
+        {!loading && tab === "heatmap" && (
+          <div>
+            <div style={S.rowBetween}>
+              <div>
+                <div style={S.h2}>Heat map (1–19)</div>
+                <div style={S.muted}>Click a tile to open the table breakdown panel.</div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  type="button"
+                  style={S.smallBtn}
+                  onClick={() => {
+                    setSelectedTableNum(null);
+                    setTableBreakdown(null);
+                  }}
+                >
+                  Clear selection
+                </button>
               </div>
             </div>
+
+            {!tableHeat.length ? (
+              <div style={S.muted}>No heatmap data yet.</div>
+            ) : (
+              <>
+                <div style={S.heatGrid}>
+                  {tableHeat.map((cell) => {
+                    const t = cell.table_num;
+                    const acc = cell.accuracy;
+                    const selected = selectedTableNum === t;
+
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setSelectedTableNum(t)}
+                        style={{
+                          ...S.tile,
+                          borderColor: selected ? "#2563EB" : "#E5E7EB",
+                          background: tileBg(acc),
+                        }}
+                      >
+                        <div style={S.tileTop}>
+                          <div style={S.tileKicker}>TABLE</div>
+                          <div style={S.tileNum}>{t}</div>
+                        </div>
+                        <div style={S.tileBottom}>
+                          <div style={S.tilePct}>{typeof acc === "number" ? `${acc}%` : "—"}</div>
+                          <div style={S.tileSmall}>
+                            {cell.correct ?? 0}/{cell.total ?? 0}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Breakdown panel */}
+                <div style={S.breakPanel}>
+                  <div style={S.rowBetween}>
+                    <div>
+                      <div style={S.breakKicker}>Table breakdown</div>
+                      <div style={S.breakTitle}>
+                        {selectedTableNum ? `×${selectedTableNum}` : "Click a tile above"}
+                      </div>
+                    </div>
+                    {selectedTableNum && (
+                      <span style={S.muted}>
+                        API: <code>/api/teacher/table_breakdown</code>
+                      </span>
+                    )}
+                  </div>
+
+                  {!selectedTableNum && (
+                    <div style={S.muted}>(This panel fills in after you click a tile.)</div>
+                  )}
+
+                  {selectedTableNum && breakdownLoading && <div style={S.muted}>Loading breakdown…</div>}
+
+                  {selectedTableNum && !breakdownLoading && (
+                    <>
+                      {!breakdownRows.length ? (
+                        <div style={S.muted}>No breakdown data yet for ×{selectedTableNum}.</div>
+                      ) : (
+                        <BreakdownTable rows={breakdownRows} />
+                      )}
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
+        )}
 
-          {loading && <div style={styles.tdMuted}>Loading…</div>}
-
-          {!loading && mostImproved.length === 0 && (
-            <div style={styles.tdMuted}>
-              No improvements recorded yet (need at least 2 attempts per student).
+        {!loading && tab === "settings" && (
+          <div>
+            <div style={S.h2}>Settings</div>
+            <div style={S.muted}>
+              These are saved in the teacher browser for now. Next we’ll connect them to the student test automatically.
             </div>
-          )}
 
-          {!loading && mostImproved.length > 0 && (
-            <div style={styles.tableWrap}>
-              <table style={styles.table}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>Student</th>
-                    <th style={styles.th}>Class</th>
-                    <th style={styles.th}>Latest %</th>
-                    <th style={styles.th}>Change</th>
-                    <th style={styles.th}>Attempts</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {mostImproved.map((r) => (
-                    <tr key={r.student_id}>
-                      <td style={styles.tdStrong}>{r.student}</td>
-                      <td style={styles.td}>{r.class_label}</td>
-                      <td style={styles.td}>
-                        {typeof r.percent === "number" ? `${r.percent}%` : "—"}
-                      </td>
-                      <td style={styles.td}>
-                        <span
-                          style={{
-                            ...styles.deltaPill,
-                            color: r.delta_percent >= 0 ? "#16A34A" : "#DC2626",
-                            background:
-                              r.delta_percent >= 0 ? "#ECFDF5" : "#FEF2F2",
-                            borderColor:
-                              r.delta_percent >= 0 ? "#BBF7D0" : "#FECACA",
-                          }}
-                        >
-                          {r.delta_percent >= 0 ? "+" : ""}
-                          {r.delta_percent}%
-                        </span>
-                      </td>
-                      <td style={styles.td}>{r.attempts_in_range ?? 0}</td>
-                    </tr>
+            <div style={{ height: 14 }} />
+
+            <div style={S.settingsGrid}>
+              <div style={S.settingBox}>
+                <div style={S.settingTitle}>Number of questions</div>
+                <div style={S.muted}>Min 10 • Max 60</div>
+                <input
+                  type="range"
+                  min="10"
+                  max="60"
+                  value={settings.questionCount}
+                  onChange={(e) =>
+                    setSettings((p) => ({ ...p, questionCount: Number(e.target.value) }))
+                  }
+                  style={{ width: "100%", marginTop: 10 }}
+                />
+                <div style={S.settingValue}>{settings.questionCount}</div>
+              </div>
+
+              <div style={S.settingBox}>
+                <div style={S.settingTitle}>Time per question</div>
+                <div style={S.muted}>3 / 4 / 5 / 6 seconds</div>
+
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                  {[3, 4, 5, 6].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setSettings((p) => ({ ...p, secondsPerQuestion: n }))}
+                      style={{
+                        ...S.pillBtn,
+                        borderColor: settings.secondsPerQuestion === n ? "#2563EB" : "#E5E7EB",
+                        background: settings.secondsPerQuestion === n ? "#EEF2FF" : "#FFFFFF",
+                      }}
+                    >
+                      {n}s
+                    </button>
                   ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+                </div>
 
-      {tab === "heatmap" && (
-        <div style={styles.card}>
-          <div style={styles.cardHeader}>
-            <div>
-              <div style={styles.cardTitle}>Times Table Heat Map (1–19)</div>
-              <div style={styles.cardSub}>
-                Click a tile to see breakdown for that table.
+                <div style={S.settingValue}>{settings.secondsPerQuestion} seconds</div>
               </div>
             </div>
-          </div>
 
-          {loading && <div style={styles.tdMuted}>Loading…</div>}
+            <div style={{ height: 12 }} />
 
-          {!loading && tableHeat.length === 0 && (
-            <div style={styles.tdMuted}>No heatmap data yet.</div>
-          )}
+            <div style={S.settingBox}>
+              <div style={S.settingTitle}>Tables included (1–19)</div>
+              <div style={S.muted}>Click to toggle tables on/off.</div>
 
-          {!loading && tableHeat.length > 0 && (
-            <>
-              <div style={styles.heatGrid}>
-                {tableHeat.map((cell) => {
-                  const t = cell.table_num;
-                  const acc = cell.accuracy;
-                  const selected = selectedTableNum === t;
+              <div style={S.tablePickGrid}>
+                {Array.from({ length: 19 }, (_, i) => i + 1).map((n) => {
+                  const on = settings.tablesIncluded.includes(n);
                   return (
                     <button
-                      key={t}
+                      key={n}
                       type="button"
-                      onClick={() => setSelectedTableNum(t)}
-                      style={{
-                        ...styles.heatTile,
-                        borderColor: selected ? "#2563EB" : "#E5E7EB",
-                        background: heatBg(acc),
+                      onClick={() => {
+                        setSettings((p) => {
+                          const set = new Set(p.tablesIncluded);
+                          if (set.has(n)) set.delete(n);
+                          else set.add(n);
+                          const next = Array.from(set).sort((a, b) => a - b);
+                          return { ...p, tablesIncluded: next };
+                        });
                       }}
-                      title={`Table ${t}`}
+                      style={{
+                        ...S.tablePick,
+                        borderColor: on ? "#2563EB" : "#E5E7EB",
+                        background: on ? "#EEF2FF" : "#FFFFFF",
+                        fontWeight: on ? 900 : 700,
+                      }}
                     >
-                      <div style={styles.heatTop}>
-                        <div style={styles.heatLabel}>TABLE</div>
-                        <div style={styles.heatNum}>{t}</div>
-                      </div>
-                      <div style={styles.heatMeta}>
-                        <div style={styles.heatPct}>
-                          {typeof acc === "number" ? `${acc}%` : "—"}
-                        </div>
-                        <div style={styles.heatSmall}>
-                          {cell.correct ?? 0}/{cell.total ?? 0} correct
-                        </div>
-                      </div>
+                      {n}
                     </button>
                   );
                 })}
               </div>
 
-              <div style={styles.breakPanel}>
-                <div style={styles.breakHeader}>
-                  <div>
-                    <div style={styles.breakKicker}>Table breakdown</div>
-                    <div style={styles.breakTitle}>
-                      {selectedTableNum ? `×${selectedTableNum}` : "Click a tile"}
-                    </div>
-                  </div>
-
-                  {selectedTableNum && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedTableNum(null)}
-                      style={styles.chipBtn}
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-
-                {!selectedTableNum && (
-                  <div style={styles.tdMuted}>
-                    Click any table tile above to see who is strongest/weakest.
-                  </div>
-                )}
-
-                {selectedTableNum && breakdownRows.length === 0 && (
-                  <div style={styles.tdMuted}>No breakdown data yet for ×{selectedTableNum}.</div>
-                )}
-
-                {selectedTableNum && breakdownRows.length > 0 && (
-                  <div style={styles.tableWrap}>
-                    <table style={styles.table}>
-                      <thead>
-                        <tr>
-                          <th style={styles.th}>Student</th>
-                          <th style={styles.th}>Class</th>
-                          <th style={styles.th}>Total</th>
-                          <th style={styles.th}>Correct</th>
-                          <th style={styles.th}>Accuracy</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {breakdownRows.map((r) => (
-                          <tr key={r.student_id}>
-                            <td style={styles.tdStrong}>{r.student || "—"}</td>
-                            <td style={styles.td}>{r.class_label || "—"}</td>
-                            <td style={styles.td}>{r.total ?? 0}</td>
-                            <td style={styles.td}>{r.correct ?? 0}</td>
-                            <td style={styles.td}>
-                              {typeof r.accuracy === "number" ? (
-                                <span style={pillForPercent(r.accuracy)}>
-                                  {r.accuracy}%
-                                </span>
-                              ) : (
-                                "—"
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+              <div style={{ height: 10 }} />
+              <div style={S.muted}>
+                Selected: <strong>{settings.tablesIncluded.join(", ")}</strong>
               </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === "trend" && (
-        <div style={styles.card}>
-          <div style={styles.cardHeader}>
-            <div>
-              <div style={styles.cardTitle}>Trend</div>
-              <div style={styles.cardSub}>Average % per day (last {days} days).</div>
             </div>
-          </div>
 
-          {loading && <div style={styles.tdMuted}>Loading…</div>}
-
-          {!loading && trend.length === 0 && (
-            <div style={styles.tdMuted}>No trend data yet.</div>
-          )}
-
-          {!loading && trend.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {trend.map((t) => {
-                const pct = typeof t.avg_percent === "number" ? t.avg_percent : 0;
-                return (
-                  <div key={t.day} style={styles.trendRow}>
-                    <div style={styles.trendDay}>{t.day}</div>
-                    <div style={styles.trendOuter}>
-                      <div style={{ ...styles.trendInner, width: `${clamp(pct, 0, 100)}%` }} />
-                    </div>
-                    <div style={styles.trendPct}>
-                      {typeof t.avg_percent === "number" ? `${t.avg_percent}%` : "—"}
-                    </div>
-                  </div>
-                );
-              })}
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14 }}>
+              <button type="button" onClick={saveSettings} style={S.primaryBtn}>
+                Save settings
+              </button>
+              {savedMsg && <span style={{ color: "#16A34A", fontWeight: 900 }}>{savedMsg}</span>}
             </div>
-          )}
-        </div>
-      )}
 
-      {tab === "settings" && (
-        <div style={styles.card}>
-          <div style={styles.cardHeader}>
-            <div>
-              <div style={styles.cardTitle}>Settings</div>
-              <div style={styles.cardSub}>
-                These are saved in your browser. Next we’ll connect these settings
-                so student tests automatically use them.
+            <div style={S.note}>
+              <strong>Next step (I’ll do after you confirm this page looks right):</strong>
+              <div style={{ marginTop: 6 }}>
+                Update <code>pages/student/tests/mixed.js</code> so it reads these settings and uses:
+                <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                  <li>{settings.questionCount} questions</li>
+                  <li>{settings.secondsPerQuestion} seconds per question</li>
+                  <li>Only tables: {settings.tablesIncluded.join(", ")}</li>
+                </ul>
               </div>
             </div>
           </div>
-
-          <div style={styles.settingsGrid}>
-            <div style={styles.settingBox}>
-              <div style={styles.settingLabel}>Number of questions</div>
-              <div style={styles.settingHint}>Min 10 • Max 60</div>
-
-              <input
-                type="range"
-                min="10"
-                max="60"
-                value={settings.questionCount}
-                onChange={(e) =>
-                  setSettings((p) => ({ ...p, questionCount: Number(e.target.value) }))
-                }
-                style={{ width: "100%", marginTop: 10 }}
-              />
-              <div style={styles.settingValue}>{settings.questionCount}</div>
-            </div>
-
-            <div style={styles.settingBox}>
-              <div style={styles.settingLabel}>Time per question (seconds)</div>
-              <div style={styles.settingHint}>3 • 4 • 5 • 6</div>
-
-              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                {[3, 4, 5, 6].map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setSettings((p) => ({ ...p, questionSeconds: n }))}
-                    style={{
-                      ...styles.chipBtn,
-                      borderColor: settings.questionSeconds === n ? "#2563EB" : "#E5E7EB",
-                      background: settings.questionSeconds === n ? "#EEF2FF" : "#F8FAFC",
-                      fontWeight: 800,
-                    }}
-                  >
-                    {n}s
-                  </button>
-                ))}
-              </div>
-
-              <div style={styles.settingValue}>{settings.questionSeconds} seconds</div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14 }}>
-            <button type="button" onClick={saveSettings} style={styles.primaryBtn}>
-              Save settings
-            </button>
-            {settingsSavedMsg && <span style={{ color: "#16A34A", fontWeight: 800 }}>{settingsSavedMsg}</span>}
-          </div>
-
-          <div style={styles.noteBox}>
-            <strong>Next step (after this):</strong>
-            <div style={{ marginTop: 6 }}>
-              I’ll update your student test page so it reads these settings and uses:
-              <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
-                <li>{settings.questionCount} questions</li>
-                <li>{settings.questionSeconds} seconds per question</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
 
-/* ---------------- Components ---------------- */
+/* ---------------- Small components ---------------- */
 
-function TabButton({ active, onClick, children }) {
+function Tab({ active, onClick, children }) {
   return (
     <button
       type="button"
       onClick={onClick}
       style={{
-        ...styles.tabBtn,
+        ...S.tabBtn,
         background: active ? "#111827" : "#FFFFFF",
         color: active ? "#FFFFFF" : "#111827",
         borderColor: active ? "#111827" : "#E5E7EB",
@@ -735,13 +591,13 @@ function TabButton({ active, onClick, children }) {
 function FilterSelect({ label, value, onChange, options, disabled }) {
   return (
     <div style={{ minWidth: 170 }}>
-      <div style={styles.filterLabel}>{label}</div>
+      <div style={S.filterLabel}>{label}</div>
       <select
         value={value}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
         style={{
-          ...styles.select,
+          ...S.select,
           opacity: disabled ? 0.55 : 1,
           cursor: disabled ? "not-allowed" : "pointer",
         }}
@@ -756,12 +612,175 @@ function FilterSelect({ label, value, onChange, options, disabled }) {
   );
 }
 
+function OverviewPanel({ overview }) {
+  const rows = overview?.leaderboard || [];
+  const attempts = rows.reduce((sum, r) => sum + (r.attempts_in_range || 0), 0);
+
+  const percents = rows
+    .map((r) => (typeof r.percent === "number" ? r.percent : null))
+    .filter((x) => typeof x === "number");
+
+  const avg = percents.length
+    ? Math.round(percents.reduce((a, b) => a + b, 0) / percents.length)
+    : null;
+
+  const active = rows.filter((r) => (r.attempts_in_range || 0) > 0).length;
+
+  return (
+    <div>
+      <div style={S.h2}>Overview</div>
+      <div style={S.muted}>Quick summary of what’s been recorded in the selected time range.</div>
+
+      <div style={{ height: 14 }} />
+
+      <div style={S.statsGrid}>
+        <Stat label="Active pupils" value={active} />
+        <Stat label="Total attempts" value={attempts} />
+        <Stat label="Average %" value={avg !== null ? `${avg}%` : "—"} />
+        <Stat label="Pupils listed" value={rows.length} />
+      </div>
+
+      <div style={{ height: 14 }} />
+      <div style={S.muted}>
+        Tip: Use <strong>Leaderboard</strong> for class bands, and <strong>Heat map</strong> to spot weakest tables.
+      </div>
+    </div>
+  );
+}
+
+function Stat({ label, value }) {
+  return (
+    <div style={S.stat}>
+      <div style={S.statLabel}>{label}</div>
+      <div style={S.statValue}>{value}</div>
+    </div>
+  );
+}
+
+function LeaderboardTable({ rows }) {
+  return (
+    <div style={S.tableWrap}>
+      <table style={S.table}>
+        <thead>
+          <tr>
+            <th style={S.th}>Student</th>
+            <th style={S.th}>Class</th>
+            <th style={S.th}>Latest</th>
+            <th style={S.th}>Score</th>
+            <th style={S.th}>Band</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={5} style={S.tdMuted}>No results yet.</td>
+            </tr>
+          )}
+
+          {rows.map((r) => {
+            const band = bandForScore(r.score, r.total);
+            return (
+              <tr key={r.student_id}>
+                <td style={S.tdStrong}>{r.student || "—"}</td>
+                <td style={S.td}>{r.class_label || "—"}</td>
+                <td style={S.td}>{r.latest_at ? formatDate(r.latest_at) : "—"}</td>
+                <td style={S.td}>
+                  {typeof r.score === "number" && typeof r.total === "number"
+                    ? `${r.score}/${r.total}`
+                    : "—"}
+                </td>
+                <td style={S.td}>
+                  {band ? <span style={band.style}>{band.label}</span> : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ImprovedTable({ rows }) {
+  return (
+    <div style={S.tableWrap}>
+      <table style={S.table}>
+        <thead>
+          <tr>
+            <th style={S.th}>Student</th>
+            <th style={S.th}>Class</th>
+            <th style={S.th}>Latest %</th>
+            <th style={S.th}>Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.student_id}>
+              <td style={S.tdStrong}>{r.student || "—"}</td>
+              <td style={S.td}>{r.class_label || "—"}</td>
+              <td style={S.td}>{typeof r.percent === "number" ? `${r.percent}%` : "—"}</td>
+              <td style={S.td}>
+                <span
+                  style={{
+                    ...S.deltaPill,
+                    color: r.delta_percent >= 0 ? "#16A34A" : "#DC2626",
+                    background: r.delta_percent >= 0 ? "#ECFDF5" : "#FEF2F2",
+                    borderColor: r.delta_percent >= 0 ? "#BBF7D0" : "#FECACA",
+                  }}
+                >
+                  {r.delta_percent >= 0 ? "+" : ""}
+                  {r.delta_percent}%
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BreakdownTable({ rows }) {
+  return (
+    <div style={{ ...S.tableWrap, marginTop: 12 }}>
+      <table style={S.table}>
+        <thead>
+          <tr>
+            <th style={S.th}>Student</th>
+            <th style={S.th}>Class</th>
+            <th style={S.th}>Total</th>
+            <th style={S.th}>Correct</th>
+            <th style={S.th}>Accuracy</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.student_id}>
+              <td style={S.tdStrong}>{r.student || "—"}</td>
+              <td style={S.td}>{r.class_label || "—"}</td>
+              <td style={S.td}>{r.total ?? 0}</td>
+              <td style={S.td}>{r.correct ?? 0}</td>
+              <td style={S.td}>
+                {typeof r.accuracy === "number" ? (
+                  <span style={accuracyPill(r.accuracy)}>{r.accuracy}%</span>
+                ) : (
+                  "—"
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /* ---------------- Helpers ---------------- */
 
-function clamp(n, min, max) {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return min;
-  return Math.max(min, Math.min(max, x));
+function clampNumber(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
 }
 
 function formatDate(iso) {
@@ -779,12 +798,18 @@ function formatDate(iso) {
   }
 }
 
-function pillForPercent(pct) {
-  const p = clamp(pct, 0, 100);
-  let bg = "#F3F4F6";
-  let border = "#E5E7EB";
-  let col = "#111827";
+function tileBg(acc) {
+  if (acc === null || typeof acc !== "number") return "#F8FAFC";
+  if (acc >= 90) return "#ECFDF5";
+  if (acc >= 70) return "#EFF6FF";
+  if (acc >= 50) return "#FFFBEB";
+  if (acc >= 30) return "#FFF7ED";
+  return "#FEF2F2";
+}
 
+function accuracyPill(pct) {
+  const p = Math.max(0, Math.min(100, Number(pct)));
+  let bg = "#F3F4F6", border = "#E5E7EB", col = "#111827";
   if (p >= 90) { bg = "#ECFDF5"; border = "#BBF7D0"; col = "#166534"; }
   else if (p >= 70) { bg = "#EFF6FF"; border = "#BFDBFE"; col = "#1D4ED8"; }
   else if (p >= 50) { bg = "#FFFBEB"; border = "#FDE68A"; col = "#92400E"; }
@@ -795,50 +820,87 @@ function pillForPercent(pct) {
     display: "inline-block",
     padding: "4px 10px",
     borderRadius: 999,
-    fontWeight: 900,
     border: `1px solid ${border}`,
     background: bg,
     color: col,
+    fontWeight: 900,
     fontSize: "0.9rem",
   };
 }
 
-function heatBg(acc) {
-  if (acc === null || typeof acc !== "number") return "#F8FAFC";
-  if (acc >= 90) return "#ECFDF5";
-  if (acc >= 70) return "#EFF6FF";
-  if (acc >= 50) return "#FFFBEB";
-  if (acc >= 30) return "#FFF7ED";
-  return "#FEF2F2";
+/**
+ * Class leader bands (you asked for these bands):
+ * - Full marks
+ * - 20–24
+ * - 15–19
+ * - 10–14
+ * - Below 10
+ *
+ * NOTE: If total isn't 25, we band using percentage approximations.
+ */
+function bandForScore(score, total) {
+  if (typeof score !== "number" || typeof total !== "number" || total <= 0) return null;
+
+  // If total is 25, use your exact bands
+  if (total === 25) {
+    if (score === 25) return band("Full marks", "#ECFDF5", "#BBF7D0", "#166534");
+    if (score >= 20) return band("20–24", "#EFF6FF", "#BFDBFE", "#1D4ED8");
+    if (score >= 15) return band("15–19", "#FFFBEB", "#FDE68A", "#92400E");
+    if (score >= 10) return band("10–14", "#FFF7ED", "#FED7AA", "#9A3412");
+    return band("Below 10", "#FEF2F2", "#FECACA", "#991B1B");
+  }
+
+  // Otherwise approximate using percent
+  const pct = Math.round((score / total) * 100);
+  if (pct >= 95) return band("Full marks-ish", "#ECFDF5", "#BBF7D0", "#166534");
+  if (pct >= 80) return band("High", "#EFF6FF", "#BFDBFE", "#1D4ED8");
+  if (pct >= 60) return band("Mid", "#FFFBEB", "#FDE68A", "#92400E");
+  if (pct >= 40) return band("Low", "#FFF7ED", "#FED7AA", "#9A3412");
+  return band("Very low", "#FEF2F2", "#FECACA", "#991B1B");
+}
+
+function band(label, bg, border, col) {
+  return {
+    label,
+    style: {
+      display: "inline-block",
+      padding: "4px 10px",
+      borderRadius: 999,
+      border: `1px solid ${border}`,
+      background: bg,
+      color: col,
+      fontWeight: 900,
+      fontSize: "0.9rem",
+    },
+  };
 }
 
 /* ---------------- Styles ---------------- */
 
-const styles = {
+const S = {
   page: {
     minHeight: "100vh",
     background: "#F7F7FB",
-    padding: "18px",
-    fontFamily:
-      "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    padding: 18,
+    fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
     color: "#111827",
   },
 
-  topBar: {
+  header: {
     maxWidth: 1150,
     margin: "0 auto",
+    padding: 16,
+    borderRadius: 16,
+    border: "1px solid #E5E7EB",
+    background: "white",
+    boxShadow: "0 10px 20px rgba(0,0,0,0.04)",
     display: "flex",
     justifyContent: "space-between",
     gap: 12,
     alignItems: "center",
-    padding: "16px 16px",
-    background: "white",
-    borderRadius: 16,
-    border: "1px solid #E5E7EB",
-    boxShadow: "0 10px 20px rgba(0,0,0,0.04)",
   },
 
-  logoCircle: {
+  logo: {
     width: 52,
     height: 52,
     borderRadius: 999,
@@ -846,7 +908,6 @@ const styles = {
     display: "grid",
     placeItems: "center",
     fontWeight: 1000,
-    color: "#111827",
     border: "1px solid #E5E7EB",
   },
 
@@ -855,42 +916,37 @@ const styles = {
     letterSpacing: "0.18em",
     textTransform: "uppercase",
     color: "#6B7280",
-    fontWeight: 800,
+    fontWeight: 900,
   },
   title: { fontSize: "1.4rem", fontWeight: 1000, marginTop: 2 },
-  subTitle: { color: "#6B7280", marginTop: 2, fontSize: "0.95rem" },
+  subtitle: { color: "#6B7280", marginTop: 2, fontSize: "0.95rem" },
 
-  link: { color: "#2563EB", textDecoration: "underline", fontWeight: 700 },
+  link: { color: "#2563EB", textDecoration: "underline", fontWeight: 800 },
 
   primaryBtn: {
     border: "none",
     borderRadius: 999,
     padding: "10px 14px",
-    fontWeight: 900,
+    fontWeight: 1000,
     cursor: "pointer",
     color: "white",
     background: "linear-gradient(135deg,#2563EB,#60A5FA)",
   },
 
-  filterCard: {
+  filters: {
     maxWidth: 1150,
     margin: "12px auto 0",
+    padding: "14px 16px",
+    borderRadius: 16,
+    border: "1px solid #E5E7EB",
+    background: "white",
+    boxShadow: "0 10px 20px rgba(0,0,0,0.04)",
     display: "flex",
     gap: 12,
     flexWrap: "wrap",
-    padding: "14px 16px",
-    background: "white",
-    borderRadius: 16,
-    border: "1px solid #E5E7EB",
-    boxShadow: "0 10px 20px rgba(0,0,0,0.04)",
   },
 
-  filterLabel: {
-    fontSize: "0.78rem",
-    fontWeight: 900,
-    color: "#6B7280",
-    marginBottom: 6,
-  },
+  filterLabel: { fontSize: "0.78rem", fontWeight: 900, color: "#6B7280", marginBottom: 6 },
 
   select: {
     width: "100%",
@@ -914,29 +970,35 @@ const styles = {
     borderRadius: 999,
     border: "1px solid #E5E7EB",
     cursor: "pointer",
-    fontWeight: 900,
+    fontWeight: 1000,
+    background: "white",
   },
 
   card: {
     maxWidth: 1150,
     margin: "12px auto 0",
     padding: 16,
-    background: "white",
     borderRadius: 16,
     border: "1px solid #E5E7EB",
+    background: "white",
     boxShadow: "0 10px 20px rgba(0,0,0,0.04)",
   },
 
-  cardHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-    flexWrap: "wrap",
-    alignItems: "center",
+  h2: { fontSize: "1.2rem", fontWeight: 1000 },
+  muted: { color: "#6B7280" },
+
+  errorBox: {
+    maxWidth: 1150,
+    margin: "12px auto 0",
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid #FECACA",
+    background: "#FEF2F2",
+    color: "#991B1B",
+    fontWeight: 800,
   },
 
-  cardTitle: { fontSize: "1.2rem", fontWeight: 1000 },
-  cardSub: { color: "#6B7280", marginTop: 4, lineHeight: 1.35 },
+  rowBetween: { display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" },
 
   search: {
     padding: "10px 12px",
@@ -946,14 +1008,20 @@ const styles = {
     minWidth: 220,
   },
 
-  chipBtn: {
-    padding: "10px 12px",
-    borderRadius: 999,
-    border: "1px solid #E5E7EB",
-    background: "#F8FAFC",
-    cursor: "pointer",
-    fontWeight: 900,
+  statsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    gap: 12,
   },
+
+  stat: {
+    border: "1px solid #E5E7EB",
+    borderRadius: 14,
+    padding: 14,
+    background: "#F8FAFC",
+  },
+  statLabel: { fontSize: "0.8rem", color: "#6B7280", fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase" },
+  statValue: { marginTop: 6, fontSize: "1.5rem", fontWeight: 1000 },
 
   tableWrap: {
     marginTop: 14,
@@ -961,13 +1029,7 @@ const styles = {
     border: "1px solid #E5E7EB",
     overflowX: "auto",
   },
-
-  table: {
-    width: "100%",
-    borderCollapse: "collapse",
-    minWidth: 840,
-  },
-
+  table: { width: "100%", borderCollapse: "collapse", minWidth: 860 },
   th: {
     textAlign: "left",
     padding: 12,
@@ -978,35 +1040,11 @@ const styles = {
     background: "#F8FAFC",
     borderBottom: "1px solid #E5E7EB",
   },
+  td: { padding: 12, borderBottom: "1px solid #F1F5F9" },
+  tdStrong: { padding: 12, borderBottom: "1px solid #F1F5F9", fontWeight: 1000 },
+  tdMuted: { padding: 12, color: "#6B7280" },
 
-  td: {
-    padding: 12,
-    borderBottom: "1px solid #F1F5F9",
-    verticalAlign: "middle",
-    color: "#111827",
-  },
-
-  tdStrong: {
-    padding: 12,
-    borderBottom: "1px solid #F1F5F9",
-    fontWeight: 900,
-  },
-
-  tdMuted: {
-    padding: 12,
-    color: "#6B7280",
-  },
-
-  errorBox: {
-    maxWidth: 1150,
-    margin: "12px auto 0",
-    padding: 12,
-    borderRadius: 14,
-    border: "1px solid #FECACA",
-    background: "#FEF2F2",
-    color: "#991B1B",
-    fontWeight: 700,
-  },
+  deltaPill: { display: "inline-block", padding: "4px 10px", borderRadius: 999, border: "1px solid", fontWeight: 1000 },
 
   heatGrid: {
     marginTop: 14,
@@ -1014,23 +1052,20 @@ const styles = {
     gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
     gap: 10,
   },
-
-  heatTile: {
+  tile: {
     textAlign: "left",
     borderRadius: 14,
     border: "1px solid #E5E7EB",
     padding: 12,
     cursor: "pointer",
-    background: "#F8FAFC",
     minHeight: 92,
   },
-
-  heatTop: { display: "flex", justifyContent: "space-between", alignItems: "baseline" },
-  heatLabel: { fontSize: "0.72rem", letterSpacing: "0.16em", color: "#6B7280", fontWeight: 900 },
-  heatNum: { fontSize: "1.35rem", fontWeight: 1000 },
-  heatMeta: { marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 },
-  heatPct: { fontWeight: 1000 },
-  heatSmall: { color: "#6B7280", fontSize: "0.9rem" },
+  tileTop: { display: "flex", justifyContent: "space-between", alignItems: "baseline" },
+  tileKicker: { fontSize: "0.72rem", letterSpacing: "0.16em", color: "#6B7280", fontWeight: 1000 },
+  tileNum: { fontSize: "1.35rem", fontWeight: 1000 },
+  tileBottom: { marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 },
+  tilePct: { fontWeight: 1000 },
+  tileSmall: { color: "#6B7280", fontSize: "0.95rem" },
 
   breakPanel: {
     marginTop: 14,
@@ -1039,51 +1074,46 @@ const styles = {
     border: "1px solid #E5E7EB",
     background: "#F8FAFC",
   },
-
-  breakHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 12,
-    flexWrap: "wrap",
-  },
-
-  breakKicker: { fontSize: "0.78rem", letterSpacing: "0.14em", textTransform: "uppercase", color: "#6B7280", fontWeight: 900 },
+  breakKicker: { fontSize: "0.78rem", letterSpacing: "0.14em", textTransform: "uppercase", color: "#6B7280", fontWeight: 1000 },
   breakTitle: { fontSize: "1.2rem", fontWeight: 1000 },
 
-  trendRow: { display: "grid", gridTemplateColumns: "110px 1fr 60px", gap: 10, alignItems: "center" },
-  trendDay: { color: "#111827", fontWeight: 800 },
-  trendOuter: { height: 10, borderRadius: 999, background: "#EEF2FF", overflow: "hidden", border: "1px solid #E5E7EB" },
-  trendInner: { height: "100%", borderRadius: 999, background: "linear-gradient(90deg,#22C55E,#FACC15,#FB923C,#EF4444)" },
-  trendPct: { textAlign: "right", fontWeight: 900 },
-
-  deltaPill: {
-    display: "inline-block",
-    padding: "4px 10px",
+  smallBtn: {
+    padding: "10px 12px",
     borderRadius: 999,
-    border: "1px solid",
-    fontWeight: 1000,
-  },
-
-  settingsGrid: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 12,
-    marginTop: 14,
-  },
-
-  settingBox: {
     border: "1px solid #E5E7EB",
-    background: "#F8FAFC",
-    borderRadius: 14,
-    padding: 14,
+    background: "#FFFFFF",
+    cursor: "pointer",
+    fontWeight: 900,
   },
 
-  settingLabel: { fontWeight: 1000, fontSize: "1rem" },
-  settingHint: { color: "#6B7280", marginTop: 4 },
+  settingsGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
+  settingBox: { border: "1px solid #E5E7EB", background: "#F8FAFC", borderRadius: 14, padding: 14 },
+  settingTitle: { fontWeight: 1000, fontSize: "1rem" },
   settingValue: { marginTop: 10, fontWeight: 1000, fontSize: "1.15rem" },
 
-  noteBox: {
+  pillBtn: {
+    padding: "10px 12px",
+    borderRadius: 999,
+    border: "1px solid #E5E7EB",
+    cursor: "pointer",
+    fontWeight: 900,
+  },
+
+  tablePickGrid: {
+    marginTop: 12,
+    display: "grid",
+    gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
+    gap: 8,
+  },
+  tablePick: {
+    padding: "10px 0",
+    borderRadius: 12,
+    border: "1px solid #E5E7EB",
+    cursor: "pointer",
+    background: "white",
+  },
+
+  note: {
     marginTop: 14,
     padding: 14,
     borderRadius: 14,
