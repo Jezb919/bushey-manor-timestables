@@ -17,7 +17,7 @@ export default function TeacherDashboard() {
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [selectedStudentName, setSelectedStudentName] = useState(null);
 
-  // NEW: selected table tile (for breakdown)
+  // Selected table tile (for breakdown)
   const [selectedTableNum, setSelectedTableNum] = useState(null);
 
   // Overview data (leaderboard + trend)
@@ -30,7 +30,7 @@ export default function TeacherDashboard() {
   const [loadingHeat, setLoadingHeat] = useState(false);
   const [heatErr, setHeatErr] = useState(null);
 
-  // NEW: table breakdown data
+  // Table breakdown data
   const [breakdown, setBreakdown] = useState(null);
   const [loadingBreakdown, setLoadingBreakdown] = useState(false);
   const [breakdownErr, setBreakdownErr] = useState(null);
@@ -76,7 +76,8 @@ export default function TeacherDashboard() {
     try {
       const r = await fetch(overviewUrl);
       const j = await r.json();
-      if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Overview failed");
+      if (!r.ok || !j.ok)
+        throw new Error(j?.details || j?.error || "Overview failed");
       setOverview(j);
     } catch (e) {
       setOverviewErr(e.message || String(e));
@@ -91,7 +92,8 @@ export default function TeacherDashboard() {
     try {
       const r = await fetch(heatUrl);
       const j = await r.json();
-      if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Heatmap failed");
+      if (!r.ok || !j.ok)
+        throw new Error(j?.details || j?.error || "Heatmap failed");
       setHeat(j);
     } catch (e) {
       setHeatErr(e.message || String(e));
@@ -112,7 +114,8 @@ export default function TeacherDashboard() {
     try {
       const r = await fetch(breakdownUrl);
       const j = await r.json();
-      if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Breakdown failed");
+      if (!r.ok || !j.ok)
+        throw new Error(j?.details || j?.error || "Breakdown failed");
       setBreakdown(j);
     } catch (e) {
       setBreakdownErr(e.message || String(e));
@@ -134,7 +137,7 @@ export default function TeacherDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [breakdownUrl]);
 
-  // Clear breakdown when changing scope/student to avoid confusion
+  // Clear breakdown when changing scope/student
   useEffect(() => {
     setSelectedTableNum(null);
     setBreakdown(null);
@@ -146,7 +149,9 @@ export default function TeacherDashboard() {
     const q = search.trim().toLowerCase();
 
     let filtered = q
-      ? rows.filter((r) => String(r.student || "").toLowerCase().includes(q))
+      ? rows.filter((r) =>
+          String(r.student || "").toLowerCase().includes(q)
+        )
       : rows;
 
     filtered.sort((a, b) => {
@@ -167,23 +172,54 @@ export default function TeacherDashboard() {
   const breakdownRows = breakdown?.breakdown || [];
 
   const pageTitle = useMemo(() => {
-    if (selectedStudentId && selectedStudentName) return `Student: ${selectedStudentName}`;
+    if (selectedStudentId && selectedStudentName)
+      return `Student: ${selectedStudentName}`;
     if (scope === "class") return `Class: ${classLabel}`;
     if (scope === "year") return `Year: ${year}`;
     return "Whole School";
   }, [selectedStudentId, selectedStudentName, scope, classLabel, year]);
 
   const bandForPercent = (p) => {
-    if (typeof p !== "number") return { bg: "rgba(148,163,184,0.08)", border: "rgba(148,163,184,0.18)", tag: "—" };
-    if (p >= 100) return { bg: "rgba(34,197,94,0.18)", border: "rgba(34,197,94,0.40)", tag: "FULL" };
-    if (p >= 80) return { bg: "rgba(59,130,246,0.16)", border: "rgba(59,130,246,0.35)", tag: "HIGH" };
-    if (p >= 60) return { bg: "rgba(250,204,21,0.14)", border: "rgba(250,204,21,0.35)", tag: "OK" };
-    if (p >= 40) return { bg: "rgba(249,115,22,0.14)", border: "rgba(249,115,22,0.35)", tag: "LOW" };
-    return { bg: "rgba(239,68,68,0.14)", border: "rgba(239,68,68,0.35)", tag: "RISK" };
+    if (typeof p !== "number")
+      return {
+        bg: "rgba(148,163,184,0.08)",
+        border: "rgba(148,163,184,0.18)",
+        tag: "—",
+      };
+    if (p >= 100)
+      return {
+        bg: "rgba(34,197,94,0.18)",
+        border: "rgba(34,197,94,0.40)",
+        tag: "FULL",
+      };
+    if (p >= 80)
+      return {
+        bg: "rgba(59,130,246,0.16)",
+        border: "rgba(59,130,246,0.35)",
+        tag: "HIGH",
+      };
+    if (p >= 60)
+      return {
+        bg: "rgba(250,204,21,0.14)",
+        border: "rgba(250,204,21,0.35)",
+        tag: "OK",
+      };
+    if (p >= 40)
+      return {
+        bg: "rgba(249,115,22,0.14)",
+        border: "rgba(249,115,22,0.35)",
+        tag: "LOW",
+      };
+    return {
+      bg: "rgba(239,68,68,0.14)",
+      border: "rgba(239,68,68,0.35)",
+      tag: "RISK",
+    };
   };
 
   const heatColour = (acc) => {
-    if (acc === null || typeof acc !== "number") return "rgba(148,163,184,0.10)";
+    if (acc === null || typeof acc !== "number")
+      return "rgba(148,163,184,0.10)";
     if (acc >= 90) return "rgba(34,197,94,0.28)";
     if (acc >= 70) return "rgba(59,130,246,0.24)";
     if (acc >= 50) return "rgba(250,204,21,0.22)";
@@ -192,7 +228,8 @@ export default function TeacherDashboard() {
   };
 
   const labelBand = (acc) => {
-    if (acc === null || typeof acc !== "number") return { t: "NO DATA", c: "#94a3b8" };
+    if (acc === null || typeof acc !== "number")
+      return { t: "NO DATA", c: "#94a3b8" };
     if (acc >= 90) return { t: "STRONG", c: "#22c55e" };
     if (acc >= 70) return { t: "GOOD", c: "#60a5fa" };
     if (acc >= 50) return { t: "OK", c: "#facc15" };
@@ -205,14 +242,18 @@ export default function TeacherDashboard() {
       <div style={shell}>
         <div style={topBar}>
           <div style={{ display: "flex", gap: "0.9rem", alignItems: "center" }}>
-            <div style={logoCircle}><span style={{ fontWeight: 900, color: "#0f172a" }}>BM</span></div>
+            <div style={logoCircle}>
+              <span style={{ fontWeight: 900, color: "#0f172a" }}>BM</span>
+            </div>
             <div>
               <div style={kicker}>TEACHER DASHBOARD</div>
               <div style={title}>Times Tables Arena</div>
               <div style={subtitle}>{pageTitle}</div>
             </div>
           </div>
-          <a href="/" style={homeLink}>Home</a>
+          <a href="/" style={homeLink}>
+            Home
+          </a>
         </div>
 
         {/* Controls */}
@@ -270,7 +311,11 @@ export default function TeacherDashboard() {
 
           <div style={control}>
             <label style={label}>DAYS</label>
-            <select value={days} onChange={(e) => setDays(Number(e.target.value))} style={select}>
+            <select
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value))}
+              style={select}
+            >
               <option value={7}>7</option>
               <option value={14}>14</option>
               <option value={30}>30</option>
@@ -281,17 +326,34 @@ export default function TeacherDashboard() {
 
           <div style={{ ...control, flex: 1 }}>
             <label style={label}>SEARCH</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Type a name…" style={input} />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Type a name…"
+              style={input}
+            />
           </div>
 
           <button
+            type="button"
             onClick={() => setTop10((p) => !p)}
-            style={{ ...pill, background: top10 ? "rgba(250,204,21,0.18)" : "rgba(148,163,184,0.12)" }}
+            style={{
+              ...pill,
+              background: top10
+                ? "rgba(250,204,21,0.18)"
+                : "rgba(148,163,184,0.12)",
+            }}
           >
             TOP 10%
           </button>
 
-          <button onClick={refreshOverviewAndHeat} style={primary}>REFRESH</button>
+          <button
+            type="button"
+            onClick={refreshOverviewAndHeat}
+            style={primary}
+          >
+            REFRESH
+          </button>
         </div>
 
         {/* Student drilldown banner */}
@@ -299,11 +361,18 @@ export default function TeacherDashboard() {
           <div style={banner}>
             <div>
               <strong>Student view:</strong> {selectedStudentName}
-              <div style={{ fontSize: "0.85rem", color: "#cbd5e1", marginTop: "0.15rem" }}>
+              <div
+                style={{
+                  fontSize: "0.85rem",
+                  color: "#cbd5e1",
+                  marginTop: "0.15rem",
+                }}
+              >
                 Click “Exit” to return to {scope}.
               </div>
             </div>
             <button
+              type="button"
               onClick={() => {
                 setSelectedStudentId(null);
                 setSelectedStudentName(null);
@@ -326,7 +395,8 @@ export default function TeacherDashboard() {
           <div style={card}>
             <div style={cardTitle}>Leaderboard</div>
             <div style={cardSub}>
-              Click a student row to drill down. Colour bands are based on latest %.
+              Click a student row to drill down. Colour bands are based on latest
+              %.
             </div>
 
             <div style={tableWrap}>
@@ -342,11 +412,19 @@ export default function TeacherDashboard() {
                 </thead>
                 <tbody>
                   {(loadingOverview || loadingHeat) && (
-                    <tr><td colSpan={5} style={tdMuted}>Loading…</td></tr>
+                    <tr>
+                      <td colSpan={5} style={tdMuted}>
+                        Loading…
+                      </td>
+                    </tr>
                   )}
 
                   {!loadingOverview && leaderboard.length === 0 && (
-                    <tr><td colSpan={5} style={tdMuted}>No students yet. Run a few tests first.</td></tr>
+                    <tr>
+                      <td colSpan={5} style={tdMuted}>
+                        No students yet. Run a few tests first.
+                      </td>
+                    </tr>
                   )}
 
                   {!loadingOverview &&
@@ -354,8 +432,12 @@ export default function TeacherDashboard() {
                       const band = bandForPercent(r.percent);
                       const latest = r.latest_at ? formatDate(r.latest_at) : "—";
                       const scoreText =
-                        typeof r.score === "number" && typeof r.total === "number" ? `${r.score}/${r.total}` : "—";
-                      const pctText = typeof r.percent === "number" ? `${r.percent}%` : "—";
+                        typeof r.score === "number" &&
+                        typeof r.total === "number"
+                          ? `${r.score}/${r.total}`
+                          : "—";
+                      const pctText =
+                        typeof r.percent === "number" ? `${r.percent}%` : "—";
 
                       return (
                         <tr
@@ -368,14 +450,21 @@ export default function TeacherDashboard() {
                           title="Click to drill down"
                         >
                           <td style={td}>
-                            <div style={{ fontWeight: 900, color: "#f8fafc" }}>{r.student || "—"}</div>
-                            <div style={{ fontSize: "0.85rem", color: "#94a3b8" }}>{r.class_label || "—"}</div>
+                            <div style={{ fontWeight: 900, color: "#f8fafc" }}>
+                              {r.student || "—"}
+                            </div>
+                            <div style={{ fontSize: "0.85rem", color: "#94a3b8" }}>
+                              {r.class_label || "—"}
+                            </div>
                           </td>
                           <td style={td}>{latest}</td>
                           <td style={td}>{scoreText}</td>
                           <td style={td}>
                             <span style={{ ...badge, borderColor: band.border }}>
-                              {pctText} <span style={{ opacity: 0.8, marginLeft: 8 }}>{band.tag}</span>
+                              {pctText}{" "}
+                              <span style={{ opacity: 0.8, marginLeft: 8 }}>
+                                {band.tag}
+                              </span>
                             </span>
                           </td>
                           <td style={td}>{r.attempts_in_range ?? 0}</td>
@@ -390,24 +479,43 @@ export default function TeacherDashboard() {
           {/* Trend */}
           <div style={card}>
             <div style={cardTitle}>Trend</div>
-            <div style={cardSub}>Average % per day (last {days} days).</div>
+            <div style={cardSub}>
+              Average % per day (last {days} days).
+            </div>
 
             {trend.length === 0 ? (
               <div style={emptyBox}>No trend data yet.</div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", marginTop: "0.9rem" }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "0.6rem",
+                  marginTop: "0.9rem",
+                }}
+              >
                 {trend
                   .slice()
                   .sort((a, b) => (a.day > b.day ? 1 : -1))
                   .map((t) => {
-                    const pct = typeof t.avg_percent === "number" ? t.avg_percent : 0;
+                    const pct =
+                      typeof t.avg_percent === "number" ? t.avg_percent : 0;
                     return (
                       <div key={t.day} style={trendRow}>
                         <div style={trendDay}>{t.day}</div>
                         <div style={trendOuter}>
-                          <div style={{ ...trendInner, width: `${Math.max(0, Math.min(100, pct))}%` }} />
+                          <div
+                            style={{
+                              ...trendInner,
+                              width: `${Math.max(0, Math.min(100, pct))}%`,
+                            }}
+                          />
                         </div>
-                        <div style={trendPct}>{typeof t.avg_percent === "number" ? `${t.avg_percent}%` : "—"}</div>
+                        <div style={trendPct}>
+                          {typeof t.avg_percent === "number"
+                            ? `${t.avg_percent}%`
+                            : "—"}
+                        </div>
                       </div>
                     );
                   })}
@@ -419,13 +527,16 @@ export default function TeacherDashboard() {
           <div style={card}>
             <div style={cardTitle}>Times table heatmap (1–19)</div>
             <div style={cardSub}>
-              Click a tile to see which pupils are weakest/strongest on that table.
+              Click a tile to see which pupils are weakest/strongest on that
+              table.
             </div>
 
             {loadingHeat && <div style={emptyBox}>Loading heatmap…</div>}
 
             {!loadingHeat && tableHeat.length === 0 && (
-              <div style={emptyBox}>No heatmap data yet. Run a few tests.</div>
+              <div style={emptyBox}>
+                No heatmap data yet. Run a few tests.
+              </div>
             )}
 
             {!loadingHeat && tableHeat.length > 0 && (
@@ -442,6 +553,7 @@ export default function TeacherDashboard() {
 
                     return (
                       <button
+                        type="button"
                         key={t}
                         onClick={() => setSelectedTableNum(t)}
                         style={{
@@ -460,7 +572,13 @@ export default function TeacherDashboard() {
                           <div style={heatNum}>{t}</div>
                         </div>
 
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: "0.5rem",
+                          }}
+                        >
                           <div style={heatBadge(band.c)}>{band.t}</div>
                           <div style={{ fontWeight: 900, color: "#f8fafc" }}>
                             {typeof acc === "number" ? `${acc}%` : "—"}
@@ -470,7 +588,9 @@ export default function TeacherDashboard() {
                         <div style={heatMeta}>
                           <div style={heatLine}>
                             <span style={heatKey}>Correct</span>
-                            <span style={heatVal}>{correct}/{total}</span>
+                            <span style={heatVal}>
+                              {correct}/{total}
+                            </span>
                           </div>
                         </div>
                       </button>
@@ -480,16 +600,42 @@ export default function TeacherDashboard() {
 
                 {/* Breakdown panel */}
                 <div style={breakPanel}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: "1rem",
+                    }}
+                  >
                     <div>
-                      <div style={{ fontSize: "0.8rem", letterSpacing: "0.16em", textTransform: "uppercase", color: "#94a3b8" }}>
+                      <div
+                        style={{
+                          fontSize: "0.8rem",
+                          letterSpacing: "0.16em",
+                          textTransform: "uppercase",
+                          color: "#94a3b8",
+                        }}
+                      >
                         Table breakdown
                       </div>
-                      <div style={{ fontSize: "1.25rem", fontWeight: 1000, color: "#facc15" }}>
+                      <div
+                        style={{
+                          fontSize: "1.25rem",
+                          fontWeight: 1000,
+                          color: "#facc15",
+                        }}
+                      >
                         {selectedTableNum ? `×${selectedTableNum}` : "Click a tile"}
                       </div>
                       {breakdown?.summary && selectedTableNum && (
-                        <div style={{ marginTop: "0.25rem", color: "#cbd5e1", fontSize: "0.95rem" }}>
+                        <div
+                          style={{
+                            marginTop: "0.25rem",
+                            color: "#cbd5e1",
+                            fontSize: "0.95rem",
+                          }}
+                        >
                           Scope accuracy:{" "}
                           <strong>
                             {typeof breakdown.summary.accuracy === "number"
@@ -503,6 +649,7 @@ export default function TeacherDashboard() {
 
                     {selectedTableNum && (
                       <button
+                        type="button"
                         onClick={() => setSelectedTableNum(null)}
                         style={pill}
                       >
@@ -512,59 +659,95 @@ export default function TeacherDashboard() {
                   </div>
 
                   {!selectedTableNum && (
-                    <div style={emptyBox}>Click a heatmap tile above to see pupil breakdown.</div>
+                    <div style={emptyBox}>
+                      Click a heatmap tile above to see pupil breakdown.
+                    </div>
                   )}
 
                   {selectedTableNum && loadingBreakdown && (
                     <div style={emptyBox}>Loading breakdown…</div>
                   )}
 
-                  {selectedTableNum && !loadingBreakdown && breakdownRows.length === 0 && (
-                    <div style={emptyBox}>
-                      No question records for ×{selectedTableNum} in the last {days} days.
-                    </div>
-                  )}
+                  {selectedTableNum &&
+                    !loadingBreakdown &&
+                    breakdownRows.length === 0 && (
+                      <div style={emptyBox}>
+                        No question records for ×{selectedTableNum} in the last{" "}
+                        {days} days.
+                      </div>
+                    )}
 
-                  {selectedTableNum && !loadingBreakdown && breakdownRows.length > 0 && (
-                    <div style={{ marginTop: "0.9rem", overflowX: "auto", borderRadius: "14px", border: "1px solid rgba(148,163,184,0.12)" }}>
-                      <table style={{ ...table, minWidth: "620px" }}>
-                        <thead>
-                          <tr>
-                            <th style={th}>STUDENT</th>
-                            <th style={th}>CLASS</th>
-                            <th style={th}>TOTAL</th>
-                            <th style={th}>CORRECT</th>
-                            <th style={th}>ACCURACY</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {breakdownRows.map((r) => {
-                            const acc = r.accuracy;
-                            const band = labelBand(acc);
+                  {selectedTableNum &&
+                    !loadingBreakdown &&
+                    breakdownRows.length > 0 && (
+                      <div
+                        style={{
+                          marginTop: "0.9rem",
+                          overflowX: "auto",
+                          borderRadius: "14px",
+                          border: "1px solid rgba(148,163,184,0.12)",
+                        }}
+                      >
+                        <table style={{ ...table, minWidth: "620px" }}>
+                          <thead>
+                            <tr>
+                              <th style={th}>STUDENT</th>
+                              <th style={th}>CLASS</th>
+                              <th style={th}>TOTAL</th>
+                              <th style={th}>CORRECT</th>
+                              <th style={th}>ACCURACY</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {breakdownRows.map((r) => {
+                              const acc = r.accuracy;
+                              const band = labelBand(acc);
 
-                            return (
-                              <tr key={r.student_id} style={{ background: "rgba(148,163,184,0.06)" }}>
-                                <td style={td}>
-                                  <div style={{ fontWeight: 900, color: "#f8fafc" }}>{r.student || "—"}</div>
-                                </td>
-                                <td style={td}>{r.class_label || "—"}</td>
-                                <td style={td}>{r.total ?? 0}</td>
-                                <td style={td}>{r.correct ?? 0}</td>
-                                <td style={td}>
-                                  <span style={{ ...badge, borderColor: "rgba(148,163,184,0.25)" }}>
-                                    <span style={{ color: band.c, fontWeight: 1000 }}>{band.t}</span>
-                                    <span style={{ marginLeft: 10, fontWeight: 1000 }}>
-                                      {typeof acc === "number" ? `${acc}%` : "—"}
+                              return (
+                                <tr
+                                  key={r.student_id}
+                                  style={{ background: "rgba(148,163,184,0.06)" }}
+                                >
+                                  <td style={td}>
+                                    <div
+                                      style={{
+                                        fontWeight: 900,
+                                        color: "#f8fafc",
+                                      }}
+                                    >
+                                      {r.student || "—"}
+                                    </div>
+                                  </td>
+                                  <td style={td}>{r.class_label || "—"}</td>
+                                  <td style={td}>{r.total ?? 0}</td>
+                                  <td style={td}>{r.correct ?? 0}</td>
+                                  <td style={td}>
+                                    <span
+                                      style={{
+                                        ...badge,
+                                        borderColor: "rgba(148,163,184,0.25)",
+                                      }}
+                                    >
+                                      <span
+                                        style={{
+                                          color: band.c,
+                                          fontWeight: 1000,
+                                        }}
+                                      >
+                                        {band.t}
+                                      </span>
+                                      <span style={{ marginLeft: 10, fontWeight: 1000 }}>
+                                        {typeof acc === "number" ? `${acc}%` : "—"}
+                                      </span>
                                     </span>
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                 </div>
               </>
             )}
@@ -594,7 +777,8 @@ function formatDate(iso) {
 
 const outer = {
   minHeight: "100vh",
-  background: "radial-gradient(circle at top, rgba(250,204,21,0.18) 0, #0b1220 40%, #050816 100%)",
+  background:
+    "radial-gradient(circle at top, rgba(250,204,21,0.18) 0, #0b1220 40%, #050816 100%)",
   padding: "1.5rem",
   color: "white",
   fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -621,7 +805,12 @@ const logoCircle = {
   justifyContent: "center",
 };
 
-const kicker = { fontSize: "0.8rem", letterSpacing: "0.22em", textTransform: "uppercase", color: "#cbd5e1" };
+const kicker = {
+  fontSize: "0.8rem",
+  letterSpacing: "0.22em",
+  textTransform: "uppercase",
+  color: "#cbd5e1",
+};
 const title = { fontSize: "1.65rem", fontWeight: 900, color: "#facc15", marginTop: "0.1rem" };
 const subtitle = { fontSize: "0.95rem", color: "#94a3b8", marginTop: "0.15rem" };
 const homeLink = { color: "#93c5fd", textDecoration: "underline", fontSize: "0.95rem", marginTop: "0.45rem" };
@@ -639,8 +828,18 @@ const controls = {
   boxShadow: "0 18px 40px rgba(0,0,0,0.35)",
 };
 
-const control = { display: "flex", flexDirection: "column", gap: "0.35rem", minWidth: "160px" };
-const label = { fontSize: "0.75rem", letterSpacing: "0.16em", textTransform: "uppercase", color: "#94a3b8" };
+const control = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.35rem",
+  minWidth: "160px",
+};
+const label = {
+  fontSize: "0.75rem",
+  letterSpacing: "0.16em",
+  textTransform: "uppercase",
+  color: "#94a3b8",
+};
 
 const select = {
   background: "rgba(15,23,42,0.65)",
@@ -708,11 +907,28 @@ const card = {
 const cardTitle = { fontSize: "1.25rem", fontWeight: 900, color: "#facc15" };
 const cardSub = { marginTop: "0.35rem", color: "#cbd5e1", fontSize: "0.92rem", lineHeight: 1.35 };
 
-const tableWrap = { overflowX: "auto", marginTop: "0.9rem", borderRadius: "14px", border: "1px solid rgba(148,163,184,0.12)" };
+const tableWrap = {
+  overflowX: "auto",
+  marginTop: "0.9rem",
+  borderRadius: "14px",
+  border: "1px solid rgba(148,163,184,0.12)",
+};
 const table = { width: "100%", borderCollapse: "collapse", minWidth: "720px" };
-const th = { textAlign: "left", padding: "0.8rem", fontSize: "0.8rem", letterSpacing: "0.14em", textTransform: "uppercase", color: "#cbd5e1", background: "rgba(15,23,42,0.65)" };
+const th = {
+  textAlign: "left",
+  padding: "0.8rem",
+  fontSize: "0.8rem",
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: "#cbd5e1",
+  background: "rgba(15,23,42,0.65)",
+};
 const tdMuted = { padding: "1rem", color: "#94a3b8" };
-const td = { padding: "0.85rem 0.8rem", verticalAlign: "middle", borderBottom: "1px solid rgba(148,163,184,0.10)" };
+const td = {
+  padding: "0.85rem 0.8rem",
+  verticalAlign: "middle",
+  borderBottom: "1px solid rgba(148,163,184,0.10)",
+};
 
 const badge = {
   display: "inline-flex",
@@ -733,10 +949,26 @@ const emptyBox = {
   color: "#94a3b8",
 };
 
-const trendRow = { display: "grid", gridTemplateColumns: "110px 1fr 60px", gap: "0.6rem", alignItems: "center" };
+const trendRow = {
+  display: "grid",
+  gridTemplateColumns: "110px 1fr 60px",
+  gap: "0.6rem",
+  alignItems: "center",
+};
 const trendDay = { fontSize: "0.9rem", color: "#e2e8f0" };
-const trendOuter = { height: "10px", borderRadius: "999px", background: "rgba(15,23,42,0.75)", overflow: "hidden", border: "1px solid rgba(148,163,184,0.18)" };
-const trendInner = { height: "100%", borderRadius: "999px", background: "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)", transition: "width 0.25s ease-out" };
+const trendOuter = {
+  height: "10px",
+  borderRadius: "999px",
+  background: "rgba(15,23,42,0.75)",
+  overflow: "hidden",
+  border: "1px solid rgba(148,163,184,0.18)",
+};
+const trendInner = {
+  height: "100%",
+  borderRadius: "999px",
+  background: "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
+  transition: "width 0.25s ease-out",
+};
 const trendPct = { fontWeight: 900, textAlign: "right", color: "#e2e8f0" };
 
 const heatWrap = {
@@ -782,4 +1014,22 @@ const breakPanel = {
   borderRadius: "16px",
   background: "rgba(2,6,23,0.55)",
   border: "1px solid rgba(148,163,184,0.18)",
+};
+
+const labelBand = (acc) => {
+  if (acc === null || typeof acc !== "number") return { t: "NO DATA", c: "#94a3b8" };
+  if (acc >= 90) return { t: "STRONG", c: "#22c55e" };
+  if (acc >= 70) return { t: "GOOD", c: "#60a5fa" };
+  if (acc >= 50) return { t: "OK", c: "#facc15" };
+  if (acc >= 30) return { t: "WEAK", c: "#fb923c" };
+  return { t: "RISK", c: "#ef4444" };
+};
+
+const heatColour = (acc) => {
+  if (acc === null || typeof acc !== "number") return "rgba(148,163,184,0.10)";
+  if (acc >= 90) return "rgba(34,197,94,0.28)";
+  if (acc >= 70) return "rgba(59,130,246,0.24)";
+  if (acc >= 50) return "rgba(250,204,21,0.22)";
+  if (acc >= 30) return "rgba(249,115,22,0.22)";
+  return "rgba(239,68,68,0.22)";
 };
