@@ -35,6 +35,7 @@ export default function TeacherDashboard() {
   const [loadingBreakdown, setLoadingBreakdown] = useState(false);
   const [breakdownErr, setBreakdownErr] = useState(null);
 
+  // When a student is selected, we switch to student scope automatically
   const effectiveScope = selectedStudentId ? "student" : scope;
 
   const baseParams = useMemo(() => {
@@ -48,6 +49,8 @@ export default function TeacherDashboard() {
       p.set("class_label", classLabel);
     } else if (effectiveScope === "year") {
       p.set("year", String(year));
+    } else {
+      // school: no extra params
     }
     return p;
   }, [effectiveScope, days, selectedStudentId, classLabel, year]);
@@ -149,9 +152,7 @@ export default function TeacherDashboard() {
     const q = search.trim().toLowerCase();
 
     let filtered = q
-      ? rows.filter((r) =>
-          String(r.student || "").toLowerCase().includes(q)
-        )
+      ? rows.filter((r) => String(r.student || "").toLowerCase().includes(q))
       : rows;
 
     filtered.sort((a, b) => {
@@ -781,7 +782,8 @@ const outer = {
     "radial-gradient(circle at top, rgba(250,204,21,0.18) 0, #0b1220 40%, #050816 100%)",
   padding: "1.5rem",
   color: "white",
-  fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  fontFamily:
+    "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
 };
 
 const shell = { maxWidth: "1200px", margin: "0 auto" };
@@ -811,9 +813,19 @@ const kicker = {
   textTransform: "uppercase",
   color: "#cbd5e1",
 };
-const title = { fontSize: "1.65rem", fontWeight: 900, color: "#facc15", marginTop: "0.1rem" };
+const title = {
+  fontSize: "1.65rem",
+  fontWeight: 900,
+  color: "#facc15",
+  marginTop: "0.1rem",
+};
 const subtitle = { fontSize: "0.95rem", color: "#94a3b8", marginTop: "0.15rem" };
-const homeLink = { color: "#93c5fd", textDecoration: "underline", fontSize: "0.95rem", marginTop: "0.45rem" };
+const homeLink = {
+  color: "#93c5fd",
+  textDecoration: "underline",
+  fontSize: "0.95rem",
+  marginTop: "0.45rem",
+};
 
 const controls = {
   display: "flex",
@@ -871,7 +883,11 @@ const pill = {
   background: "rgba(148,163,184,0.12)",
 };
 
-const primary = { ...pill, background: "linear-gradient(135deg,#3b82f6,#60a5fa)", border: "none" };
+const primary = {
+  ...pill,
+  background: "linear-gradient(135deg,#3b82f6,#60a5fa)",
+  border: "none",
+};
 
 const banner = {
   marginBottom: "1.25rem",
@@ -905,7 +921,12 @@ const card = {
 };
 
 const cardTitle = { fontSize: "1.25rem", fontWeight: 900, color: "#facc15" };
-const cardSub = { marginTop: "0.35rem", color: "#cbd5e1", fontSize: "0.92rem", lineHeight: 1.35 };
+const cardSub = {
+  marginTop: "0.35rem",
+  color: "#cbd5e1",
+  fontSize: "0.92rem",
+  lineHeight: 1.35,
+};
 
 const tableWrap = {
   overflowX: "auto",
@@ -988,11 +1009,32 @@ const heatTile = {
   justifyContent: "space-between",
 };
 
-const heatTop = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.5rem" };
-const heatLabel = { fontSize: "0.7rem", letterSpacing: "0.18em", textTransform: "uppercase", color: "#e2e8f0", opacity: 0.9 };
+const heatTop = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: "0.5rem",
+};
+const heatLabel = {
+  fontSize: "0.7rem",
+  letterSpacing: "0.18em",
+  textTransform: "uppercase",
+  color: "#e2e8f0",
+  opacity: 0.9,
+};
 const heatNum = { fontSize: "1.55rem", fontWeight: 1000, color: "#f8fafc" };
-const heatMeta = { marginTop: "0.4rem", display: "flex", flexDirection: "column", gap: "0.25rem" };
-const heatLine = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" };
+const heatMeta = {
+  marginTop: "0.4rem",
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.25rem",
+};
+const heatLine = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "0.5rem",
+};
 const heatKey = { fontSize: "0.78rem", color: "#e2e8f0", opacity: 0.9 };
 const heatVal = { fontSize: "0.85rem", fontWeight: 900, color: "#f8fafc" };
 
@@ -1017,7 +1059,8 @@ const breakPanel = {
 };
 
 const labelBand = (acc) => {
-  if (acc === null || typeof acc !== "number") return { t: "NO DATA", c: "#94a3b8" };
+  if (acc === null || typeof acc !== "number")
+    return { t: "NO DATA", c: "#94a3b8" };
   if (acc >= 90) return { t: "STRONG", c: "#22c55e" };
   if (acc >= 70) return { t: "GOOD", c: "#60a5fa" };
   if (acc >= 50) return { t: "OK", c: "#facc15" };
@@ -1026,7 +1069,8 @@ const labelBand = (acc) => {
 };
 
 const heatColour = (acc) => {
-  if (acc === null || typeof acc !== "number") return "rgba(148,163,184,0.10)";
+  if (acc === null || typeof acc !== "number")
+    return "rgba(148,163,184,0.10)";
   if (acc >= 90) return "rgba(34,197,94,0.28)";
   if (acc >= 70) return "rgba(59,130,246,0.24)";
   if (acc >= 50) return "rgba(250,204,21,0.22)";
