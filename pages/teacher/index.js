@@ -1,55 +1,102 @@
 import { useEffect, useMemo, useState } from "react";
 
+/**
+ * Teacher Dashboard (Tabbed)
+ * White, cleaner UI
+ *
+ * Uses existing APIs:
+ *  - /api/teacher/overview
+ *  - /api/teacher/heatmap
+ *  - /api/teacher/table_breakdown
+ *
+ * Settings are saved to localStorage (browser)
+ * Next step (after this): wire student test to read these settings.
+ */
+
 const DEFAULT_CLASS = "M4";
 const DEFAULT_DAYS = 30;
 
+const SETTINGS_KEY = "bmtt_settings_v1";
+const defaultSettings = {
+  questionCount: 25, // 10–60
+  questionSeconds: 6, // 3–6
+};
+
 export default function TeacherDashboard() {
+  // Tabs
+  const [tab, setTab] = useState("leaderboard"); // leaderboard | improved | heatmap | trend | settings
+
+  // Scope filters
   const [scope, setScope] = useState("class"); // class | year | school
   const [classLabel, setClassLabel] = useState(DEFAULT_CLASS);
   const [year, setYear] = useState(4);
   const [days, setDays] = useState(DEFAULT_DAYS);
 
+  // Search + top10 toggle (for leaderboard)
   const [search, setSearch] = useState("");
   const [top10, setTop10] = useState(false);
 
-  // Student drilldown
-  const [selectedStudentId, setSelectedStudentId] = useState(null);
-  const [selectedStudentName, setSelectedStudentName] = useState(null);
-
-  // Heatmap click
+  // Heatmap breakdown selection
   const [selectedTableNum, setSelectedTableNum] = useState(null);
+  const [breakdown, setBreakdown] = useState(null);
 
   // Data
   const [overview, setOverview] = useState(null);
   const [heat, setHeat] = useState(null);
-  const [breakdown, setBreakdown] = useState(null);
-
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
 
-  const effectiveScope = selectedStudentId ? "student" : scope;
+  // Settings state (localStorage)
+  const [settings, setSettings] = useState(defaultSettings);
+  const [settingsSavedMsg, setSettingsSavedMsg] = useState("");
 
+  // Load settings once
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        setSettings({
+          questionCount:
+            typeof parsed.questionCount === "number"
+              ? clamp(parsed.questionCount, 10, 60)
+              : defaultSettings.questionCount,
+          questionSeconds:
+            typeof parsed.questionSeconds === "number"
+              ? clamp(parsed.questionSeconds, 3, 6)
+              : defaultSettings.questionSeconds,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const saveSettings = () => {
+    const safe = {
+      questionCount: clamp(Number(settings.questionCount || 25), 10, 60),
+      questionSeconds: clamp(Number(settings.questionSeconds || 6), 3, 6),
+    };
+    setSettings(safe);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(safe));
+    setSettingsSavedMsg("Saved ✅");
+    setTimeout(() => setSettingsSavedMsg(""), 1500);
+  };
+
+  // Build query params for APIs
   const baseParams = useMemo(() => {
     const p = new URLSearchParams();
-    p.set("scope", effectiveScope);
+    p.set("scope", scope);
     p.set("days", String(days));
-
-    if (effectiveScope === "student") {
-      p.set("student_id", selectedStudentId);
-    } else if (effectiveScope === "class") {
-      p.set("class_label", classLabel);
-    } else if (effectiveScope === "year") {
-      p.set("year", String(year));
-    }
-
+    if (scope === "class") p.set("class_label", classLabel);
+    if (scope === "year") p.set("year", String(year));
     return p;
-  }, [effectiveScope, days, selectedStudentId, classLabel, year]);
+  }, [scope, days, classLabel, year]);
 
   const overviewUrl = useMemo(
     () => `/api/teacher/overview?${baseParams.toString()}`,
     [baseParams]
   );
-
   const heatUrl = useMemo(
     () => `/api/teacher/heatmap?${baseParams.toString()}`,
     [baseParams]
@@ -62,17 +109,26 @@ export default function TeacherDashboard() {
     return `/api/teacher/table_breakdown?${p.toString()}`;
   }, [baseParams, selectedTableNum]);
 
+  // Fetch overview+heatmap together
   const refreshAll = async () => {
     setLoading(true);
     setErr(null);
 
     try {
-      const [oRes, hRes] = await Promise.all([fetch(overviewUrl), fetch(heatUrl)]);
+      const [oRes, hRes] = await Promise.all([
+        fetch(overviewUrl),
+        fetch(heatUrl),
+      ]);
+
       const oJson = await oRes.json();
       const hJson = await hRes.json();
 
-      if (!oRes.ok || !oJson.ok) throw new Error(oJson?.details || oJson?.error || "Overview failed");
-      if (!hRes.ok || !hJson.ok) throw new Error(hJson?.details || hJson?.error || "Heatmap failed");
+      if (!oRes.ok || !oJson.ok) {
+        throw new Error(oJson?.details || oJson?.error || "Overview failed");
+      }
+      if (!hRes.ok || !hJson.ok) {
+        throw new Error(hJson?.details || hJson?.error || "Heatmap failed");
+      }
 
       setOverview(oJson);
       setHeat(hJson);
@@ -85,107 +141,55 @@ export default function TeacherDashboard() {
     }
   };
 
-  const refreshBreakdown = async () => {
-    if (!breakdownUrl) {
-      setBreakdown(null);
-      return;
-    }
-    try {
-      const r = await fetch(breakdownUrl);
-      const j = await r.json();
-      if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Breakdown failed");
-      setBreakdown(j);
-    } catch (e) {
-      setBreakdown(null);
-    }
-  };
-
+  // Refresh whenever scope filters change
   useEffect(() => {
     refreshAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overviewUrl, heatUrl]);
 
+  // Fetch breakdown when table tile is selected
   useEffect(() => {
-    refreshBreakdown();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const run = async () => {
+      if (!breakdownUrl) {
+        setBreakdown(null);
+        return;
+      }
+      try {
+        const r = await fetch(breakdownUrl);
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j?.details || j?.error);
+        setBreakdown(j);
+      } catch {
+        setBreakdown(null);
+      }
+    };
+    run();
   }, [breakdownUrl]);
 
+  // Clear breakdown when scope changes
   useEffect(() => {
     setSelectedTableNum(null);
     setBreakdown(null);
-  }, [effectiveScope, classLabel, year, days, selectedStudentId]);
+  }, [scope, classLabel, year, days]);
 
+  // Derived data
   const rowsAll = overview?.leaderboard || [];
   const trend = overview?.classTrend || [];
   const tableHeat = heat?.tableHeat || [];
   const breakdownRows = breakdown?.breakdown || [];
 
-  // ---------- CLASS LEADERBOARD BANDS ----------
-  // Works for ANY total (10–60). Uses % but labels match your 25-question example.
-  const bandFromScore = (score, total) => {
-    if (typeof score !== "number" || typeof total !== "number" || total <= 0) {
-      return { label: "—", colour: "#94a3b8", bg: "rgba(148,163,184,0.08)", border: "rgba(148,163,184,0.22)" };
-    }
-
-    if (score === total) {
-      return { label: "FULL MARKS", colour: "#22c55e", bg: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.45)" };
-    }
-
-    const pct = (score / total) * 100;
-
-    // Map your 25-Q bands to percentage ranges
-    if (pct >= 80) return { label: "20–24", colour: "#60a5fa", bg: "rgba(59,130,246,0.14)", border: "rgba(59,130,246,0.38)" };
-    if (pct >= 60) return { label: "15–19", colour: "#facc15", bg: "rgba(250,204,21,0.12)", border: "rgba(250,204,21,0.36)" };
-    if (pct >= 40) return { label: "10–14", colour: "#fb923c", bg: "rgba(249,115,22,0.12)", border: "rgba(249,115,22,0.36)" };
-    return { label: "<10", colour: "#ef4444", bg: "rgba(239,68,68,0.12)", border: "rgba(239,68,68,0.36)" };
-  };
-
-  // Band counts (for a “band summary” box)
-  const bandCounts = useMemo(() => {
-    const counts = {
-      FULL: 0,
-      B20: 0,
-      B15: 0,
-      B10: 0,
-      LOW: 0,
-      NONE: 0,
-    };
-
-    for (const r of rowsAll) {
-      const score = r.score;
-      const total = r.total;
-
-      if (typeof score !== "number" || typeof total !== "number" || total <= 0) {
-        counts.NONE += 1;
-        continue;
-      }
-
-      if (score === total) counts.FULL += 1;
-      else {
-        const pct = (score / total) * 100;
-        if (pct >= 80) counts.B20 += 1;
-        else if (pct >= 60) counts.B15 += 1;
-        else if (pct >= 40) counts.B10 += 1;
-        else counts.LOW += 1;
-      }
-    }
-
-    return counts;
-  }, [rowsAll]);
-
-  // Search/top10 filter
   const leaderboard = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = q
-      ? rowsAll.filter((r) => String(r.student || "").toLowerCase().includes(q))
+      ? rowsAll.filter((r) =>
+          String(r.student || "").toLowerCase().includes(q)
+        )
       : rowsAll.slice();
 
-    // Sort by percent desc, then score desc
     list.sort((a, b) => {
       const ap = typeof a.percent === "number" ? a.percent : -1;
       const bp = typeof b.percent === "number" ? b.percent : -1;
       if (bp !== ap) return bp - ap;
-
       const as = typeof a.score === "number" ? a.score : -1;
       const bs = typeof b.score === "number" ? b.score : -1;
       return bs - as;
@@ -198,379 +202,566 @@ export default function TeacherDashboard() {
     return list;
   }, [rowsAll, search, top10]);
 
-  const pageTitle = useMemo(() => {
-    if (selectedStudentId && selectedStudentName) return `Student: ${selectedStudentName}`;
-    if (scope === "class") return `Class: ${classLabel}`;
-    if (scope === "year") return `Year: ${year}`;
-    return "Whole School";
-  }, [selectedStudentId, selectedStudentName, scope, classLabel, year]);
+  // Most improved: uses delta_percent if present; otherwise blank
+  const mostImproved = useMemo(() => {
+    const list = rowsAll
+      .filter((r) => typeof r.delta_percent === "number")
+      .slice()
+      .sort((a, b) => b.delta_percent - a.delta_percent);
 
-  const heatColour = (acc) => {
-    if (acc === null || typeof acc !== "number") return "rgba(148,163,184,0.10)";
-    if (acc >= 90) return "rgba(34,197,94,0.28)";
-    if (acc >= 70) return "rgba(59,130,246,0.24)";
-    if (acc >= 50) return "rgba(250,204,21,0.22)";
-    if (acc >= 30) return "rgba(249,115,22,0.22)";
-    return "rgba(239,68,68,0.22)";
-  };
+    return list;
+  }, [rowsAll]);
 
-  const labelBand = (acc) => {
-    if (acc === null || typeof acc !== "number") return { t: "NO DATA", c: "#94a3b8" };
-    if (acc >= 90) return { t: "STRONG", c: "#22c55e" };
-    if (acc >= 70) return { t: "GOOD", c: "#60a5fa" };
-    if (acc >= 50) return { t: "OK", c: "#facc15" };
-    if (acc >= 30) return { t: "WEAK", c: "#fb923c" };
-    return { t: "RISK", c: "#ef4444" };
-  };
+  const pageSubtitle = useMemo(() => {
+    if (scope === "class") return `Class ${classLabel} • last ${days} days`;
+    if (scope === "year") return `Year ${year} • last ${days} days`;
+    return `Whole school • last ${days} days`;
+  }, [scope, classLabel, year, days]);
 
   return (
-    <div style={outer}>
-      <div style={shell}>
-        <div style={topBar}>
-          <div style={{ display: "flex", gap: "0.9rem", alignItems: "center" }}>
-            <div style={logoCircle}>
-              <span style={{ fontWeight: 900, color: "#0f172a" }}>BM</span>
-            </div>
-            <div>
-              <div style={kicker}>TEACHER DASHBOARD</div>
-              <div style={title}>Times Tables Arena</div>
-              <div style={subtitle}>{pageTitle}</div>
-            </div>
+    <div style={styles.page}>
+      {/* Top header */}
+      <div style={styles.topBar}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          <div style={styles.logoCircle}>BM</div>
+          <div>
+            <div style={styles.kicker}>Teacher Dashboard</div>
+            <div style={styles.title}>Times Tables Arena</div>
+            <div style={styles.subTitle}>{pageSubtitle}</div>
           </div>
-          <a href="/" style={homeLink}>Home</a>
         </div>
 
-        {/* Controls */}
-        <div style={controls}>
-          <div style={control}>
-            <label style={label}>SCOPE</label>
-            <select
-              value={scope}
-              onChange={(e) => { setScope(e.target.value); setSelectedStudentId(null); setSelectedStudentName(null); }}
-              style={select}
-            >
-              <option value="class">Class</option>
-              <option value="year">Year group</option>
-              <option value="school">Whole school</option>
-            </select>
-          </div>
-
-          <div style={control}>
-            <label style={label}>CLASS</label>
-            <select
-              value={classLabel}
-              onChange={(e) => setClassLabel(e.target.value)}
-              disabled={scope !== "class"}
-              style={{ ...select, opacity: scope === "class" ? 1 : 0.5 }}
-            >
-              <option value="M3">M3</option>
-              <option value="B3">B3</option>
-              <option value="M4">M4</option>
-              <option value="B4">B4</option>
-              <option value="M5">M5</option>
-              <option value="B5">B5</option>
-              <option value="M6">M6</option>
-              <option value="B6">B6</option>
-            </select>
-          </div>
-
-          <div style={control}>
-            <label style={label}>YEAR</label>
-            <select
-              value={year}
-              onChange={(e) => setYear(Number(e.target.value))}
-              disabled={scope !== "year"}
-              style={{ ...select, opacity: scope === "year" ? 1 : 0.5 }}
-            >
-              <option value={3}>Year 3</option>
-              <option value={4}>Year 4</option>
-              <option value={5}>Year 5</option>
-              <option value={6}>Year 6</option>
-            </select>
-          </div>
-
-          <div style={control}>
-            <label style={label}>DAYS</label>
-            <select value={days} onChange={(e) => setDays(Number(e.target.value))} style={select}>
-              <option value={7}>7</option>
-              <option value={14}>14</option>
-              <option value={30}>30</option>
-              <option value={60}>60</option>
-              <option value={90}>90</option>
-            </select>
-          </div>
-
-          <div style={{ ...control, flex: 1 }}>
-            <label style={label}>SEARCH</label>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Type a name…" style={input} />
-          </div>
-
-          <button type="button" onClick={() => setTop10((p) => !p)} style={{ ...pill, background: top10 ? "rgba(250,204,21,0.18)" : "rgba(148,163,184,0.12)" }}>
-            TOP 10%
-          </button>
-
-          <button type="button" onClick={refreshAll} style={primary}>
-            REFRESH
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <a href="/" style={styles.link}>
+            Home
+          </a>
+          <button onClick={refreshAll} style={styles.primaryBtn} type="button">
+            Refresh
           </button>
         </div>
+      </div>
 
-        {selectedStudentId && (
-          <div style={banner}>
+      {/* Filters */}
+      <div style={styles.filterCard}>
+        <FilterSelect
+          label="Scope"
+          value={scope}
+          onChange={(v) => setScope(v)}
+          options={[
+            { value: "class", label: "Class" },
+            { value: "year", label: "Year group" },
+            { value: "school", label: "Whole school" },
+          ]}
+        />
+
+        <FilterSelect
+          label="Class"
+          value={classLabel}
+          onChange={(v) => setClassLabel(v)}
+          disabled={scope !== "class"}
+          options={[
+            { value: "M3", label: "M3" },
+            { value: "B3", label: "B3" },
+            { value: "M4", label: "M4" },
+            { value: "B4", label: "B4" },
+            { value: "M5", label: "M5" },
+            { value: "B5", label: "B5" },
+            { value: "M6", label: "M6" },
+            { value: "B6", label: "B6" },
+          ]}
+        />
+
+        <FilterSelect
+          label="Year"
+          value={String(year)}
+          onChange={(v) => setYear(Number(v))}
+          disabled={scope !== "year"}
+          options={[
+            { value: "3", label: "Year 3" },
+            { value: "4", label: "Year 4" },
+            { value: "5", label: "Year 5" },
+            { value: "6", label: "Year 6" },
+          ]}
+        />
+
+        <FilterSelect
+          label="Days"
+          value={String(days)}
+          onChange={(v) => setDays(Number(v))}
+          options={[
+            { value: "7", label: "7" },
+            { value: "14", label: "14" },
+            { value: "30", label: "30" },
+            { value: "60", label: "60" },
+            { value: "90", label: "90" },
+          ]}
+        />
+      </div>
+
+      {/* Tabs */}
+      <div style={styles.tabs}>
+        <TabButton active={tab === "leaderboard"} onClick={() => setTab("leaderboard")}>
+          Leaderboard
+        </TabButton>
+        <TabButton active={tab === "improved"} onClick={() => setTab("improved")}>
+          Most Improved
+        </TabButton>
+        <TabButton active={tab === "heatmap"} onClick={() => setTab("heatmap")}>
+          Times Table Heat Map
+        </TabButton>
+        <TabButton active={tab === "trend"} onClick={() => setTab("trend")}>
+          Trend
+        </TabButton>
+        <TabButton active={tab === "settings"} onClick={() => setTab("settings")}>
+          Settings
+        </TabButton>
+      </div>
+
+      {/* Errors */}
+      {err && (
+        <div style={styles.errorBox}>
+          <strong>Error:</strong> {err}
+        </div>
+      )}
+
+      {/* Content */}
+      {tab === "leaderboard" && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
             <div>
-              <strong>Student view:</strong> {selectedStudentName}
-              <div style={{ fontSize: "0.85rem", color: "#cbd5e1", marginTop: "0.15rem" }}>
-                Click “Exit” to return to {scope}.
+              <div style={styles.cardTitle}>Leaderboard</div>
+              <div style={styles.cardSub}>
+                Search students, use Top 10%, and see latest results.
               </div>
             </div>
-            <button type="button" onClick={() => { setSelectedStudentId(null); setSelectedStudentName(null); }} style={pill}>
-              Exit
-            </button>
-          </div>
-        )}
 
-        {err && (
-          <div style={errorBox}>
-            <strong>Error:</strong> {err}
-          </div>
-        )}
-
-        {/* NEW: BAND SUMMARY */}
-        <div style={bandSummary}>
-          <BandChip colour="#22c55e" label="Full marks" value={bandCounts.FULL} />
-          <BandChip colour="#60a5fa" label="20–24 band" value={bandCounts.B20} />
-          <BandChip colour="#facc15" label="15–19 band" value={bandCounts.B15} />
-          <BandChip colour="#fb923c" label="10–14 band" value={bandCounts.B10} />
-          <BandChip colour="#ef4444" label="Below 10" value={bandCounts.LOW} />
-          <BandChip colour="#94a3b8" label="No data" value={bandCounts.NONE} />
-        </div>
-
-        <div style={grid}>
-          {/* Leaderboard */}
-          <div style={card}>
-            <div style={cardTitle}>Class Leaderboard</div>
-            <div style={cardSub}>
-              Bands are <strong>percentage-based</strong> so they still work when total questions changes (10–60),
-              but the labels match your 25-question bands.
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name…"
+                style={styles.search}
+              />
+              <button
+                type="button"
+                onClick={() => setTop10((p) => !p)}
+                style={{
+                  ...styles.chipBtn,
+                  background: top10 ? "#EEF2FF" : "#F8FAFC",
+                }}
+              >
+                TOP 10%
+              </button>
             </div>
+          </div>
 
-            <div style={tableWrap}>
-              <table style={table}>
+          <div style={styles.tableWrap}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Student</th>
+                  <th style={styles.th}>Class</th>
+                  <th style={styles.th}>Latest</th>
+                  <th style={styles.th}>Score</th>
+                  <th style={styles.th}>Percent</th>
+                  <th style={styles.th}>Attempts</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td colSpan={6} style={styles.tdMuted}>Loading…</td>
+                  </tr>
+                )}
+
+                {!loading && leaderboard.length === 0 && (
+                  <tr>
+                    <td colSpan={6} style={styles.tdMuted}>
+                      No data yet — run some student tests.
+                    </td>
+                  </tr>
+                )}
+
+                {!loading &&
+                  leaderboard.map((r) => (
+                    <tr key={r.student_id}>
+                      <td style={styles.tdStrong}>{r.student || "—"}</td>
+                      <td style={styles.td}>{r.class_label || "—"}</td>
+                      <td style={styles.td}>
+                        {r.latest_at ? formatDate(r.latest_at) : "—"}
+                      </td>
+                      <td style={styles.td}>
+                        {typeof r.score === "number" && typeof r.total === "number"
+                          ? `${r.score}/${r.total}`
+                          : "—"}
+                      </td>
+                      <td style={styles.td}>
+                        {typeof r.percent === "number" ? (
+                          <span style={pillForPercent(r.percent)}>{r.percent}%</span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td style={styles.td}>{r.attempts_in_range ?? 0}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "improved" && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <div>
+              <div style={styles.cardTitle}>Most Improved</div>
+              <div style={styles.cardSub}>
+                Uses <code>delta_percent</code> (change since previous attempt).
+              </div>
+            </div>
+          </div>
+
+          {loading && <div style={styles.tdMuted}>Loading…</div>}
+
+          {!loading && mostImproved.length === 0 && (
+            <div style={styles.tdMuted}>
+              No improvements recorded yet (need at least 2 attempts per student).
+            </div>
+          )}
+
+          {!loading && mostImproved.length > 0 && (
+            <div style={styles.tableWrap}>
+              <table style={styles.table}>
                 <thead>
                   <tr>
-                    <th style={th}>STUDENT</th>
-                    <th style={th}>LATEST</th>
-                    <th style={th}>SCORE</th>
-                    <th style={th}>BAND</th>
-                    <th style={th}>IMPROVEMENT</th>
-                    <th style={th}>ATTEMPTS</th>
+                    <th style={styles.th}>Student</th>
+                    <th style={styles.th}>Class</th>
+                    <th style={styles.th}>Latest %</th>
+                    <th style={styles.th}>Change</th>
+                    <th style={styles.th}>Attempts</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {loading && (
-                    <tr><td colSpan={6} style={tdMuted}>Loading…</td></tr>
-                  )}
-
-                  {!loading && leaderboard.length === 0 && (
-                    <tr><td colSpan={6} style={tdMuted}>No students yet. Run some tests first.</td></tr>
-                  )}
-
-                  {!loading && leaderboard.map((r) => {
-                    const latest = r.latest_at ? formatDate(r.latest_at) : "—";
-                    const scoreText =
-                      typeof r.score === "number" && typeof r.total === "number"
-                        ? `${r.score}/${r.total}`
-                        : "—";
-
-                    const band = bandFromScore(r.score, r.total);
-                    const delta = typeof r.delta_percent === "number" ? r.delta_percent : null;
-
-                    return (
-                      <tr
-                        key={r.student_id}
-                        style={{ background: band.bg, cursor: "pointer" }}
-                        onClick={() => {
-                          setSelectedStudentId(r.student_id);
-                          setSelectedStudentName(r.student || "Student");
-                        }}
-                        title="Click to drill down"
-                      >
-                        <td style={td}>
-                          <div style={{ fontWeight: 900, color: "#f8fafc" }}>{r.student || "—"}</div>
-                          <div style={{ fontSize: "0.85rem", color: "#94a3b8" }}>{r.class_label || "—"}</div>
-                        </td>
-                        <td style={td}>{latest}</td>
-                        <td style={td}>{scoreText}</td>
-                        <td style={td}>
-                          <span style={{ ...badge, borderColor: band.border }}>
-                            <span style={{ color: band.colour, fontWeight: 1000 }}>{band.label}</span>
-                          </span>
-                        </td>
-                        <td style={td}>
-                          {delta === null ? (
-                            <span style={{ color: "#94a3b8" }}>—</span>
-                          ) : (
-                            <span style={{ fontWeight: 900, color: delta >= 0 ? "#22c55e" : "#ef4444" }}>
-                              {delta >= 0 ? `+${delta}%` : `${delta}%`}
-                            </span>
-                          )}
-                        </td>
-                        <td style={td}>{r.attempts_in_range ?? 0}</td>
-                      </tr>
-                    );
-                  })}
+                  {mostImproved.map((r) => (
+                    <tr key={r.student_id}>
+                      <td style={styles.tdStrong}>{r.student}</td>
+                      <td style={styles.td}>{r.class_label}</td>
+                      <td style={styles.td}>
+                        {typeof r.percent === "number" ? `${r.percent}%` : "—"}
+                      </td>
+                      <td style={styles.td}>
+                        <span
+                          style={{
+                            ...styles.deltaPill,
+                            color: r.delta_percent >= 0 ? "#16A34A" : "#DC2626",
+                            background:
+                              r.delta_percent >= 0 ? "#ECFDF5" : "#FEF2F2",
+                            borderColor:
+                              r.delta_percent >= 0 ? "#BBF7D0" : "#FECACA",
+                          }}
+                        >
+                          {r.delta_percent >= 0 ? "+" : ""}
+                          {r.delta_percent}%
+                        </span>
+                      </td>
+                      <td style={styles.td}>{r.attempts_in_range ?? 0}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
+          )}
+        </div>
+      )}
+
+      {tab === "heatmap" && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <div>
+              <div style={styles.cardTitle}>Times Table Heat Map (1–19)</div>
+              <div style={styles.cardSub}>
+                Click a tile to see breakdown for that table.
+              </div>
+            </div>
           </div>
 
-          {/* Heatmap + breakdown */}
-          <div style={card}>
-            <div style={cardTitle}>Times Table Heatmap (1–19)</div>
-            <div style={cardSub}>Click a tile for breakdown.</div>
+          {loading && <div style={styles.tdMuted}>Loading…</div>}
 
-            {tableHeat.length === 0 ? (
-              <div style={emptyBox}>No heatmap data yet.</div>
-            ) : (
-              <>
-                <div style={heatWrap}>
-                  {tableHeat.map((cell) => {
-                    const t = cell.table_num;
-                    const acc = cell.accuracy;
-                    const total = cell.total || 0;
-                    const correct = cell.correct || 0;
-                    const b = labelBand(acc);
-                    const selected = selectedTableNum === t;
+          {!loading && tableHeat.length === 0 && (
+            <div style={styles.tdMuted}>No heatmap data yet.</div>
+          )}
 
-                    return (
-                      <button
-                        type="button"
-                        key={t}
-                        onClick={() => setSelectedTableNum(t)}
-                        style={{
-                          ...heatTile,
-                          background: heatColour(acc),
-                          border: selected ? "2px solid rgba(250,204,21,0.85)" : "1px solid rgba(148,163,184,0.18)",
-                        }}
-                        title={`Table ${t}: ${correct}/${total}`}
-                      >
-                        <div style={heatTop}>
-                          <div style={heatLabel}>TABLE</div>
-                          <div style={heatNum}>{t}</div>
-                        </div>
-                        <div style={heatRow}>
-                          <div style={heatBadge(b.c)}>{b.t}</div>
-                          <div style={heatPct}>{typeof acc === "number" ? `${acc}%` : "—"}</div>
-                        </div>
-                        <div style={heatMeta}>
-                          <div style={heatLine}>
-                            <span style={heatKey}>Correct</span>
-                            <span style={heatVal}>{correct}/{total}</span>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div style={breakPanel}>
-                  <div style={breakHeader}>
-                    <div>
-                      <div style={breakKicker}>Table breakdown</div>
-                      <div style={breakTitle}>{selectedTableNum ? `×${selectedTableNum}` : "Click a tile"}</div>
-                    </div>
-                    {selectedTableNum && (
-                      <button type="button" onClick={() => setSelectedTableNum(null)} style={pill}>
-                        Clear
-                      </button>
-                    )}
-                  </div>
-
-                  {!selectedTableNum && <div style={emptyBox}>Click a tile above to see breakdown.</div>}
-
-                  {selectedTableNum && breakdownRows.length === 0 && (
-                    <div style={emptyBox}>No breakdown data yet for ×{selectedTableNum}.</div>
-                  )}
-
-                  {selectedTableNum && breakdownRows.length > 0 && (
-                    <div style={breakTableWrap}>
-                      <table style={{ ...table, minWidth: "620px" }}>
-                        <thead>
-                          <tr>
-                            <th style={th}>STUDENT</th>
-                            <th style={th}>CLASS</th>
-                            <th style={th}>TOTAL</th>
-                            <th style={th}>CORRECT</th>
-                            <th style={th}>ACCURACY</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {breakdownRows.map((r) => {
-                            const acc = r.accuracy;
-                            const b = labelBand(acc);
-                            return (
-                              <tr key={r.student_id} style={{ background: "rgba(148,163,184,0.06)" }}>
-                                <td style={td}><strong>{r.student || "—"}</strong></td>
-                                <td style={td}>{r.class_label || "—"}</td>
-                                <td style={td}>{r.total ?? 0}</td>
-                                <td style={td}>{r.correct ?? 0}</td>
-                                <td style={td}>
-                                  <span style={{ ...badge, borderColor: "rgba(148,163,184,0.25)" }}>
-                                    <span style={{ color: b.c, fontWeight: 1000 }}>{b.t}</span>
-                                    <span style={{ marginLeft: 10, fontWeight: 1000 }}>
-                                      {typeof acc === "number" ? `${acc}%` : "—"}
-                                    </span>
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Trend */}
-          <div style={card}>
-            <div style={cardTitle}>Trend</div>
-            <div style={cardSub}>Average % per day (last {days} days).</div>
-
-            {trend.length === 0 ? (
-              <div style={emptyBox}>No trend data yet.</div>
-            ) : (
-              <div style={trendStack}>
-                {trend.map((t) => {
-                  const pct = typeof t.avg_percent === "number" ? t.avg_percent : 0;
+          {!loading && tableHeat.length > 0 && (
+            <>
+              <div style={styles.heatGrid}>
+                {tableHeat.map((cell) => {
+                  const t = cell.table_num;
+                  const acc = cell.accuracy;
+                  const selected = selectedTableNum === t;
                   return (
-                    <div key={t.day} style={trendRow}>
-                      <div style={trendDay}>{t.day}</div>
-                      <div style={trendOuter}>
-                        <div style={{ ...trendInner, width: `${Math.max(0, Math.min(100, pct))}%` }} />
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setSelectedTableNum(t)}
+                      style={{
+                        ...styles.heatTile,
+                        borderColor: selected ? "#2563EB" : "#E5E7EB",
+                        background: heatBg(acc),
+                      }}
+                      title={`Table ${t}`}
+                    >
+                      <div style={styles.heatTop}>
+                        <div style={styles.heatLabel}>TABLE</div>
+                        <div style={styles.heatNum}>{t}</div>
                       </div>
-                      <div style={trendPct}>{typeof t.avg_percent === "number" ? `${t.avg_percent}%` : "—"}</div>
-                    </div>
+                      <div style={styles.heatMeta}>
+                        <div style={styles.heatPct}>
+                          {typeof acc === "number" ? `${acc}%` : "—"}
+                        </div>
+                        <div style={styles.heatSmall}>
+                          {cell.correct ?? 0}/{cell.total ?? 0} correct
+                        </div>
+                      </div>
+                    </button>
                   );
                 })}
               </div>
-            )}
+
+              <div style={styles.breakPanel}>
+                <div style={styles.breakHeader}>
+                  <div>
+                    <div style={styles.breakKicker}>Table breakdown</div>
+                    <div style={styles.breakTitle}>
+                      {selectedTableNum ? `×${selectedTableNum}` : "Click a tile"}
+                    </div>
+                  </div>
+
+                  {selectedTableNum && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedTableNum(null)}
+                      style={styles.chipBtn}
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                {!selectedTableNum && (
+                  <div style={styles.tdMuted}>
+                    Click any table tile above to see who is strongest/weakest.
+                  </div>
+                )}
+
+                {selectedTableNum && breakdownRows.length === 0 && (
+                  <div style={styles.tdMuted}>No breakdown data yet for ×{selectedTableNum}.</div>
+                )}
+
+                {selectedTableNum && breakdownRows.length > 0 && (
+                  <div style={styles.tableWrap}>
+                    <table style={styles.table}>
+                      <thead>
+                        <tr>
+                          <th style={styles.th}>Student</th>
+                          <th style={styles.th}>Class</th>
+                          <th style={styles.th}>Total</th>
+                          <th style={styles.th}>Correct</th>
+                          <th style={styles.th}>Accuracy</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {breakdownRows.map((r) => (
+                          <tr key={r.student_id}>
+                            <td style={styles.tdStrong}>{r.student || "—"}</td>
+                            <td style={styles.td}>{r.class_label || "—"}</td>
+                            <td style={styles.td}>{r.total ?? 0}</td>
+                            <td style={styles.td}>{r.correct ?? 0}</td>
+                            <td style={styles.td}>
+                              {typeof r.accuracy === "number" ? (
+                                <span style={pillForPercent(r.accuracy)}>
+                                  {r.accuracy}%
+                                </span>
+                              ) : (
+                                "—"
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === "trend" && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <div>
+              <div style={styles.cardTitle}>Trend</div>
+              <div style={styles.cardSub}>Average % per day (last {days} days).</div>
+            </div>
+          </div>
+
+          {loading && <div style={styles.tdMuted}>Loading…</div>}
+
+          {!loading && trend.length === 0 && (
+            <div style={styles.tdMuted}>No trend data yet.</div>
+          )}
+
+          {!loading && trend.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {trend.map((t) => {
+                const pct = typeof t.avg_percent === "number" ? t.avg_percent : 0;
+                return (
+                  <div key={t.day} style={styles.trendRow}>
+                    <div style={styles.trendDay}>{t.day}</div>
+                    <div style={styles.trendOuter}>
+                      <div style={{ ...styles.trendInner, width: `${clamp(pct, 0, 100)}%` }} />
+                    </div>
+                    <div style={styles.trendPct}>
+                      {typeof t.avg_percent === "number" ? `${t.avg_percent}%` : "—"}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "settings" && (
+        <div style={styles.card}>
+          <div style={styles.cardHeader}>
+            <div>
+              <div style={styles.cardTitle}>Settings</div>
+              <div style={styles.cardSub}>
+                These are saved in your browser. Next we’ll connect these settings
+                so student tests automatically use them.
+              </div>
+            </div>
+          </div>
+
+          <div style={styles.settingsGrid}>
+            <div style={styles.settingBox}>
+              <div style={styles.settingLabel}>Number of questions</div>
+              <div style={styles.settingHint}>Min 10 • Max 60</div>
+
+              <input
+                type="range"
+                min="10"
+                max="60"
+                value={settings.questionCount}
+                onChange={(e) =>
+                  setSettings((p) => ({ ...p, questionCount: Number(e.target.value) }))
+                }
+                style={{ width: "100%", marginTop: 10 }}
+              />
+              <div style={styles.settingValue}>{settings.questionCount}</div>
+            </div>
+
+            <div style={styles.settingBox}>
+              <div style={styles.settingLabel}>Time per question (seconds)</div>
+              <div style={styles.settingHint}>3 • 4 • 5 • 6</div>
+
+              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                {[3, 4, 5, 6].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setSettings((p) => ({ ...p, questionSeconds: n }))}
+                    style={{
+                      ...styles.chipBtn,
+                      borderColor: settings.questionSeconds === n ? "#2563EB" : "#E5E7EB",
+                      background: settings.questionSeconds === n ? "#EEF2FF" : "#F8FAFC",
+                      fontWeight: 800,
+                    }}
+                  >
+                    {n}s
+                  </button>
+                ))}
+              </div>
+
+              <div style={styles.settingValue}>{settings.questionSeconds} seconds</div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14 }}>
+            <button type="button" onClick={saveSettings} style={styles.primaryBtn}>
+              Save settings
+            </button>
+            {settingsSavedMsg && <span style={{ color: "#16A34A", fontWeight: 800 }}>{settingsSavedMsg}</span>}
+          </div>
+
+          <div style={styles.noteBox}>
+            <strong>Next step (after this):</strong>
+            <div style={{ marginTop: 6 }}>
+              I’ll update your student test page so it reads these settings and uses:
+              <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
+                <li>{settings.questionCount} questions</li>
+                <li>{settings.questionSeconds} seconds per question</li>
+              </ul>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
-function BandChip({ colour, label, value }) {
+/* ---------------- Components ---------------- */
+
+function TabButton({ active, onClick, children }) {
   return (
-    <div style={{ ...chip, borderColor: `${colour}66` }}>
-      <div style={{ ...dot, background: colour }} />
-      <div style={{ color: "#e2e8f0", fontWeight: 900 }}>{label}</div>
-      <div style={{ marginLeft: "auto", fontWeight: 1000, color: "#f8fafc" }}>{value}</div>
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        ...styles.tabBtn,
+        background: active ? "#111827" : "#FFFFFF",
+        color: active ? "#FFFFFF" : "#111827",
+        borderColor: active ? "#111827" : "#E5E7EB",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function FilterSelect({ label, value, onChange, options, disabled }) {
+  return (
+    <div style={{ minWidth: 170 }}>
+      <div style={styles.filterLabel}>{label}</div>
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          ...styles.select,
+          opacity: disabled ? 0.55 : 1,
+          cursor: disabled ? "not-allowed" : "pointer",
+        }}
+      >
+        {options.map((o) => (
+          <option value={o.value} key={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
     </div>
   );
+}
+
+/* ---------------- Helpers ---------------- */
+
+function clamp(n, min, max) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, x));
 }
 
 function formatDate(iso) {
@@ -588,246 +779,316 @@ function formatDate(iso) {
   }
 }
 
-/* ---------- Styles ---------- */
+function pillForPercent(pct) {
+  const p = clamp(pct, 0, 100);
+  let bg = "#F3F4F6";
+  let border = "#E5E7EB";
+  let col = "#111827";
 
-const outer = {
-  minHeight: "100vh",
-  background:
-    "radial-gradient(circle at top, rgba(250,204,21,0.18) 0, #0b1220 40%, #050816 100%)",
-  padding: "1.5rem",
-  color: "white",
-  fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+  if (p >= 90) { bg = "#ECFDF5"; border = "#BBF7D0"; col = "#166534"; }
+  else if (p >= 70) { bg = "#EFF6FF"; border = "#BFDBFE"; col = "#1D4ED8"; }
+  else if (p >= 50) { bg = "#FFFBEB"; border = "#FDE68A"; col = "#92400E"; }
+  else if (p >= 30) { bg = "#FFF7ED"; border = "#FED7AA"; col = "#9A3412"; }
+  else { bg = "#FEF2F2"; border = "#FECACA"; col = "#991B1B"; }
+
+  return {
+    display: "inline-block",
+    padding: "4px 10px",
+    borderRadius: 999,
+    fontWeight: 900,
+    border: `1px solid ${border}`,
+    background: bg,
+    color: col,
+    fontSize: "0.9rem",
+  };
+}
+
+function heatBg(acc) {
+  if (acc === null || typeof acc !== "number") return "#F8FAFC";
+  if (acc >= 90) return "#ECFDF5";
+  if (acc >= 70) return "#EFF6FF";
+  if (acc >= 50) return "#FFFBEB";
+  if (acc >= 30) return "#FFF7ED";
+  return "#FEF2F2";
+}
+
+/* ---------------- Styles ---------------- */
+
+const styles = {
+  page: {
+    minHeight: "100vh",
+    background: "#F7F7FB",
+    padding: "18px",
+    fontFamily:
+      "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    color: "#111827",
+  },
+
+  topBar: {
+    maxWidth: 1150,
+    margin: "0 auto",
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "center",
+    padding: "16px 16px",
+    background: "white",
+    borderRadius: 16,
+    border: "1px solid #E5E7EB",
+    boxShadow: "0 10px 20px rgba(0,0,0,0.04)",
+  },
+
+  logoCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 999,
+    background: "#FACC15",
+    display: "grid",
+    placeItems: "center",
+    fontWeight: 1000,
+    color: "#111827",
+    border: "1px solid #E5E7EB",
+  },
+
+  kicker: {
+    fontSize: "0.78rem",
+    letterSpacing: "0.18em",
+    textTransform: "uppercase",
+    color: "#6B7280",
+    fontWeight: 800,
+  },
+  title: { fontSize: "1.4rem", fontWeight: 1000, marginTop: 2 },
+  subTitle: { color: "#6B7280", marginTop: 2, fontSize: "0.95rem" },
+
+  link: { color: "#2563EB", textDecoration: "underline", fontWeight: 700 },
+
+  primaryBtn: {
+    border: "none",
+    borderRadius: 999,
+    padding: "10px 14px",
+    fontWeight: 900,
+    cursor: "pointer",
+    color: "white",
+    background: "linear-gradient(135deg,#2563EB,#60A5FA)",
+  },
+
+  filterCard: {
+    maxWidth: 1150,
+    margin: "12px auto 0",
+    display: "flex",
+    gap: 12,
+    flexWrap: "wrap",
+    padding: "14px 16px",
+    background: "white",
+    borderRadius: 16,
+    border: "1px solid #E5E7EB",
+    boxShadow: "0 10px 20px rgba(0,0,0,0.04)",
+  },
+
+  filterLabel: {
+    fontSize: "0.78rem",
+    fontWeight: 900,
+    color: "#6B7280",
+    marginBottom: 6,
+  },
+
+  select: {
+    width: "100%",
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #E5E7EB",
+    background: "#FFFFFF",
+    outline: "none",
+  },
+
+  tabs: {
+    maxWidth: 1150,
+    margin: "12px auto 0",
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+  },
+
+  tabBtn: {
+    padding: "10px 14px",
+    borderRadius: 999,
+    border: "1px solid #E5E7EB",
+    cursor: "pointer",
+    fontWeight: 900,
+  },
+
+  card: {
+    maxWidth: 1150,
+    margin: "12px auto 0",
+    padding: 16,
+    background: "white",
+    borderRadius: 16,
+    border: "1px solid #E5E7EB",
+    boxShadow: "0 10px 20px rgba(0,0,0,0.04)",
+  },
+
+  cardHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    flexWrap: "wrap",
+    alignItems: "center",
+  },
+
+  cardTitle: { fontSize: "1.2rem", fontWeight: 1000 },
+  cardSub: { color: "#6B7280", marginTop: 4, lineHeight: 1.35 },
+
+  search: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #E5E7EB",
+    outline: "none",
+    minWidth: 220,
+  },
+
+  chipBtn: {
+    padding: "10px 12px",
+    borderRadius: 999,
+    border: "1px solid #E5E7EB",
+    background: "#F8FAFC",
+    cursor: "pointer",
+    fontWeight: 900,
+  },
+
+  tableWrap: {
+    marginTop: 14,
+    borderRadius: 14,
+    border: "1px solid #E5E7EB",
+    overflowX: "auto",
+  },
+
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+    minWidth: 840,
+  },
+
+  th: {
+    textAlign: "left",
+    padding: 12,
+    fontSize: "0.78rem",
+    letterSpacing: "0.14em",
+    textTransform: "uppercase",
+    color: "#6B7280",
+    background: "#F8FAFC",
+    borderBottom: "1px solid #E5E7EB",
+  },
+
+  td: {
+    padding: 12,
+    borderBottom: "1px solid #F1F5F9",
+    verticalAlign: "middle",
+    color: "#111827",
+  },
+
+  tdStrong: {
+    padding: 12,
+    borderBottom: "1px solid #F1F5F9",
+    fontWeight: 900,
+  },
+
+  tdMuted: {
+    padding: 12,
+    color: "#6B7280",
+  },
+
+  errorBox: {
+    maxWidth: 1150,
+    margin: "12px auto 0",
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid #FECACA",
+    background: "#FEF2F2",
+    color: "#991B1B",
+    fontWeight: 700,
+  },
+
+  heatGrid: {
+    marginTop: 14,
+    display: "grid",
+    gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+    gap: 10,
+  },
+
+  heatTile: {
+    textAlign: "left",
+    borderRadius: 14,
+    border: "1px solid #E5E7EB",
+    padding: 12,
+    cursor: "pointer",
+    background: "#F8FAFC",
+    minHeight: 92,
+  },
+
+  heatTop: { display: "flex", justifyContent: "space-between", alignItems: "baseline" },
+  heatLabel: { fontSize: "0.72rem", letterSpacing: "0.16em", color: "#6B7280", fontWeight: 900 },
+  heatNum: { fontSize: "1.35rem", fontWeight: 1000 },
+  heatMeta: { marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 },
+  heatPct: { fontWeight: 1000 },
+  heatSmall: { color: "#6B7280", fontSize: "0.9rem" },
+
+  breakPanel: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 14,
+    border: "1px solid #E5E7EB",
+    background: "#F8FAFC",
+  },
+
+  breakHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+  },
+
+  breakKicker: { fontSize: "0.78rem", letterSpacing: "0.14em", textTransform: "uppercase", color: "#6B7280", fontWeight: 900 },
+  breakTitle: { fontSize: "1.2rem", fontWeight: 1000 },
+
+  trendRow: { display: "grid", gridTemplateColumns: "110px 1fr 60px", gap: 10, alignItems: "center" },
+  trendDay: { color: "#111827", fontWeight: 800 },
+  trendOuter: { height: 10, borderRadius: 999, background: "#EEF2FF", overflow: "hidden", border: "1px solid #E5E7EB" },
+  trendInner: { height: "100%", borderRadius: 999, background: "linear-gradient(90deg,#22C55E,#FACC15,#FB923C,#EF4444)" },
+  trendPct: { textAlign: "right", fontWeight: 900 },
+
+  deltaPill: {
+    display: "inline-block",
+    padding: "4px 10px",
+    borderRadius: 999,
+    border: "1px solid",
+    fontWeight: 1000,
+  },
+
+  settingsGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 12,
+    marginTop: 14,
+  },
+
+  settingBox: {
+    border: "1px solid #E5E7EB",
+    background: "#F8FAFC",
+    borderRadius: 14,
+    padding: 14,
+  },
+
+  settingLabel: { fontWeight: 1000, fontSize: "1rem" },
+  settingHint: { color: "#6B7280", marginTop: 4 },
+  settingValue: { marginTop: 10, fontWeight: 1000, fontSize: "1.15rem" },
+
+  noteBox: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 14,
+    border: "1px solid #BFDBFE",
+    background: "#EFF6FF",
+    color: "#1E3A8A",
+  },
 };
-
-const shell = { maxWidth: "1200px", margin: "0 auto" };
-
-const topBar = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: "1rem",
-  marginBottom: "1.25rem",
-};
-
-const logoCircle = {
-  width: "56px",
-  height: "56px",
-  borderRadius: "999px",
-  background: "white",
-  border: "3px solid #facc15",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const kicker = {
-  fontSize: "0.8rem",
-  letterSpacing: "0.22em",
-  textTransform: "uppercase",
-  color: "#cbd5e1",
-};
-const title = { fontSize: "1.65rem", fontWeight: 900, color: "#facc15", marginTop: "0.1rem" };
-const subtitle = { fontSize: "0.95rem", color: "#94a3b8", marginTop: "0.15rem" };
-const homeLink = { color: "#93c5fd", textDecoration: "underline", fontSize: "0.95rem", marginTop: "0.45rem" };
-
-const controls = {
-  display: "flex",
-  gap: "0.75rem",
-  flexWrap: "wrap",
-  alignItems: "flex-end",
-  marginBottom: "1rem",
-  padding: "1rem",
-  borderRadius: "18px",
-  background: "rgba(2,6,23,0.65)",
-  border: "1px solid rgba(148,163,184,0.18)",
-  boxShadow: "0 18px 40px rgba(0,0,0,0.35)",
-};
-
-const control = { display: "flex", flexDirection: "column", gap: "0.35rem", minWidth: "160px" };
-const label = { fontSize: "0.75rem", letterSpacing: "0.16em", textTransform: "uppercase", color: "#94a3b8" };
-
-const select = {
-  background: "rgba(15,23,42,0.65)",
-  color: "white",
-  border: "1px solid rgba(148,163,184,0.28)",
-  borderRadius: "999px",
-  padding: "0.65rem 0.85rem",
-  outline: "none",
-};
-
-const input = {
-  background: "rgba(15,23,42,0.65)",
-  color: "white",
-  border: "1px solid rgba(148,163,184,0.28)",
-  borderRadius: "999px",
-  padding: "0.65rem 0.85rem",
-  outline: "none",
-  width: "100%",
-};
-
-const pill = {
-  border: "1px solid rgba(148,163,184,0.22)",
-  borderRadius: "999px",
-  padding: "0.65rem 1rem",
-  color: "white",
-  cursor: "pointer",
-  fontWeight: 800,
-  letterSpacing: "0.12em",
-  background: "rgba(148,163,184,0.12)",
-};
-
-const primary = { ...pill, background: "linear-gradient(135deg,#3b82f6,#60a5fa)", border: "none" };
-
-const banner = {
-  marginBottom: "1rem",
-  padding: "0.9rem 1rem",
-  borderRadius: "16px",
-  background: "rgba(250,204,21,0.12)",
-  border: "1px solid rgba(250,204,21,0.35)",
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: "1rem",
-};
-
-const errorBox = {
-  marginBottom: "1rem",
-  padding: "0.9rem 1rem",
-  borderRadius: "16px",
-  background: "rgba(239,68,68,0.12)",
-  border: "1px solid rgba(239,68,68,0.35)",
-  color: "#fecaca",
-};
-
-const bandSummary = {
-  display: "grid",
-  gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
-  gap: "0.7rem",
-  marginBottom: "1rem",
-};
-
-const chip = {
-  display: "flex",
-  alignItems: "center",
-  gap: "0.6rem",
-  padding: "0.75rem 0.85rem",
-  borderRadius: "16px",
-  border: "1px solid rgba(148,163,184,0.18)",
-  background: "rgba(2,6,23,0.65)",
-};
-
-const dot = { width: "10px", height: "10px", borderRadius: "999px" };
-
-const grid = {
-  display: "grid",
-  gridTemplateColumns: "1.25fr 0.75fr",
-  gap: "1rem",
-};
-
-const card = {
-  background: "rgba(2,6,23,0.72)",
-  border: "1px solid rgba(148,163,184,0.18)",
-  borderRadius: "18px",
-  padding: "1.1rem",
-  boxShadow: "0 18px 40px rgba(0,0,0,0.35)",
-};
-
-const cardTitle = { fontSize: "1.25rem", fontWeight: 900, color: "#facc15" };
-const cardSub = { marginTop: "0.35rem", color: "#cbd5e1", fontSize: "0.92rem", lineHeight: 1.35 };
-
-const tableWrap = { overflowX: "auto", marginTop: "0.9rem", borderRadius: "14px", border: "1px solid rgba(148,163,184,0.12)" };
-const table = { width: "100%", borderCollapse: "collapse", minWidth: "900px" };
-
-const th = {
-  textAlign: "left",
-  padding: "0.8rem",
-  fontSize: "0.8rem",
-  letterSpacing: "0.14em",
-  textTransform: "uppercase",
-  color: "#cbd5e1",
-  background: "rgba(15,23,42,0.65)",
-};
-
-const tdMuted = { padding: "1rem", color: "#94a3b8" };
-
-const td = {
-  padding: "0.85rem 0.8rem",
-  verticalAlign: "middle",
-  borderBottom: "1px solid rgba(148,163,184,0.10)",
-};
-
-const badge = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: "0.5rem",
-  borderRadius: "999px",
-  border: "1px solid rgba(148,163,184,0.22)",
-  padding: "0.25rem 0.6rem",
-  fontWeight: 900,
-  background: "rgba(2,6,23,0.35)",
-};
-
-const emptyBox = {
-  marginTop: "1rem",
-  padding: "0.9rem",
-  borderRadius: "14px",
-  border: "1px dashed rgba(148,163,184,0.28)",
-  color: "#94a3b8",
-};
-
-const trendStack = { display: "flex", flexDirection: "column", gap: "0.6rem", marginTop: "0.9rem" };
-const trendRow = { display: "grid", gridTemplateColumns: "110px 1fr 60px", gap: "0.6rem", alignItems: "center" };
-const trendDay = { fontSize: "0.9rem", color: "#e2e8f0" };
-const trendOuter = {
-  height: "10px",
-  borderRadius: "999px",
-  background: "rgba(15,23,42,0.75)",
-  overflow: "hidden",
-  border: "1px solid rgba(148,163,184,0.18)",
-};
-const trendInner = {
-  height: "100%",
-  borderRadius: "999px",
-  background: "linear-gradient(90deg,#22c55e,#facc15,#f97316,#ef4444)",
-  transition: "width 0.25s ease-out",
-};
-const trendPct = { fontWeight: 900, textAlign: "right", color: "#e2e8f0" };
-
-const heatWrap = { marginTop: "0.9rem", display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: "0.75rem" };
-const heatTile = {
-  width: "100%",
-  minHeight: "112px",
-  borderRadius: "16px",
-  padding: "0.75rem",
-  display: "flex",
-  flexDirection: "column",
-  justifyContent: "space-between",
-  cursor: "pointer",
-  textAlign: "left",
-};
-const heatTop = { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: "0.5rem" };
-const heatLabel = { fontSize: "0.7rem", letterSpacing: "0.18em", textTransform: "uppercase", color: "#e2e8f0", opacity: 0.9 };
-const heatNum = { fontSize: "1.55rem", fontWeight: 1000, color: "#f8fafc" };
-const heatRow = { display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center" };
-const heatPct = { fontWeight: 1000, color: "#f8fafc" };
-const heatMeta = { marginTop: "0.4rem", display: "flex", flexDirection: "column", gap: "0.25rem" };
-const heatLine = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" };
-const heatKey = { fontSize: "0.78rem", color: "#e2e8f0", opacity: 0.9 };
-const heatVal = { fontSize: "0.85rem", fontWeight: 900, color: "#f8fafc" };
-const heatBadge = (color) => ({
-  fontSize: "0.72rem",
-  letterSpacing: "0.16em",
-  textTransform: "uppercase",
-  fontWeight: 1000,
-  padding: "0.25rem 0.5rem",
-  borderRadius: "999px",
-  background: "rgba(2,6,23,0.35)",
-  border: `1px solid ${color}55`,
-  color,
-});
-
-const breakPanel = { marginTop: "1rem", padding: "1rem", borderRadius: "16px", background: "rgba(2,6,23,0.55)", border: "1px solid rgba(148,163,184,0.18)" };
-const breakHeader = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem" };
-const breakKicker = { fontSize: "0.8rem", letterSpacing: "0.16em", textTransform: "uppercase", color: "#94a3b8" };
-const breakTitle = { fontSize: "1.25rem", fontWeight: 1000, color: "#facc15" };
-const breakTableWrap = { marginTop: "0.9rem", overflowX: "auto", borderRadius: "14px", border: "1px solid rgba(148,163,184,0.12)" };
