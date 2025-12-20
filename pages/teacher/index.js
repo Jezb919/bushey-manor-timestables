@@ -155,10 +155,15 @@ export default function TeacherDashboard() {
       ? rows.filter((r) => String(r.student || "").toLowerCase().includes(q))
       : rows;
 
+    // Sort by latest percent (fallback: score)
     filtered.sort((a, b) => {
       const ap = typeof a.percent === "number" ? a.percent : -1;
       const bp = typeof b.percent === "number" ? b.percent : -1;
-      return bp - ap;
+      if (bp !== ap) return bp - ap;
+
+      const as = typeof a.score === "number" ? a.score : -1;
+      const bs = typeof b.score === "number" ? b.score : -1;
+      return bs - as;
     });
 
     if (top10 && filtered.length) {
@@ -180,41 +185,70 @@ export default function TeacherDashboard() {
     return "Whole School";
   }, [selectedStudentId, selectedStudentName, scope, classLabel, year]);
 
-  const bandForPercent = (p) => {
-    if (typeof p !== "number")
+  // ---------- SCORE BAND LOGIC (your bands) ----------
+  // Works for any total (10–60): we convert your 25-question bands into % thresholds.
+  // Full marks: score === total
+  // 20–24 / 25 => 80%–96%
+  // 15–19 / 25 => 60%–76%
+  // 10–14 / 25 => 40%–56%
+  // below 10 / 25 => <40%
+  const scoreBand = (score, total) => {
+    if (typeof score !== "number" || typeof total !== "number" || total <= 0) {
       return {
-        bg: "rgba(148,163,184,0.08)",
-        border: "rgba(148,163,184,0.18)",
         tag: "—",
+        bg: "rgba(148,163,184,0.10)",
+        border: "rgba(148,163,184,0.22)",
+        colour: "#94a3b8",
       };
-    if (p >= 100)
+    }
+
+    if (score === total) {
       return {
+        tag: "FULL MARKS",
         bg: "rgba(34,197,94,0.18)",
-        border: "rgba(34,197,94,0.40)",
-        tag: "FULL",
+        border: "rgba(34,197,94,0.45)",
+        colour: "#22c55e",
       };
-    if (p >= 80)
+    }
+
+    const pct = (score / total) * 100;
+
+    // Equivalent of 20–24 out of 25
+    if (pct >= 80) {
       return {
+        tag: "20–24",
         bg: "rgba(59,130,246,0.16)",
-        border: "rgba(59,130,246,0.35)",
-        tag: "HIGH",
+        border: "rgba(59,130,246,0.38)",
+        colour: "#60a5fa",
       };
-    if (p >= 60)
+    }
+
+    // 15–19 / 25
+    if (pct >= 60) {
       return {
+        tag: "15–19",
         bg: "rgba(250,204,21,0.14)",
-        border: "rgba(250,204,21,0.35)",
-        tag: "OK",
+        border: "rgba(250,204,21,0.38)",
+        colour: "#facc15",
       };
-    if (p >= 40)
+    }
+
+    // 10–14 / 25
+    if (pct >= 40) {
       return {
+        tag: "10–14",
         bg: "rgba(249,115,22,0.14)",
-        border: "rgba(249,115,22,0.35)",
-        tag: "LOW",
+        border: "rgba(249,115,22,0.38)",
+        colour: "#fb923c",
       };
+    }
+
+    // below 10 / 25
     return {
+      tag: "<10",
       bg: "rgba(239,68,68,0.14)",
-      border: "rgba(239,68,68,0.35)",
-      tag: "RISK",
+      border: "rgba(239,68,68,0.40)",
+      colour: "#ef4444",
     };
   };
 
@@ -350,7 +384,11 @@ export default function TeacherDashboard() {
 
           <button
             type="button"
-            onClick={refreshOverviewAndHeat}
+            onClick={() => {
+              setSelectedStudentId(null);
+              setSelectedStudentName(null);
+              refreshOverviewAndHeat();
+            }}
             style={primary}
           >
             REFRESH
@@ -396,8 +434,8 @@ export default function TeacherDashboard() {
           <div style={card}>
             <div style={cardTitle}>Leaderboard</div>
             <div style={cardSub}>
-              Click a student row to drill down. Colour bands are based on latest
-              %.
+              Colour bands are based on <strong>latest raw score</strong> (scaled
+              correctly even if total questions changes).
             </div>
 
             <div style={tableWrap}>
@@ -407,7 +445,7 @@ export default function TeacherDashboard() {
                     <th style={th}>STUDENT</th>
                     <th style={th}>LATEST</th>
                     <th style={th}>SCORE</th>
-                    <th style={th}>%</th>
+                    <th style={th}>BAND</th>
                     <th style={th}>ATTEMPTS</th>
                   </tr>
                 </thead>
@@ -430,15 +468,14 @@ export default function TeacherDashboard() {
 
                   {!loadingOverview &&
                     leaderboard.map((r) => {
-                      const band = bandForPercent(r.percent);
                       const latest = r.latest_at ? formatDate(r.latest_at) : "—";
-                      const scoreText =
-                        typeof r.score === "number" &&
-                        typeof r.total === "number"
-                          ? `${r.score}/${r.total}`
-                          : "—";
-                      const pctText =
-                        typeof r.percent === "number" ? `${r.percent}%` : "—";
+
+                      const hasScore =
+                        typeof r.score === "number" && typeof r.total === "number";
+
+                      const scoreText = hasScore ? `${r.score}/${r.total}` : "—";
+
+                      const band = scoreBand(r.score, r.total);
 
                       return (
                         <tr
@@ -461,9 +498,14 @@ export default function TeacherDashboard() {
                           <td style={td}>{latest}</td>
                           <td style={td}>{scoreText}</td>
                           <td style={td}>
-                            <span style={{ ...badge, borderColor: band.border }}>
-                              {pctText}{" "}
-                              <span style={{ opacity: 0.8, marginLeft: 8 }}>
+                            <span
+                              style={{
+                                ...badge,
+                                borderColor: band.border,
+                                color: "#f8fafc",
+                              }}
+                            >
+                              <span style={{ color: band.colour, fontWeight: 1000 }}>
                                 {band.tag}
                               </span>
                             </span>
@@ -474,6 +516,21 @@ export default function TeacherDashboard() {
                     })}
                 </tbody>
               </table>
+            </div>
+
+            {/* Key */}
+            <div style={keyWrap}>
+              <div style={keyTitle}>Bands key</div>
+              <div style={keyRow}>
+                <KeyPill label="FULL MARKS" colour="#22c55e" />
+                <KeyPill label="20–24" colour="#60a5fa" />
+                <KeyPill label="15–19" colour="#facc15" />
+                <KeyPill label="10–14" colour="#fb923c" />
+                <KeyPill label="<10" colour="#ef4444" />
+              </div>
+              <div style={keyNote}>
+                Bands scale automatically if a test is 10–60 questions.
+              </div>
             </div>
           </div>
 
@@ -487,14 +544,7 @@ export default function TeacherDashboard() {
             {trend.length === 0 ? (
               <div style={emptyBox}>No trend data yet.</div>
             ) : (
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.6rem",
-                  marginTop: "0.9rem",
-                }}
-              >
+              <div style={trendStack}>
                 {trend
                   .slice()
                   .sort((a, b) => (a.day > b.day ? 1 : -1))
@@ -573,15 +623,9 @@ export default function TeacherDashboard() {
                           <div style={heatNum}>{t}</div>
                         </div>
 
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            gap: "0.5rem",
-                          }}
-                        >
+                        <div style={heatRow}>
                           <div style={heatBadge(band.c)}>{band.t}</div>
-                          <div style={{ fontWeight: 900, color: "#f8fafc" }}>
+                          <div style={heatPct}>
                             {typeof acc === "number" ? `${acc}%` : "—"}
                           </div>
                         </div>
@@ -601,42 +645,14 @@ export default function TeacherDashboard() {
 
                 {/* Breakdown panel */}
                 <div style={breakPanel}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: "1rem",
-                    }}
-                  >
+                  <div style={breakHeader}>
                     <div>
-                      <div
-                        style={{
-                          fontSize: "0.8rem",
-                          letterSpacing: "0.16em",
-                          textTransform: "uppercase",
-                          color: "#94a3b8",
-                        }}
-                      >
-                        Table breakdown
-                      </div>
-                      <div
-                        style={{
-                          fontSize: "1.25rem",
-                          fontWeight: 1000,
-                          color: "#facc15",
-                        }}
-                      >
+                      <div style={breakKicker}>Table breakdown</div>
+                      <div style={breakTitle}>
                         {selectedTableNum ? `×${selectedTableNum}` : "Click a tile"}
                       </div>
                       {breakdown?.summary && selectedTableNum && (
-                        <div
-                          style={{
-                            marginTop: "0.25rem",
-                            color: "#cbd5e1",
-                            fontSize: "0.95rem",
-                          }}
-                        >
+                        <div style={breakSummary}>
                           Scope accuracy:{" "}
                           <strong>
                             {typeof breakdown.summary.accuracy === "number"
@@ -681,14 +697,7 @@ export default function TeacherDashboard() {
                   {selectedTableNum &&
                     !loadingBreakdown &&
                     breakdownRows.length > 0 && (
-                      <div
-                        style={{
-                          marginTop: "0.9rem",
-                          overflowX: "auto",
-                          borderRadius: "14px",
-                          border: "1px solid rgba(148,163,184,0.12)",
-                        }}
-                      >
+                      <div style={breakTableWrap}>
                         <table style={{ ...table, minWidth: "620px" }}>
                           <thead>
                             <tr>
@@ -710,31 +719,14 @@ export default function TeacherDashboard() {
                                   style={{ background: "rgba(148,163,184,0.06)" }}
                                 >
                                   <td style={td}>
-                                    <div
-                                      style={{
-                                        fontWeight: 900,
-                                        color: "#f8fafc",
-                                      }}
-                                    >
-                                      {r.student || "—"}
-                                    </div>
+                                    <div style={studentNameCell}>{r.student || "—"}</div>
                                   </td>
                                   <td style={td}>{r.class_label || "—"}</td>
                                   <td style={td}>{r.total ?? 0}</td>
                                   <td style={td}>{r.correct ?? 0}</td>
                                   <td style={td}>
-                                    <span
-                                      style={{
-                                        ...badge,
-                                        borderColor: "rgba(148,163,184,0.25)",
-                                      }}
-                                    >
-                                      <span
-                                        style={{
-                                          color: band.c,
-                                          fontWeight: 1000,
-                                        }}
-                                      >
+                                    <span style={{ ...badge, borderColor: "rgba(148,163,184,0.25)" }}>
+                                      <span style={{ color: band.c, fontWeight: 1000 }}>
                                         {band.t}
                                       </span>
                                       <span style={{ marginLeft: 10, fontWeight: 1000 }}>
@@ -756,6 +748,37 @@ export default function TeacherDashboard() {
         </div>
       </div>
     </div>
+  );
+}
+
+function KeyPill({ label, colour }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.5rem",
+        padding: "0.35rem 0.7rem",
+        borderRadius: "999px",
+        border: `1px solid ${colour}55`,
+        background: "rgba(2,6,23,0.35)",
+        fontWeight: 900,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+        fontSize: "0.75rem",
+        color: "#f8fafc",
+      }}
+    >
+      <span
+        style={{
+          width: 10,
+          height: 10,
+          borderRadius: "999px",
+          background: colour,
+        }}
+      />
+      {label}
+    </span>
   );
 }
 
@@ -910,7 +933,11 @@ const errorBox = {
   color: "#fecaca",
 };
 
-const grid = { display: "grid", gridTemplateColumns: "1.25fr 0.75fr", gap: "1rem" };
+const grid = {
+  display: "grid",
+  gridTemplateColumns: "1.25fr 0.75fr",
+  gap: "1rem",
+};
 
 const card = {
   background: "rgba(2,6,23,0.72)",
@@ -970,6 +997,30 @@ const emptyBox = {
   color: "#94a3b8",
 };
 
+const keyWrap = {
+  marginTop: "1rem",
+  padding: "0.9rem",
+  borderRadius: "16px",
+  background: "rgba(15,23,42,0.35)",
+  border: "1px solid rgba(148,163,184,0.18)",
+};
+const keyTitle = {
+  fontSize: "0.8rem",
+  letterSpacing: "0.16em",
+  textTransform: "uppercase",
+  color: "#cbd5e1",
+  fontWeight: 900,
+};
+const keyRow = { display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.6rem" };
+const keyNote = { marginTop: "0.6rem", color: "#94a3b8", fontSize: "0.9rem" };
+
+const trendStack = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.6rem",
+  marginTop: "0.9rem",
+};
+
 const trendRow = {
   display: "grid",
   gridTemplateColumns: "110px 1fr 60px",
@@ -1023,6 +1074,16 @@ const heatLabel = {
   opacity: 0.9,
 };
 const heatNum = { fontSize: "1.55rem", fontWeight: 1000, color: "#f8fafc" };
+
+const heatRow = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: "0.5rem",
+  alignItems: "center",
+};
+
+const heatPct = { fontWeight: 1000, color: "#f8fafc" };
+
 const heatMeta = {
   marginTop: "0.4rem",
   display: "flex",
@@ -1057,6 +1118,37 @@ const breakPanel = {
   background: "rgba(2,6,23,0.55)",
   border: "1px solid rgba(148,163,184,0.18)",
 };
+
+const breakHeader = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "1rem",
+};
+
+const breakKicker = {
+  fontSize: "0.8rem",
+  letterSpacing: "0.16em",
+  textTransform: "uppercase",
+  color: "#94a3b8",
+};
+
+const breakTitle = {
+  fontSize: "1.25rem",
+  fontWeight: 1000,
+  color: "#facc15",
+};
+
+const breakSummary = { marginTop: "0.25rem", color: "#cbd5e1", fontSize: "0.95rem" };
+
+const breakTableWrap = {
+  marginTop: "0.9rem",
+  overflowX: "auto",
+  borderRadius: "14px",
+  border: "1px solid rgba(148,163,184,0.12)",
+};
+
+const studentNameCell = { fontWeight: 900, color: "#f8fafc" };
 
 const labelBand = (acc) => {
   if (acc === null || typeof acc !== "number")
