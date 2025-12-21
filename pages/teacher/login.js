@@ -1,25 +1,15 @@
 // pages/teacher/login.js
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 export default function TeacherLogin() {
-  const [email, setEmail] = useState("admin@busheymanor.local");
-  const [password, setPassword] = useState("admin123");
-  const [status, setStatus] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    // If already logged in, go to /teacher
-    fetch("/api/teacher/me")
-      .then((r) => r.json())
-      .then((j) => {
-        if (j?.loggedIn) window.location.href = "/teacher";
-      })
-      .catch(() => {});
-  }, []);
-
-  const onSubmit = async (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    setStatus("");
+    setError("");
     setLoading(true);
 
     try {
@@ -30,139 +20,86 @@ export default function TeacherLogin() {
       });
 
       const data = await res.json();
+
       if (!res.ok || !data.ok) {
-        setStatus(data?.error || "Login failed");
+        setError(data.error || "Login failed");
         setLoading(false);
         return;
       }
 
+      // Success → go to teacher dashboard
       window.location.href = "/teacher";
     } catch (err) {
-      setStatus(String(err?.message || err));
+      setError("Network error");
       setLoading(false);
     }
   };
 
   return (
-    <div style={pageStyle}>
-      <div style={cardStyle}>
-        <div style={headRow}>
-          <div style={logo}>BM</div>
-          <div>
-            <div style={kicker}>Teacher / Admin</div>
-            <div style={title}>Dashboard Login</div>
+    <div style={page}>
+      <form onSubmit={handleSubmit} style={card}>
+        <h1 style={{ marginBottom: "1rem" }}>Teacher Login</h1>
+
+        {error && (
+          <div style={{ color: "red", marginBottom: "0.75rem" }}>
+            {error}
           </div>
-        </div>
+        )}
 
-        <form onSubmit={onSubmit} style={{ marginTop: 18 }}>
-          <label style={label}>Email</label>
-          <input
-            style={input}
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            type="email"
-            required
-          />
+        <label>Email</label>
+        <input
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          style={input}
+        />
 
-          <div style={{ height: 12 }} />
+        <label>Password</label>
+        <input
+          type="password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          style={input}
+        />
 
-          <label style={label}>Password</label>
-          <input
-            style={input}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            type="password"
-            required
-          />
-
-          <button style={button(loading)} disabled={loading} type="submit">
-            {loading ? "Signing in…" : "Sign in"}
-          </button>
-
-          {status && <div style={errorBox}>{status}</div>}
-        </form>
-
-        <div style={{ marginTop: 14, textAlign: "center" }}>
-          <a href="/" style={{ color: "#6B7280", textDecoration: "underline", fontSize: 13 }}>
-            Back to Home
-          </a>
-        </div>
-      </div>
+        <button type="submit" disabled={loading} style={button}>
+          {loading ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
     </div>
   );
 }
 
-const pageStyle = {
+const page = {
   minHeight: "100vh",
-  background: "#F7F7FB",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  padding: 24,
-  fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
+  background: "#f8fafc",
 };
 
-const cardStyle = {
+const card = {
+  width: "320px",
+  padding: "2rem",
+  borderRadius: "10px",
   background: "white",
-  borderRadius: 18,
-  padding: "1.8rem 2rem",
-  width: "100%",
-  maxWidth: 460,
-  border: "1px solid #E5E7EB",
-  boxShadow: "0 18px 40px rgba(0,0,0,0.08)",
+  boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.5rem",
 };
-
-const headRow = { display: "flex", alignItems: "center", gap: 12 };
-
-const logo = {
-  width: 54,
-  height: 54,
-  borderRadius: 999,
-  background: "#FACC15",
-  display: "grid",
-  placeItems: "center",
-  fontWeight: 1000,
-};
-
-const kicker = {
-  fontSize: 12,
-  letterSpacing: "0.18em",
-  textTransform: "uppercase",
-  color: "#6B7280",
-  fontWeight: 900,
-};
-
-const title = { fontSize: 22, fontWeight: 1000, color: "#111827" };
-
-const label = { display: "block", fontSize: 13, fontWeight: 900, color: "#374151", marginBottom: 6 };
 
 const input = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid #D1D5DB",
-  fontSize: 15,
-  outline: "none",
+  padding: "8px",
+  fontSize: "1rem",
+  marginBottom: "0.75rem",
 };
 
-const button = (loading) => ({
-  marginTop: 14,
-  width: "100%",
-  padding: 12,
-  borderRadius: 12,
-  border: "none",
-  cursor: loading ? "default" : "pointer",
-  fontWeight: 1000,
-  background: loading ? "#9CA3AF" : "linear-gradient(135deg,#2563EB,#60A5FA)",
-  color: "white",
-});
-
-const errorBox = {
-  marginTop: 12,
-  padding: 10,
-  borderRadius: 12,
-  background: "#FEF2F2",
-  border: "1px solid #FECACA",
-  color: "#991B1B",
-  fontWeight: 800,
+const button = {
+  marginTop: "1rem",
+  padding: "10px",
+  fontSize: "1rem",
+  cursor: "pointer",
 };
