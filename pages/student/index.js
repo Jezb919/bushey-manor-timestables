@@ -1,38 +1,32 @@
+// pages/student/index.js
 import { useEffect, useMemo, useState } from "react";
 
 export default function StudentLogin() {
   const [name, setName] = useState("");
   const [classLabel, setClassLabel] = useState("");
+
   const [classes, setClasses] = useState([]);
-  const [loadingClasses, setLoadingClasses] = useState(true);
-  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
 
   useEffect(() => {
     const load = async () => {
-      setLoadingClasses(true);
-      setError("");
-
+      setLoading(true);
+      setErr("");
       try {
-        const res = await fetch("/api/public/classes");
-        const data = await res.json();
+        const r = await fetch("/api/classes");
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Failed to load classes");
 
-        if (!res.ok || !data.ok) {
-          setError(data.error || "Could not load classes");
-          setLoadingClasses(false);
-          return;
-        }
+        setClasses(Array.isArray(j.classes) ? j.classes : []);
 
-        setClasses(data.classes || []);
-
-        // Auto-select first class if none chosen (optional)
-        if (!classLabel && (data.classes || []).length > 0) {
-          setClassLabel(data.classes[0].class_label);
-        }
-
-        setLoadingClasses(false);
+        // default to first class in list (if exists)
+        const first = (j.classes || []).find((c) => c.class_label)?.class_label;
+        if (first && !classLabel) setClassLabel(first);
       } catch (e) {
-        setError("Could not load classes (network error)");
-        setLoadingClasses(false);
+        setErr(e?.message || String(e));
+      } finally {
+        setLoading(false);
       }
     };
 
@@ -40,31 +34,25 @@ export default function StudentLogin() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const classOptions = useMemo(() => {
-    return (classes || []).map((c) => ({
-      value: c.class_label,
-      label: `${c.class_label} (Year ${c.year_group})`,
-    }));
+  const grouped = useMemo(() => {
+    // group by year_group for nicer dropdown sections
+    const map = new Map();
+    for (const c of classes) {
+      const y = c.year_group || 0;
+      if (!map.has(y)) map.set(y, []);
+      map.get(y).push(c);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
   }, [classes]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    setError("");
 
-    const cleanName = String(name || "").trim();
-    const cleanClass = String(classLabel || "").trim().toUpperCase();
+    const cleanName = name.trim();
+    const cleanClass = String(classLabel || "").trim();
 
-    if (!cleanName) {
-      setError("Please enter your name.");
-      return;
-    }
+    if (!cleanName || !cleanClass) return;
 
-    if (!cleanClass) {
-      setError("Please choose your class.");
-      return;
-    }
-
-    // Send them to the test start screen with name & class in the URL
     const encodedName = encodeURIComponent(cleanName);
     const encodedClass = encodeURIComponent(cleanClass);
 
@@ -72,206 +60,149 @@ export default function StudentLogin() {
   };
 
   return (
-    <div style={page}>
-      <div style={card}>
-        {/* Header */}
-        <div style={headerRow}>
-          <div style={logoCircle}>
-            <span style={logoText}>BM</span>
-          </div>
+    <div style={S.page}>
+      <div style={S.card}>
+        <div style={S.headerRow}>
+          <div style={S.logo}>BM</div>
           <div>
-            <div style={smallTitle}>Student Login</div>
-            <div style={bigTitle}>Times Tables Test</div>
+            <div style={S.kicker}>Student Login</div>
+            <div style={S.title}>Times Tables Test</div>
           </div>
         </div>
 
-        <p style={subText}>
+        <p style={S.muted}>
           Enter your <strong>name</strong> and choose your <strong>class</strong>.
-          Your results will be saved so your teacher can see your progress.
         </p>
 
-        {error && <div style={errorBox}>{error}</div>}
+        {err && <div style={S.errorBox}><strong>Error:</strong> {err}</div>}
 
-        <form onSubmit={handleSubmit} style={{ marginTop: "1.25rem" }}>
-          {/* Name */}
-          <div style={{ marginBottom: "1rem" }}>
-            <label style={label}>Name</label>
-            <input
-              type="text"
-              value={name}
+        <form onSubmit={handleSubmit} style={{ marginTop: 16 }}>
+          <label style={S.label}>Name</label>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            style={S.input}
+            placeholder="e.g. Alex"
+          />
+
+          <div style={{ height: 12 }} />
+
+          <label style={S.label}>Class</label>
+
+          {loading ? (
+            <div style={S.muted}>Loading classes…</div>
+          ) : (
+            <select
+              value={classLabel}
+              onChange={(e) => setClassLabel(e.target.value)}
               required
-              onChange={(e) => setName(e.target.value)}
-              style={input}
-              placeholder="e.g. Jamie"
-              autoComplete="off"
-            />
-          </div>
+              style={S.select}
+            >
+              {grouped.map(([year, list]) => (
+                <optgroup key={year} label={year ? `Year ${year}` : "Other"}>
+                  {list.map((c) => (
+                    <option key={c.class_label} value={c.class_label}>
+                      {c.class_label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          )}
 
-          {/* Class dropdown */}
-          <div style={{ marginBottom: "1.5rem" }}>
-            <label style={label}>Class</label>
-
-            {loadingClasses ? (
-              <div style={loadingBox}>Loading classes…</div>
-            ) : (
-              <select
-                value={classLabel}
-                onChange={(e) => setClassLabel(e.target.value)}
-                style={select}
-                required
-              >
-                {classOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          <button type="submit" style={button} disabled={loadingClasses}>
+          <button type="submit" style={S.primaryBtn} disabled={loading || !!err}>
             Start Test
           </button>
         </form>
 
-        <div style={{ marginTop: "1rem", textAlign: "center" }}>
-          <a href="/" style={backLink}>
-            Back to Home
-          </a>
+        <div style={{ marginTop: 12, textAlign: "center" }}>
+          <a href="/" style={S.link}>Back to Home</a>
         </div>
       </div>
     </div>
   );
 }
 
-/* ---------- Styles (same branding vibe) ---------- */
+const S = {
+  page: {
+    minHeight: "100vh",
+    background: "#F7F7FB",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 18,
+    fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
+    color: "#111827",
+  },
+  card: {
+    width: "100%",
+    maxWidth: 520,
+    borderRadius: 18,
+    border: "1px solid #E5E7EB",
+    background: "white",
+    boxShadow: "0 10px 20px rgba(0,0,0,0.05)",
+    padding: 18,
+  },
+  headerRow: { display: "flex", gap: 12, alignItems: "center" },
+  logo: {
+    width: 52,
+    height: 52,
+    borderRadius: 999,
+    background: "#FACC15",
+    display: "grid",
+    placeItems: "center",
+    fontWeight: 1000,
+    border: "1px solid #E5E7EB",
+  },
+  kicker: {
+    fontSize: "0.78rem",
+    letterSpacing: "0.18em",
+    textTransform: "uppercase",
+    color: "#6B7280",
+    fontWeight: 900,
+  },
+  title: { fontSize: "1.35rem", fontWeight: 1000, marginTop: 2 },
+  muted: { color: "#6B7280", marginTop: 10 },
 
-const page = {
-  minHeight: "100vh",
-  background:
-    "radial-gradient(circle at top, #facc15 0, #0f172a 35%, #020617 100%)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "1.5rem",
-  color: "white",
-  fontFamily:
-    "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-};
-
-const card = {
-  background: "rgba(3,7,18,0.95)",
-  borderRadius: "22px",
-  padding: "2rem 2.5rem",
-  maxWidth: "520px",
-  width: "100%",
-  boxShadow: "0 25px 60px rgba(0,0,0,0.55)",
-  border: "1px solid rgba(148,163,184,0.35)",
-};
-
-const headerRow = {
-  display: "flex",
-  alignItems: "center",
-  gap: "0.8rem",
-  marginBottom: "1.25rem",
-};
-
-const logoCircle = {
-  width: "52px",
-  height: "52px",
-  borderRadius: "50%",
-  background: "white",
-  border: "3px solid #facc15",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-};
-
-const logoText = {
-  fontWeight: 900,
-  fontSize: "1.1rem",
-  color: "#0f172a",
-};
-
-const smallTitle = {
-  fontSize: "0.75rem",
-  letterSpacing: "0.16em",
-  textTransform: "uppercase",
-  color: "#e5e7eb",
-};
-
-const bigTitle = {
-  fontSize: "1.3rem",
-  fontWeight: 800,
-  color: "#facc15",
-};
-
-const subText = {
-  color: "#d1d5db",
-  fontSize: "0.95rem",
-  marginTop: "0.25rem",
-};
-
-const label = {
-  display: "block",
-  marginBottom: "0.35rem",
-  fontSize: "0.9rem",
-  color: "#e5e7eb",
-};
-
-const input = {
-  width: "100%",
-  padding: "10px 12px",
-  fontSize: "1rem",
-  borderRadius: "999px",
-  border: "1px solid #4b5563",
-  outline: "none",
-};
-
-const select = {
-  width: "100%",
-  padding: "10px 12px",
-  fontSize: "1rem",
-  borderRadius: "999px",
-  border: "1px solid #4b5563",
-  outline: "none",
-  background: "white",
-  color: "#111827",
-};
-
-const loadingBox = {
-  padding: "10px 12px",
-  borderRadius: "999px",
-  border: "1px solid #4b5563",
-  color: "#d1d5db",
-  background: "#0b1220",
-};
-
-const button = {
-  width: "100%",
-  padding: "12px",
-  borderRadius: "999px",
-  border: "none",
-  background: "linear-gradient(135deg,#3b82f6,#60a5fa)",
-  color: "white",
-  fontWeight: 800,
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
-  cursor: "pointer",
-  fontSize: "0.95rem",
-};
-
-const backLink = {
-  fontSize: "0.85rem",
-  color: "#9ca3af",
-  textDecoration: "underline",
-};
-
-const errorBox = {
-  marginTop: "1rem",
-  padding: "10px 12px",
-  borderRadius: "10px",
-  border: "1px solid rgba(239,68,68,0.5)",
-  background: "rgba(239,68,68,0.12)",
-  color: "#fecaca",
+  label: { display: "block", marginTop: 14, fontWeight: 900, color: "#374151" },
+  input: {
+    width: "100%",
+    marginTop: 6,
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #E5E7EB",
+    outline: "none",
+  },
+  select: {
+    width: "100%",
+    marginTop: 6,
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #E5E7EB",
+    background: "white",
+    outline: "none",
+    cursor: "pointer",
+  },
+  primaryBtn: {
+    width: "100%",
+    marginTop: 16,
+    border: "none",
+    borderRadius: 999,
+    padding: "12px 14px",
+    fontWeight: 1000,
+    cursor: "pointer",
+    color: "white",
+    background: "linear-gradient(135deg,#2563EB,#60A5FA)",
+  },
+  link: { color: "#2563EB", textDecoration: "underline", fontWeight: 800 },
+  errorBox: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid #FECACA",
+    background: "#FEF2F2",
+    color: "#991B1B",
+    fontWeight: 800,
+  },
 };
