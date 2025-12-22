@@ -13,13 +13,26 @@ if (!supabaseUrl || !serviceRoleKey) {
 const supabase = createClient(supabaseUrl, serviceRoleKey);
 
 /**
- * Normalise class input so "4m", " 4M ", "4 m" all become "4M"
+ * Normalise class input so:
+ * - " 4m " -> "M4"
+ * - "4 M"  -> "M4"
+ * - "m4"   -> "M4"
+ * - "B3"   -> "B3"
  */
 function normaliseClassLabel(value) {
-  return String(value || "")
+  let v = String(value || "")
     .trim()
     .toUpperCase()
     .replace(/\s+/g, "");
+
+  // Convert 4M / 3B / 10M -> M4 / B3 / M10
+  if (/^[0-9]{1,2}[A-Z]$/.test(v)) {
+    const year = v.slice(0, -1);      // "4"
+    const letter = v.slice(-1);       // "M"
+    v = `${letter}${year}`;           // "M4"
+  }
+
+  return v;
 }
 
 /**
@@ -71,7 +84,11 @@ export default async function handler(req, res) {
     }
 
     if (existing) {
-      return res.status(200).json({ ok: true, studentId: existing.id });
+      return res.status(200).json({
+        ok: true,
+        studentId: existing.id,
+        class_label: classLabel,
+      });
     }
 
     // 2) Not found – create them
@@ -92,7 +109,11 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(200).json({ ok: true, studentId: inserted.id });
+    return res.status(200).json({
+      ok: true,
+      studentId: inserted.id,
+      class_label: classLabel,
+    });
   } catch (err) {
     console.error("Unexpected /api/student/session error:", err);
     return res
