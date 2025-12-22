@@ -18,6 +18,12 @@ function parseCookies(req) {
   return out;
 }
 
+function looksLikeUUID(v) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(v || "")
+  );
+}
+
 function normaliseClassLabel(v) {
   return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
 }
@@ -37,43 +43,48 @@ function normaliseTables(arr) {
   return uniq.length ? uniq : Array.from({ length: 19 }, (_, i) => i + 1);
 }
 
-// ---- IMPORTANT: get teacher id from cookie ----
-// Your login flow should be setting a cookie (commonly bmtt_teacher_id)
-function getTeacherIdFromCookie(req) {
-  const c = parseCookies(req);
-
-  // Try common cookie keys (keep this list generous)
-  const candidates = [
-    c.bmtt_teacher_id,
-    c.teacher_id,
-    c.bmtt_teacher,
-    c.bmtt_teacher_session,
-  ].filter(Boolean);
-
-  if (!candidates.length) return null;
-
-  // If it looks like UUID, use it directly
-  const raw = candidates[0];
-
-  if (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      raw
-    )
-  ) {
-    return raw;
-  }
-
-  // If JSON, try parse
+// --- decode bmtt_session (JWT-ish) payload without verifying (fine for lookup) ---
+function decodeSessionTeacherId(bmtt_session) {
   try {
-    const parsed = JSON.parse(raw);
-    return parsed?.id || parsed?.teacherId || null;
+    const parts = String(bmtt_session || "").split(".");
+    if (parts.length < 2) return null;
+    const payloadB64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payloadB64.padEnd(Math.ceil(payloadB64.length / 4) * 4, "=");
+    const json = Buffer.from(padded, "base64").toString("utf8");
+    const payload = JSON.parse(json);
+    const id = payload.teacher_id || payload.teacherId || payload.id || null;
+    return looksLikeUUID(id) ? id : null;
   } catch {
     return null;
   }
 }
 
+function getTeacherIdFromCookies(req) {
+  const c = parseCookies(req);
+
+  // 1) Preferred: bmtt_teacher cookie (your system sets this)
+  // Example value (decoded): {"teacherId":"bae1d975-..."}
+  if (c.bmtt_teacher) {
+    try {
+      const parsed = JSON.parse(c.bmtt_teacher);
+      const id = parsed?.teacherId || parsed?.teacher_id || parsed?.id || null;
+      if (looksLikeUUID(id)) return id;
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2) Fallback: bmtt_session token contains teacher_id
+  if (c.bmtt_session) {
+    const id = decodeSessionTeacherId(c.bmtt_session);
+    if (id) return id;
+  }
+
+  return null;
+}
+
 async function getTeacher(req) {
-  const teacherId = getTeacherIdFromCookie(req);
+  const teacherId = getTeacherIdFromCookies(req);
   if (!teacherId) return { loggedIn: false };
 
   const { data: teacher, error } = await supabase
@@ -83,23 +94,32 @@ async function getTeacher(req) {
     .maybeSingle();
 
   if (error || !teacher?.id) return { loggedIn: false };
-  return { loggedIn: true, teacher };
+
+  // load classes this teacher can access
+  const { data: classes, error: cErr } = await supabase
+    .from("teacher_classes")
+    .select("class_label, year_group")
+    .eq("teacher_id", teacher.id);
+
+  // admin can access all classes
+  if (teacher.role === "admin") {
+    const { data: allClasses } = await supabase
+      .from("classes")
+      .select("class_label, year_group")
+      .order("year_group", { ascending: true });
+    return { loggedIn: true, teacher, classes: allClasses || [] };
+  }
+
+  return { loggedIn: true, teacher, classes: cErr ? [] : classes || [] };
 }
 
-async function isAllowedForClass(teacher, classLabel) {
-  if (!teacher?.id) return false;
-  if (teacher.role === "admin") return true;
-
-  // Check teacher_classes DIRECTLY to avoid any mismatched shapes
-  const { data, error } = await supabase
-    .from("teacher_classes")
-    .select("id")
-    .eq("teacher_id", teacher.id)
-    .eq("class_label", classLabel)
-    .maybeSingle();
-
-  if (error) return false;
-  return !!data;
+function teacherHasClass(auth, classLabel) {
+  if (!auth?.teacher) return false;
+  if (auth.teacher.role === "admin") return true;
+  const list = auth.classes || [];
+  return list.some(
+    (c) => normaliseClassLabel(c.class_label) === normaliseClassLabel(classLabel)
+  );
 }
 
 export default async function handler(req, res) {
@@ -109,17 +129,16 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, loggedIn: false });
     }
 
-    const teacher = auth.teacher;
-
     if (req.method === "GET") {
       const class_label = normaliseClassLabel(req.query.class_label);
       if (!class_label) {
         return res.status(400).json({ ok: false, error: "Missing class_label" });
       }
 
-      const allowed = await isAllowedForClass(teacher, class_label);
-      if (!allowed) {
-        return res.status(403).json({ ok: false, error: "Not allowed for this class" });
+      if (!teacherHasClass(auth, class_label)) {
+        return res
+          .status(403)
+          .json({ ok: false, error: "Not allowed for this class" });
       }
 
       const { data, error } = await supabase
@@ -127,7 +146,7 @@ export default async function handler(req, res) {
         .select(
           "teacher_id, class_label, question_count, seconds_per_question, tables_selected, updated_at"
         )
-        .eq("teacher_id", teacher.id)
+        .eq("teacher_id", auth.teacher.id)
         .eq("class_label", class_label)
         .maybeSingle();
 
@@ -148,15 +167,22 @@ export default async function handler(req, res) {
       return res.status(200).json({
         ok: true,
         loggedIn: true,
-        teacher: { id: teacher.id, email: teacher.email, role: teacher.role },
+        teacher: {
+          id: auth.teacher.id,
+          email: auth.teacher.email,
+          role: auth.teacher.role,
+        },
+        classes: auth.classes || [],
         settings: data
           ? {
-              question_count: data.question_count ?? defaults.question_count,
-              seconds_per_question: data.seconds_per_question ?? defaults.seconds_per_question,
-              tables_selected: data.tables_selected ?? defaults.tables_selected,
               class_label,
+              question_count: data.question_count ?? defaults.question_count,
+              seconds_per_question:
+                data.seconds_per_question ?? defaults.seconds_per_question,
+              tables_selected: data.tables_selected ?? defaults.tables_selected,
+              updated_at: data.updated_at ?? null,
             }
-          : { ...defaults, class_label },
+          : { class_label, ...defaults },
       });
     }
 
@@ -167,9 +193,10 @@ export default async function handler(req, res) {
         return res.status(400).json({ ok: false, error: "Missing class_label" });
       }
 
-      const allowed = await isAllowedForClass(teacher, class_label);
-      if (!allowed) {
-        return res.status(403).json({ ok: false, error: "Not allowed for this class" });
+      if (!teacherHasClass(auth, class_label)) {
+        return res
+          .status(403)
+          .json({ ok: false, error: "Not allowed for this class" });
       }
 
       const question_count = clampInt(body.question_count, 10, 60, 25);
@@ -177,7 +204,7 @@ export default async function handler(req, res) {
       const tables_selected = normaliseTables(body.tables_selected);
 
       const row = {
-        teacher_id: teacher.id,
+        teacher_id: auth.teacher.id,
         class_label,
         question_count,
         seconds_per_question,
