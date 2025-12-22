@@ -9,22 +9,18 @@ const supabase = createClient(
 
 export default async function handler(req, res) {
   try {
-    const rawCookie = req.cookies?.bmtt_teacher;
+    const raw = req.cookies?.bmtt_teacher;
 
-    if (!rawCookie) {
+    if (!raw) {
       return res.status(200).json({ ok: true, loggedIn: false });
     }
 
-    // Robust cookie parsing (handles quoted / escaped cookies)
-    let session;
+    // Decode then parse
+    let session = null;
     try {
-      session = JSON.parse(rawCookie);
+      session = JSON.parse(decodeURIComponent(String(raw)));
     } catch {
-      try {
-        session = JSON.parse(String(rawCookie).replace(/^"|"$/g, ""));
-      } catch {
-        return res.status(200).json({ ok: true, loggedIn: false });
-      }
+      return res.status(200).json({ ok: true, loggedIn: false });
     }
 
     const teacherId = session?.teacherId;
@@ -32,69 +28,64 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, loggedIn: false });
     }
 
-    // Load teacher
-    const { data: teacher, error: teacherErr } = await supabase
+    const { data: teacher, error: tErr } = await supabase
       .from("teachers")
       .select("id, email, full_name, role")
       .eq("id", teacherId)
-      .single();
+      .maybeSingle();
 
-    if (teacherErr || !teacher) {
+    if (tErr || !teacher) {
       return res.status(200).json({ ok: true, loggedIn: false });
     }
 
-    // Load classes teacher has access to
-    // Admin sees all classes
-    let classesQuery = supabase
-      .from("classes")
-      .select("id, class_label, year_group")
-      .order("year_group", { ascending: true })
-      .order("class_label", { ascending: true });
+    // Admin sees all classes. Teachers see assigned classes.
+    let classes = [];
 
-    if (teacher.role !== "admin") {
-      // Non-admin: only assigned classes
-      const { data: teacherClasses, error: tcErr } = await supabase
+    if (teacher.role === "admin") {
+      const { data, error } = await supabase
+        .from("classes")
+        .select("id, class_label, year_group")
+        .not("class_label", "is", null)
+        .order("year_group", { ascending: true })
+        .order("class_label", { ascending: true });
+
+      if (error) {
+        return res.status(500).json({ ok: false, error: "Failed to load classes", details: error.message });
+      }
+      classes = data || [];
+    } else {
+      const { data: links, error: linkErr } = await supabase
         .from("teacher_classes")
         .select("class_id")
         .eq("teacher_id", teacher.id);
 
-      if (tcErr) {
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to load teacher classes",
-          details: tcErr.message,
-        });
+      if (linkErr) {
+        return res.status(500).json({ ok: false, error: "Failed to load teacher_classes", details: linkErr.message });
       }
 
-      const classIds = teacherClasses.map((c) => c.class_id);
+      const classIds = (links || []).map((l) => l.class_id).filter(Boolean);
 
-      if (classIds.length === 0) {
-        return res.status(200).json({
-          ok: true,
-          loggedIn: true,
-          teacher,
-          classes: [],
-        });
+      if (classIds.length > 0) {
+        const { data, error } = await supabase
+          .from("classes")
+          .select("id, class_label, year_group")
+          .in("id", classIds)
+          .not("class_label", "is", null)
+          .order("year_group", { ascending: true })
+          .order("class_label", { ascending: true });
+
+        if (error) {
+          return res.status(500).json({ ok: false, error: "Failed to load classes", details: error.message });
+        }
+        classes = data || [];
       }
-
-      classesQuery = classesQuery.in("id", classIds);
-    }
-
-    const { data: classes, error: classesErr } = await classesQuery;
-
-    if (classesErr) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to load classes",
-        details: classesErr.message,
-      });
     }
 
     return res.status(200).json({
       ok: true,
       loggedIn: true,
       teacher,
-      classes: classes || [],
+      classes,
     });
   } catch (err) {
     return res.status(500).json({
