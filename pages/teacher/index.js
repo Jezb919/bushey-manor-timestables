@@ -1,34 +1,43 @@
+// pages/teacher/index.js
 import { useEffect, useMemo, useState } from "react";
 
 /**
- * Teacher Dashboard (Tabbed, white UI)
+ * Teacher Dashboard (Tabbed, white UI) — v2
  *
- * Works with your existing APIs:
- *  - /api/teacher/overview?scope=class&class_label=M4&days=30
- *  - /api/teacher/heatmap?scope=class&class_label=M4&days=30
- *  - /api/teacher/table_breakdown?scope=class&class_label=M4&days=30&table_num=6
+ * Requires these APIs (you already have them):
+ *  - GET  /api/teacher/me
+ *  - POST /api/teacher/logout
+ *  - GET  /api/teacher/overview?scope=class&class_label=M4&days=30
+ *  - GET  /api/teacher/heatmap?scope=class&class_label=M4&days=30
+ *  - GET  /api/teacher/table_breakdown?scope=class&class_label=M4&days=30&table_num=6
  *
- * Includes a Settings tab (B) that stores settings in localStorage (teacher browser).
- * Next step: we wire mixed.js to read these settings automatically.
+ * Notes:
+ * - Class/year selectors now come from /api/teacher/me "classes"
+ * - Admin link only appears for admin
  */
 
-const DEFAULT_CLASS = "M4";
 const DEFAULT_DAYS = 30;
-
 const SETTINGS_KEY = "bmtt_teacher_settings_v2";
 
 const defaultSettings = {
   questionCount: 25, // 10–60
   secondsPerQuestion: 6, // 3–6
-  tablesIncluded: Array.from({ length: 19 }, (_, i) => i + 1), // 1–19
+  tablesIncluded: Array.from({ length: 19 }, (_, i) => i + 1),
 };
 
 export default function TeacherDashboard() {
+  // session
+  const [meLoading, setMeLoading] = useState(true);
+  const [meError, setMeError] = useState("");
+  const [teacher, setTeacher] = useState(null);
+  const [myClasses, setMyClasses] = useState([]); // [{id,class_label,year_group}]
+
+  // UI tab
   const [tab, setTab] = useState("overview"); // overview | leaderboard | improved | heatmap | settings
 
-  // Scope filters (these affect the data you view)
+  // Scope filters
   const [scope, setScope] = useState("class"); // class | year | school
-  const [classLabel, setClassLabel] = useState(DEFAULT_CLASS);
+  const [classLabel, setClassLabel] = useState(""); // will be set from myClasses
   const [year, setYear] = useState(4);
   const [days, setDays] = useState(DEFAULT_DAYS);
 
@@ -46,11 +55,54 @@ export default function TeacherDashboard() {
   const [tableBreakdown, setTableBreakdown] = useState(null);
   const [breakdownLoading, setBreakdownLoading] = useState(false);
 
-  // Settings (B)
+  // Settings (localStorage for now)
   const [settings, setSettings] = useState(defaultSettings);
   const [savedMsg, setSavedMsg] = useState("");
 
-  // Load settings (teacher browser)
+  /* ---------------- Load /api/teacher/me ---------------- */
+
+  useEffect(() => {
+    const run = async () => {
+      setMeLoading(true);
+      setMeError("");
+
+      try {
+        const r = await fetch("/api/teacher/me");
+        const j = await r.json();
+
+        if (!r.ok || !j.ok) throw new Error(j?.details || j?.error || "Failed to load session");
+        if (!j.loggedIn) {
+          // if not logged in, push to login
+          window.location.href = "/teacher/login";
+          return;
+        }
+
+        setTeacher(j.teacher || null);
+        setMyClasses(Array.isArray(j.classes) ? j.classes : []);
+
+        // Pick a sensible default class label for class scope
+        const firstLabel =
+          (Array.isArray(j.classes) && j.classes.find((c) => c.class_label)?.class_label) || "";
+
+        if (!classLabel && firstLabel) setClassLabel(firstLabel);
+
+        // Pick a sensible default year for year scope
+        const firstYear =
+          (Array.isArray(j.classes) && j.classes.find((c) => c.year_group)?.year_group) || 4;
+        if (!year && firstYear) setYear(firstYear);
+      } catch (e) {
+        setMeError(e?.message || String(e));
+      } finally {
+        setMeLoading(false);
+      }
+    };
+
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ---------------- Load settings (localStorage) ---------------- */
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
@@ -94,24 +146,19 @@ export default function TeacherDashboard() {
     setTimeout(() => setSavedMsg(""), 1400);
   };
 
-  // Query params for API
+  /* ---------------- Query params ---------------- */
+
   const baseParams = useMemo(() => {
     const p = new URLSearchParams();
     p.set("scope", scope);
     p.set("days", String(days));
-    if (scope === "class") p.set("class_label", classLabel);
-    if (scope === "year") p.set("year", String(year));
+    if (scope === "class" && classLabel) p.set("class_label", classLabel);
+    if (scope === "year" && year) p.set("year", String(year));
     return p;
   }, [scope, days, classLabel, year]);
 
-  const overviewUrl = useMemo(
-    () => `/api/teacher/overview?${baseParams.toString()}`,
-    [baseParams]
-  );
-  const heatUrl = useMemo(
-    () => `/api/teacher/heatmap?${baseParams.toString()}`,
-    [baseParams]
-  );
+  const overviewUrl = useMemo(() => `/api/teacher/overview?${baseParams.toString()}`, [baseParams]);
+  const heatUrl = useMemo(() => `/api/teacher/heatmap?${baseParams.toString()}`, [baseParams]);
 
   const breakdownUrl = useMemo(() => {
     if (!selectedTableNum) return null;
@@ -119,6 +166,8 @@ export default function TeacherDashboard() {
     p.set("table_num", String(selectedTableNum));
     return `/api/teacher/table_breakdown?${p.toString()}`;
   }, [baseParams, selectedTableNum]);
+
+  /* ---------------- Data refresh ---------------- */
 
   const refresh = async () => {
     setLoading(true);
@@ -143,19 +192,25 @@ export default function TeacherDashboard() {
     }
   };
 
-  // Load data when filters change
   useEffect(() => {
+    if (meLoading) return;
+    if (meError) return;
+    // If class scope but no classLabel yet, wait (so we don't call APIs with blank)
+    if (scope === "class" && !classLabel) return;
+
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [overviewUrl, heatUrl]);
+  }, [meLoading, meError, overviewUrl, heatUrl]);
 
-  // Load drilldown when a table tile is selected
+  /* ---------------- Breakdown fetch ---------------- */
+
   useEffect(() => {
     const run = async () => {
       if (!breakdownUrl) {
         setTableBreakdown(null);
         return;
       }
+
       setBreakdownLoading(true);
       try {
         const r = await fetch(breakdownUrl);
@@ -168,22 +223,23 @@ export default function TeacherDashboard() {
         setBreakdownLoading(false);
       }
     };
+
     run();
   }, [breakdownUrl]);
 
-  // Clean drilldown when scope changes
+  // Clean drilldown when view changes
   useEffect(() => {
     setSelectedTableNum(null);
     setTableBreakdown(null);
   }, [scope, classLabel, year, days]);
 
   const subtitle = useMemo(() => {
-    if (scope === "class") return `Viewing: Class ${classLabel} • last ${days} days`;
+    if (scope === "class") return `Viewing: Class ${classLabel || "—"} • last ${days} days`;
     if (scope === "year") return `Viewing: Year ${year} • last ${days} days`;
     return `Viewing: Whole school • last ${days} days`;
   }, [scope, classLabel, year, days]);
 
-  // Derived lists
+  // Derived
   const leaderboardRows = overview?.leaderboard || [];
   const improvedRows = useMemo(() => {
     return (leaderboardRows || [])
@@ -198,7 +254,6 @@ export default function TeacherDashboard() {
       ? leaderboardRows.filter((r) => String(r.student || "").toLowerCase().includes(q))
       : leaderboardRows.slice();
 
-    // Sort by percent desc, then score desc
     list.sort((a, b) => {
       const ap = typeof a.percent === "number" ? a.percent : -1;
       const bp = typeof b.percent === "number" ? b.percent : -1;
@@ -214,9 +269,63 @@ export default function TeacherDashboard() {
   const tableHeat = heat?.tableHeat || [];
   const breakdownRows = tableBreakdown?.breakdown || [];
 
+  const isAdmin = teacher?.role === "admin";
+
+  const yearsAvailable = useMemo(() => {
+    const set = new Set((myClasses || []).map((c) => c.year_group).filter(Boolean));
+    const arr = Array.from(set).sort((a, b) => a - b);
+    return arr.length ? arr : [3, 4, 5, 6];
+  }, [myClasses]);
+
+  const classOptions = useMemo(() => {
+    return (myClasses || [])
+      .filter((c) => c.class_label)
+      .slice()
+      .sort((a, b) => String(a.class_label).localeCompare(String(b.class_label)));
+  }, [myClasses]);
+
+  /* ---------------- Actions ---------------- */
+
+  const doLogout = async () => {
+    try {
+      await fetch("/api/teacher/logout", { method: "POST" });
+    } catch {
+      // ignore
+    }
+    window.location.href = "/teacher/login";
+  };
+
+  /* ---------------- Render ---------------- */
+
+  if (meLoading) {
+    return (
+      <div style={S.page}>
+        <div style={S.card}>
+          <div style={S.h2}>Loading teacher session…</div>
+          <div style={S.muted}>Please wait.</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (meError) {
+    return (
+      <div style={S.page}>
+        <div style={S.errorBox}>
+          <strong>Teacher session error:</strong> {meError}
+        </div>
+        <div style={{ maxWidth: 1150, margin: "12px auto 0" }}>
+          <a href="/teacher/login" style={S.link}>
+            Go to teacher login
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={S.page}>
-      {/* Top header */}
+      {/* Header */}
       <div style={S.header}>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
           <div style={S.logo}>BM</div>
@@ -224,16 +333,22 @@ export default function TeacherDashboard() {
             <div style={S.kicker}>Teacher Dashboard</div>
             <div style={S.title}>Times Tables Arena</div>
             <div style={S.subtitle}>{subtitle}</div>
+            <div style={{ marginTop: 4, color: "#6B7280", fontSize: "0.9rem" }}>
+              Logged in as <strong>{teacher?.full_name || teacher?.email}</strong>
+              {teacher?.role ? ` (${teacher.role})` : ""}
+            </div>
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <a href="/" style={S.link}>
-            Home
-          </a>
-          <button type="button" onClick={refresh} style={S.primaryBtn}>
-            Refresh
-          </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <a href="/" style={S.link}>Home</a>
+          {isAdmin && (
+            <a href="/teacher/admin" style={{ ...S.link, fontWeight: 1000 }}>
+              Admin
+            </a>
+          )}
+          <button type="button" onClick={refresh} style={S.primaryBtn}>Refresh</button>
+          <button type="button" onClick={doLogout} style={S.smallBtn}>Logout</button>
         </div>
       </div>
 
@@ -255,16 +370,11 @@ export default function TeacherDashboard() {
           value={classLabel}
           onChange={(v) => setClassLabel(v)}
           disabled={scope !== "class"}
-          options={[
-            { value: "M3", label: "M3" },
-            { value: "B3", label: "B3" },
-            { value: "M4", label: "M4" },
-            { value: "B4", label: "B4" },
-            { value: "M5", label: "M5" },
-            { value: "B5", label: "B5" },
-            { value: "M6", label: "M6" },
-            { value: "B6", label: "B6" },
-          ]}
+          options={
+            classOptions.length
+              ? classOptions.map((c) => ({ value: c.class_label, label: c.class_label }))
+              : [{ value: "", label: "No classes assigned" }]
+          }
         />
 
         <FilterSelect
@@ -272,12 +382,7 @@ export default function TeacherDashboard() {
           value={String(year)}
           onChange={(v) => setYear(Number(v))}
           disabled={scope !== "year"}
-          options={[
-            { value: "3", label: "Year 3" },
-            { value: "4", label: "Year 4" },
-            { value: "5", label: "Year 5" },
-            { value: "6", label: "Year 6" },
-          ]}
+          options={yearsAvailable.map((y) => ({ value: String(y), label: `Year ${y}` }))}
         />
 
         <FilterSelect
@@ -296,32 +401,24 @@ export default function TeacherDashboard() {
 
       {/* Tabs */}
       <div style={S.tabs}>
-        <Tab active={tab === "overview"} onClick={() => setTab("overview")}>
-          Overview
-        </Tab>
-        <Tab active={tab === "leaderboard"} onClick={() => setTab("leaderboard")}>
-          Leaderboard
-        </Tab>
-        <Tab active={tab === "improved"} onClick={() => setTab("improved")}>
-          Most improved
-        </Tab>
-        <Tab active={tab === "heatmap"} onClick={() => setTab("heatmap")}>
-          Times table heat map
-        </Tab>
-        <Tab active={tab === "settings"} onClick={() => setTab("settings")}>
-          Settings
-        </Tab>
+        <Tab active={tab === "overview"} onClick={() => setTab("overview")}>Overview</Tab>
+        <Tab active={tab === "leaderboard"} onClick={() => setTab("leaderboard")}>Leaderboard</Tab>
+        <Tab active={tab === "improved"} onClick={() => setTab("improved")}>Most improved</Tab>
+        <Tab active={tab === "heatmap"} onClick={() => setTab("heatmap")}>Times table heat map</Tab>
+        <Tab active={tab === "settings"} onClick={() => setTab("settings")}>Settings</Tab>
       </div>
 
-      {errorText && <div style={S.errorBox}><strong>Error:</strong> {errorText}</div>}
+      {errorText && (
+        <div style={S.errorBox}>
+          <strong>Error:</strong> {errorText}
+        </div>
+      )}
 
       {/* Content */}
       <div style={S.card}>
         {loading && <div style={S.muted}>Loading…</div>}
 
-        {!loading && tab === "overview" && (
-          <OverviewPanel overview={overview} />
-        )}
+        {!loading && tab === "overview" && <OverviewPanel overview={overview} />}
 
         {!loading && tab === "leaderboard" && (
           <div>
@@ -405,7 +502,9 @@ export default function TeacherDashboard() {
                           <div style={S.tileNum}>{t}</div>
                         </div>
                         <div style={S.tileBottom}>
-                          <div style={S.tilePct}>{typeof acc === "number" ? `${acc}%` : "—"}</div>
+                          <div style={S.tilePct}>
+                            {typeof acc === "number" ? `${acc}%` : "—"}
+                          </div>
                           <div style={S.tileSmall}>
                             {cell.correct ?? 0}/{cell.total ?? 0}
                           </div>
@@ -435,12 +534,16 @@ export default function TeacherDashboard() {
                     <div style={S.muted}>(This panel fills in after you click a tile.)</div>
                   )}
 
-                  {selectedTableNum && breakdownLoading && <div style={S.muted}>Loading breakdown…</div>}
+                  {selectedTableNum && breakdownLoading && (
+                    <div style={S.muted}>Loading breakdown…</div>
+                  )}
 
                   {selectedTableNum && !breakdownLoading && (
                     <>
                       {!breakdownRows.length ? (
-                        <div style={S.muted}>No breakdown data yet for ×{selectedTableNum}.</div>
+                        <div style={S.muted}>
+                          No breakdown data yet for ×{selectedTableNum}.
+                        </div>
                       ) : (
                         <BreakdownTable rows={breakdownRows} />
                       )}
@@ -456,7 +559,7 @@ export default function TeacherDashboard() {
           <div>
             <div style={S.h2}>Settings</div>
             <div style={S.muted}>
-              These are saved in the teacher browser for now. Next we’ll connect them to the student test automatically.
+              Saved in this teacher browser for now (localStorage). Next we can move settings into Supabase per teacher.
             </div>
 
             <div style={{ height: 14 }} />
@@ -552,15 +655,8 @@ export default function TeacherDashboard() {
             </div>
 
             <div style={S.note}>
-              <strong>Next step (I’ll do after you confirm this page looks right):</strong>
-              <div style={{ marginTop: 6 }}>
-                Update <code>pages/student/tests/mixed.js</code> so it reads these settings and uses:
-                <ul style={{ marginTop: 6, marginBottom: 0, paddingLeft: 18 }}>
-                  <li>{settings.questionCount} questions</li>
-                  <li>{settings.secondsPerQuestion} seconds per question</li>
-                  <li>Only tables: {settings.tablesIncluded.join(", ")}</li>
-                </ul>
-              </div>
+              <strong>Next step:</strong> link these settings into the student test automatically (mixed.js),
+              so pupils get the exact number of questions / seconds / tables you set here.
             </div>
           </div>
         )}
@@ -829,19 +925,18 @@ function accuracyPill(pct) {
 }
 
 /**
- * Class leader bands (you asked for these bands):
+ * Bands requested:
  * - Full marks
  * - 20–24
  * - 15–19
  * - 10–14
  * - Below 10
  *
- * NOTE: If total isn't 25, we band using percentage approximations.
+ * Exact when total === 25; otherwise percentage-based approximation.
  */
 function bandForScore(score, total) {
   if (typeof score !== "number" || typeof total !== "number" || total <= 0) return null;
 
-  // If total is 25, use your exact bands
   if (total === 25) {
     if (score === 25) return band("Full marks", "#ECFDF5", "#BBF7D0", "#166534");
     if (score >= 20) return band("20–24", "#EFF6FF", "#BFDBFE", "#1D4ED8");
@@ -850,7 +945,6 @@ function bandForScore(score, total) {
     return band("Below 10", "#FEF2F2", "#FECACA", "#991B1B");
   }
 
-  // Otherwise approximate using percent
   const pct = Math.round((score / total) * 100);
   if (pct >= 95) return band("Full marks-ish", "#ECFDF5", "#BBF7D0", "#166534");
   if (pct >= 80) return band("High", "#EFF6FF", "#BFDBFE", "#1D4ED8");
@@ -998,7 +1092,13 @@ const S = {
     fontWeight: 800,
   },
 
-  rowBetween: { display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" },
+  rowBetween: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    flexWrap: "wrap",
+    alignItems: "center",
+  },
 
   search: {
     padding: "10px 12px",
@@ -1020,7 +1120,13 @@ const S = {
     padding: 14,
     background: "#F8FAFC",
   },
-  statLabel: { fontSize: "0.8rem", color: "#6B7280", fontWeight: 900, letterSpacing: "0.12em", textTransform: "uppercase" },
+  statLabel: {
+    fontSize: "0.8rem",
+    color: "#6B7280",
+    fontWeight: 900,
+    letterSpacing: "0.12em",
+    textTransform: "uppercase",
+  },
   statValue: { marginTop: 6, fontSize: "1.5rem", fontWeight: 1000 },
 
   tableWrap: {
@@ -1044,12 +1150,19 @@ const S = {
   tdStrong: { padding: 12, borderBottom: "1px solid #F1F5F9", fontWeight: 1000 },
   tdMuted: { padding: 12, color: "#6B7280" },
 
-  deltaPill: { display: "inline-block", padding: "4px 10px", borderRadius: 999, border: "1px solid", fontWeight: 1000 },
+  deltaPill: {
+    display: "inline-block",
+    padding: "4px 10px",
+    borderRadius: 999,
+    border: "1px solid",
+    fontWeight: 1000,
+  },
 
+  // heatmap: use auto-fit so it doesn’t squash on smaller screens
   heatGrid: {
     marginTop: 14,
     display: "grid",
-    gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
     gap: 10,
   },
   tile: {
@@ -1058,9 +1171,9 @@ const S = {
     border: "1px solid #E5E7EB",
     padding: 12,
     cursor: "pointer",
-    minHeight: 92,
+    minHeight: 96,
   },
-  tileTop: { display: "flex", justifyContent: "space-between", alignItems: "baseline" },
+  tileTop: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 },
   tileKicker: { fontSize: "0.72rem", letterSpacing: "0.16em", color: "#6B7280", fontWeight: 1000 },
   tileNum: { fontSize: "1.35rem", fontWeight: 1000 },
   tileBottom: { marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 },
@@ -1074,7 +1187,13 @@ const S = {
     border: "1px solid #E5E7EB",
     background: "#F8FAFC",
   },
-  breakKicker: { fontSize: "0.78rem", letterSpacing: "0.14em", textTransform: "uppercase", color: "#6B7280", fontWeight: 1000 },
+  breakKicker: {
+    fontSize: "0.78rem",
+    letterSpacing: "0.14em",
+    textTransform: "uppercase",
+    color: "#6B7280",
+    fontWeight: 1000,
+  },
   breakTitle: { fontSize: "1.2rem", fontWeight: 1000 },
 
   smallBtn: {
@@ -1102,7 +1221,7 @@ const S = {
   tablePickGrid: {
     marginTop: 12,
     display: "grid",
-    gridTemplateColumns: "repeat(10, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(44px, 1fr))",
     gap: 8,
   },
   tablePick: {
