@@ -1,5 +1,4 @@
 // pages/api/teacher/login.js
-import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -8,23 +7,15 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-// Simple HMAC-signed cookie session (no extra libraries)
-const COOKIE_NAME = "bmtt_session";
-
-function signSession(payloadObj) {
-  const secret = process.env.SESSION_SECRET || "dev-secret-change-me";
-  const payload = Buffer.from(JSON.stringify(payloadObj)).toString("base64url");
-  const sig = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
-  return `${payload}.${sig}`;
-}
-
-function setCookie(res, value) {
-  // 7 days
-  const maxAge = 60 * 60 * 24 * 7;
-  res.setHeader(
-    "Set-Cookie",
-    `${COOKIE_NAME}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Secure`
-  );
+function setCookie(res, name, value, options = {}) {
+  const parts = [];
+  parts.push(`${name}=${value}`);
+  parts.push(`Path=${options.path || "/"}`);
+  if (options.httpOnly) parts.push("HttpOnly");
+  if (options.secure) parts.push("Secure");
+  parts.push(`SameSite=${options.sameSite || "Lax"}`);
+  if (typeof options.maxAge === "number") parts.push(`Max-Age=${options.maxAge}`);
+  res.setHeader("Set-Cookie", parts.join("; "));
 }
 
 export default async function handler(req, res) {
@@ -33,68 +24,63 @@ export default async function handler(req, res) {
   }
 
   const { email, password } = req.body || {};
-  const e = String(email || "").trim().toLowerCase();
-  const p = String(password || "");
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  const cleanPassword = String(password || "");
 
-  if (!e || !p) {
+  if (!cleanEmail || !cleanPassword) {
     return res.status(400).json({ ok: false, error: "Missing email or password" });
   }
 
-  try {
-    // Get teacher record
-    const { data: teacher, error } = await supabase
-      .from("teachers")
-      .select("id, email, full_name, role, password_hash")
-      .eq("email", e)
-      .maybeSingle();
+  // Load teacher row
+  const { data: teacher, error: teacherErr } = await supabase
+    .from("teachers")
+    .select("id, email, full_name, role, password_hash")
+    .eq("email", cleanEmail)
+    .maybeSingle();
 
-    if (error) {
-      return res.status(500).json({ ok: false, error: "DB error", details: error.message });
-    }
-
-    if (!teacher) {
-      return res.status(401).json({ ok: false, error: "Invalid login" });
-    }
-
-    // Verify password in Postgres using crypt()
-    const { data: checkData, error: checkErr } = await supabase.rpc("bmtt_check_teacher_password", {
-      teacher_id: teacher.id,
-      plain_password: p,
+  if (teacherErr) {
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to load teacher",
+      details: teacherErr.message,
     });
-
-    if (checkErr) {
-      return res.status(500).json({
-        ok: false,
-        error: "Password check failed",
-        details: checkErr.message,
-      });
-    }
-
-    if (!checkData) {
-      return res.status(401).json({ ok: false, error: "Invalid login" });
-    }
-
-    // Set cookie session
-    const session = signSession({
-      teacher_id: teacher.id,
-      role: teacher.role,
-      email: teacher.email,
-      full_name: teacher.full_name,
-      iat: Date.now(),
-    });
-
-    setCookie(res, session);
-
-    return res.status(200).json({
-      ok: true,
-      teacher: {
-        id: teacher.id,
-        email: teacher.email,
-        full_name: teacher.full_name,
-        role: teacher.role,
-      },
-    });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: "Server error", details: String(err?.message || err) });
   }
+
+  if (!teacher) {
+    return res.status(401).json({ ok: false, error: "Invalid login" });
+  }
+
+  // Verify password using pgcrypto crypt()
+  const { data: check, error: checkErr } = await supabase.rpc("verify_teacher_password", {
+    p_teacher_id: teacher.id,
+    p_password: cleanPassword,
+  });
+
+  if (checkErr) {
+    return res.status(500).json({
+      ok: false,
+      error: "Password verify failed",
+      details: checkErr.message,
+    });
+  }
+
+  if (!check) {
+    return res.status(401).json({ ok: false, error: "Invalid login" });
+  }
+
+  // Set cookie: store RAW JSON so /api/teacher/me can JSON.parse it
+  const cookieValue = JSON.stringify({ teacherId: teacher.id });
+
+  setCookie(res, "bmtt_teacher", cookieValue, {
+    path: "/",
+    httpOnly: true,
+    sameSite: "Lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 60 * 60 * 24 * 30, // 30 days
+  });
+
+  return res.status(200).json({
+    ok: true,
+    teacher: { id: teacher.id, email: teacher.email, full_name: teacher.full_name, role: teacher.role },
+  });
 }
