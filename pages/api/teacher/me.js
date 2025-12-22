@@ -1,5 +1,4 @@
 // pages/api/teacher/me.js
-import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -8,97 +7,122 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-const COOKIE_NAME = "bmtt_session";
+// Sort: Year asc, then M before B, then label
+function sortClasses(a, b) {
+  const ay = Number(a.year_group) || 0;
+  const by = Number(b.year_group) || 0;
+  if (ay !== by) return ay - by;
 
-function parseCookies(req) {
-  const header = req.headers.cookie || "";
-  const out = {};
-  header.split(";").forEach((part) => {
-    const [k, ...v] = part.trim().split("=");
-    if (!k) return;
-    out[k] = decodeURIComponent(v.join("="));
-  });
-  return out;
-}
+  const al = String(a.class_label || "")[0] || "";
+  const bl = String(b.class_label || "")[0] || "";
+  const order = { M: 0, B: 1 };
+  const ao = order[al] ?? 9;
+  const bo = order[bl] ?? 9;
+  if (ao !== bo) return ao - bo;
 
-function verifySession(token) {
-  if (!token || !token.includes(".")) return null;
-  const [payload, sig] = token.split(".");
-  const secret = process.env.SESSION_SECRET || "dev-secret-change-me";
-  const expected = crypto.createHmac("sha256", secret).update(payload).digest("base64url");
-  if (expected !== sig) return null;
-
-  try {
-    const obj = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return obj;
-  } catch {
-    return null;
-  }
+  return String(a.class_label || "").localeCompare(String(b.class_label || ""));
 }
 
 export default async function handler(req, res) {
   try {
-    const cookies = parseCookies(req);
-    const token = cookies[COOKIE_NAME];
-    const sess = verifySession(token);
+    // We store the teacher session in a cookie called "bmtt_teacher"
+    // It should contain JSON like: { "teacherId": "<uuid>" }
+    const rawCookie = req.cookies?.bmtt_teacher;
 
-    if (!sess?.teacher_id) {
+    if (!rawCookie) {
+      return res.status(200).json({ ok: true, loggedIn: false });
+    }
+
+    let session = null;
+    try {
+      session = JSON.parse(rawCookie);
+    } catch (e) {
+      // Bad cookie - treat as logged out
+      return res.status(200).json({ ok: true, loggedIn: false });
+    }
+
+    const teacherId = session?.teacherId;
+    if (!teacherId) {
       return res.status(200).json({ ok: true, loggedIn: false });
     }
 
     // Load teacher
-    const { data: teacher, error: tErr } = await supabase
+    const { data: teacher, error: teacherErr } = await supabase
       .from("teachers")
       .select("id, email, full_name, role")
-      .eq("id", sess.teacher_id)
+      .eq("id", teacherId)
       .maybeSingle();
 
-    if (tErr) {
-      return res.status(500).json({ ok: false, error: "Failed to load teacher", details: tErr.message });
+    if (teacherErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load teacher",
+        details: teacherErr.message,
+      });
     }
 
     if (!teacher) {
       return res.status(200).json({ ok: true, loggedIn: false });
     }
 
-    // Load assigned classes (admin gets all)
+    // Load classes based on role
     let classes = [];
+
     if (teacher.role === "admin") {
-      const { data: allClasses, error: cErr } = await supabase
+      // Admin: all classes
+      const { data: allClasses, error: classesErr } = await supabase
         .from("classes")
         .select("id, class_label, year_group")
-        .order("year_group", { ascending: true })
-        .order("class_label", { ascending: true });
+        .not("class_label", "is", null);
 
-      if (cErr) {
-        return res.status(500).json({ ok: false, error: "Failed to load classes", details: cErr.message });
+      if (classesErr) {
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to load classes",
+          details: classesErr.message,
+        });
       }
+
       classes = allClasses || [];
     } else {
-      const { data: links, error: lErr } = await supabase
+      // Normal teacher: only assigned classes via teacher_classes
+      const { data: links, error: linkErr } = await supabase
         .from("teacher_classes")
         .select("class_id")
         .eq("teacher_id", teacher.id);
 
-      if (lErr) {
-        return res.status(500).json({ ok: false, error: "Failed to load teacher_classes", details: lErr.message });
+      if (linkErr) {
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to load teacher_classes",
+          details: linkErr.message,
+        });
       }
 
-      const ids = (links || []).map((x) => x.class_id);
-      if (ids.length) {
-        const { data: someClasses, error: cErr } = await supabase
+      const classIds = (links || []).map((l) => l.class_id).filter(Boolean);
+
+      if (classIds.length === 0) {
+        classes = [];
+      } else {
+        const { data: someClasses, error: classesErr } = await supabase
           .from("classes")
           .select("id, class_label, year_group")
-          .in("id", ids)
-          .order("year_group", { ascending: true })
-          .order("class_label", { ascending: true });
+          .in("id", classIds)
+          .not("class_label", "is", null);
 
-        if (cErr) {
-          return res.status(500).json({ ok: false, error: "Failed to load classes", details: cErr.message });
+        if (classesErr) {
+          return res.status(500).json({
+            ok: false,
+            error: "Failed to load classes",
+            details: classesErr.message,
+          });
         }
+
         classes = someClasses || [];
       }
     }
+
+    classes.sort(sortClasses);
 
     return res.status(200).json({
       ok: true,
@@ -107,6 +131,10 @@ export default async function handler(req, res) {
       classes,
     });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: "Server error", details: String(err?.message || err) });
+    return res.status(500).json({
+      ok: false,
+      error: "Server error",
+      details: String(err?.message || err),
+    });
   }
 }
