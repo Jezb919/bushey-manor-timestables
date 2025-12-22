@@ -1,10 +1,42 @@
 // pages/teacher/admin.js
 import { useEffect, useMemo, useState } from "react";
 
+async function safeFetchJson(url, options) {
+  const res = await fetch(url, options);
+  const contentType = res.headers.get("content-type") || "";
+  const text = await res.text();
+
+  // If we got HTML (often a 404 page), return a clear error instead of crashing
+  if (!contentType.includes("application/json")) {
+    return {
+      ok: false,
+      status: res.status,
+      error: `Non-JSON response from ${url} (status ${res.status}). This usually means the API route file is missing or misnamed.`,
+      raw: text.slice(0, 200),
+    };
+  }
+
+  let json;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    return {
+      ok: false,
+      status: res.status,
+      error: `Invalid JSON from ${url} (status ${res.status}).`,
+      raw: text.slice(0, 200),
+    };
+  }
+
+  // Keep status in the object for debugging
+  return { status: res.status, ...json };
+}
+
 export default function AdminPage() {
   const [me, setMe] = useState(null);
   const [teachers, setTeachers] = useState([]);
   const [classes, setClasses] = useState([]);
+  const [errorBox, setErrorBox] = useState("");
 
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [assignedClassIds, setAssignedClassIds] = useState([]);
@@ -20,25 +52,37 @@ export default function AdminPage() {
   );
 
   async function loadMe() {
-    const r = await fetch("/api/teacher/me");
-    const j = await r.json();
+    const j = await safeFetchJson("/api/teacher/me");
+    if (!j.ok) {
+      setErrorBox(j.error || "Failed to load /api/teacher/me");
+      setMe({ ok: true, loggedIn: false });
+      return;
+    }
     setMe(j);
-    if (j?.classes) setClasses(j.classes);
+    setClasses(j.classes || []);
   }
 
   async function loadTeachers() {
-    const r = await fetch("/api/teacher/admin/teachers");
-    const j = await r.json();
-    if (j.ok) setTeachers(j.teachers || []);
-    else alert(j.error || "Failed to load teachers");
+    const j = await safeFetchJson("/api/teacher/admin/teachers");
+    if (!j.ok) {
+      setErrorBox(j.error || "Failed to load teachers");
+      setTeachers([]);
+      return;
+    }
+    setTeachers(j.teachers || []);
   }
 
   async function loadAssignments(teacherId) {
     if (!teacherId) return;
-    const r = await fetch(`/api/teacher/admin/assignments?teacher_id=${teacherId}`);
-    const j = await r.json();
-    if (j.ok) setAssignedClassIds(j.classIds || []);
-    else alert(j.error || "Failed to load assignments");
+    const j = await safeFetchJson(
+      `/api/teacher/admin/assignments?teacher_id=${teacherId}`
+    );
+    if (!j.ok) {
+      setErrorBox(j.error || "Failed to load assignments");
+      setAssignedClassIds([]);
+      return;
+    }
+    setAssignedClassIds(j.classIds || []);
   }
 
   useEffect(() => {
@@ -52,7 +96,9 @@ export default function AdminPage() {
 
   async function createTeacher(e) {
     e.preventDefault();
-    const r = await fetch("/api/teacher/admin/teachers", {
+    setErrorBox("");
+
+    const j = await safeFetchJson("/api/teacher/admin/teachers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -62,8 +108,11 @@ export default function AdminPage() {
         password: newPassword,
       }),
     });
-    const j = await r.json();
-    if (!j.ok) return alert(j.error || "Create failed");
+
+    if (!j.ok) {
+      setErrorBox(j.error || j.details || "Create failed");
+      return;
+    }
 
     setNewEmail("");
     setNewFullName("");
@@ -80,13 +129,19 @@ export default function AdminPage() {
 
   async function saveAssignments() {
     if (!selectedTeacherId) return alert("Select a teacher first");
-    const r = await fetch("/api/teacher/admin/assignments", {
+    setErrorBox("");
+
+    const j = await safeFetchJson("/api/teacher/admin/assignments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ teacher_id: selectedTeacherId, classIds: assignedClassIds }),
     });
-    const j = await r.json();
-    if (!j.ok) return alert(j.error || "Save failed");
+
+    if (!j.ok) {
+      setErrorBox(j.error || j.details || "Save failed");
+      return;
+    }
+
     alert("Assignments saved ✅");
   }
 
@@ -95,30 +150,44 @@ export default function AdminPage() {
     const pw = prompt("Enter a NEW password for this teacher:");
     if (!pw) return;
 
-    const r = await fetch("/api/teacher/admin/reset_password", {
+    setErrorBox("");
+
+    const j = await safeFetchJson("/api/teacher/admin/reset_password", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ teacher_id: selectedTeacherId, password: pw }),
     });
 
-    const j = await r.json();
-    if (!j.ok) return alert(j.error || "Reset failed");
+    if (!j.ok) {
+      setErrorBox(j.error || j.details || "Reset failed");
+      return;
+    }
+
     alert("Password reset ✅");
   }
 
-  // Guard
+  // Guards
   if (!me) return <div style={wrap}><Card>Loading…</Card></div>;
   if (!me.loggedIn) return <div style={wrap}><Card>Please log in first.</Card></div>;
-  if (me.teacher?.role !== "admin")
-    return <div style={wrap}><Card>Admin only.</Card></div>;
+  if (me.teacher?.role !== "admin") return <div style={wrap}><Card>Admin only.</Card></div>;
 
   return (
     <div style={wrap}>
       <div style={{ width: "100%", maxWidth: 1100 }}>
         <h1 style={h1}>Admin: Teachers & Classes</h1>
-        <p style={sub}>
-          Create teachers, assign classes, and reset passwords.
-        </p>
+        <p style={sub}>Create teachers, assign classes, and reset passwords.</p>
+
+        {errorBox && (
+          <div style={errorStyle}>
+            <strong>Fix needed:</strong>
+            <div style={{ marginTop: 6 }}>{errorBox}</div>
+            <div style={{ marginTop: 10, fontSize: 12 }}>
+              Check these URLs:
+              <div><a href="/api/teacher/admin/teachers">/api/teacher/admin/teachers</a></div>
+              <div><a href="/api/teacher/admin/assignments?teacher_id=TEST">/api/teacher/admin/assignments?teacher_id=TEST</a></div>
+            </div>
+          </div>
+        )}
 
         <div style={grid}>
           <Card>
@@ -140,18 +209,10 @@ export default function AdminPage() {
               </Field>
 
               <Field label="Password">
-                <input
-                  style={input}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  required
-                  type="password"
-                />
+                <input style={input} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required type="password" />
               </Field>
 
-              <button style={btnPrimary} type="submit">
-                Create
-              </button>
+              <button style={btnPrimary} type="submit">Create</button>
             </form>
           </Card>
 
@@ -159,11 +220,7 @@ export default function AdminPage() {
             <h2 style={h2}>Assign classes</h2>
 
             <Field label="Select teacher">
-              <select
-                style={input}
-                value={selectedTeacherId}
-                onChange={(e) => setSelectedTeacherId(e.target.value)}
-              >
+              <select style={input} value={selectedTeacherId} onChange={(e) => setSelectedTeacherId(e.target.value)}>
                 <option value="">— choose —</option>
                 {teachers.map((t) => (
                   <option key={t.id} value={t.id}>
@@ -194,12 +251,8 @@ export default function AdminPage() {
             </div>
 
             <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-              <button style={btnPrimary} onClick={saveAssignments}>
-                Save assignments
-              </button>
-              <button style={btnGhost} onClick={resetPassword}>
-                Reset password
-              </button>
+              <button style={btnPrimary} onClick={saveAssignments}>Save assignments</button>
+              <button style={btnGhost} onClick={resetPassword}>Reset password</button>
             </div>
           </Card>
         </div>
@@ -215,14 +268,13 @@ function Card({ children }) {
 function Field({ label, children }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={label}>{label}</div>
+      <div style={labelStyle}>{label}</div>
       {children}
     </div>
   );
 }
 
-/* ---------- Styles (white, clean) ---------- */
-
+/* Styles */
 const wrap = {
   minHeight: "100vh",
   background: "#f8fafc",
@@ -231,16 +283,11 @@ const wrap = {
   padding: "24px",
   fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif",
 };
-
 const h1 = { fontSize: 28, margin: "0 0 6px", color: "#0f172a" };
 const sub = { margin: "0 0 18px", color: "#475569" };
 const h2 = { fontSize: 18, margin: "0 0 12px", color: "#0f172a" };
 
-const grid = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 16,
-};
+const grid = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 };
 
 const card = {
   background: "white",
@@ -250,7 +297,7 @@ const card = {
   boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
 };
 
-const label = { fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 };
+const labelStyle = { fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 };
 
 const input = {
   width: "100%",
@@ -304,3 +351,12 @@ const classChip = (on) => ({
   fontWeight: 700,
   color: "#0f172a",
 });
+
+const errorStyle = {
+  background: "#fff7ed",
+  border: "1px solid #fdba74",
+  padding: 12,
+  borderRadius: 12,
+  marginBottom: 14,
+  color: "#7c2d12",
+};
