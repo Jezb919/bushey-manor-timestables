@@ -170,9 +170,7 @@ export default function TeacherHome() {
         <MostImprovedPanel scope={scope} classLabel={classLabel} year={year} days={days} />
       )}
 
-      {tab === "settings" && (
-        <SettingsPanel me={me} classLabel={classLabel} />
-      )}
+      {tab === "settings" && <SettingsPanel me={me} classLabel={classLabel} />}
     </PageShell>
   );
 }
@@ -222,7 +220,7 @@ function HeatmapPanel({ scope, classLabel, year, days }) {
     <Card>
       <h2 style={{ marginTop: 0 }}>Times Table Heatmap</h2>
       <p style={{ marginTop: 0, color: "#475569" }}>
-        Explain: click a tile to see which pupils are strongest/weakest on that table.
+        Click a tile to see which pupils are strongest/weakest on that table.
       </p>
 
       {loading ? (
@@ -235,9 +233,7 @@ function HeatmapPanel({ scope, classLabel, year, days }) {
 
           {breakdown?.ok && (
             <div style={{ marginTop: 18 }}>
-              <h3 style={{ marginBottom: 8 }}>
-                Table {breakdown.table_num} breakdown
-              </h3>
+              <h3 style={{ marginBottom: 8 }}>Table {breakdown.table_num} breakdown</h3>
               <div style={{ overflowX: "auto" }}>
                 <table style={tableStyle}>
                   <thead>
@@ -256,17 +252,14 @@ function HeatmapPanel({ scope, classLabel, year, days }) {
                         <td style={tdStyle}>{r.class_label}</td>
                         <td style={tdStyle}>{r.correct ?? "-"}</td>
                         <td style={tdStyle}>{r.total ?? "-"}</td>
-                        <td style={tdStyle}>
-                          {r.accuracy === null ? "-" : r.accuracy + "%"}
-                        </td>
+                        <td style={tdStyle}>{r.accuracy === null ? "-" : r.accuracy + "%"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
               <p style={{ color: "#475569", marginTop: 10 }}>
-                Summary: {breakdown.summary.correct}/{breakdown.summary.total} (
-                {breakdown.summary.accuracy}%)
+                Summary: {breakdown.summary.correct}/{breakdown.summary.total} ({breakdown.summary.accuracy}%)
               </p>
             </div>
           )}
@@ -303,9 +296,7 @@ function LeaderboardPanel({ scope, classLabel, year, days }) {
   return (
     <Card>
       <h2 style={{ marginTop: 0 }}>Leaderboard</h2>
-      <p style={{ marginTop: 0, color: "#475569" }}>
-        Latest attempt per student (within range).
-      </p>
+      <p style={{ marginTop: 0, color: "#475569" }}>Latest attempt per student (within range).</p>
 
       {loading ? (
         <p>Loading…</p>
@@ -328,12 +319,8 @@ function LeaderboardPanel({ scope, classLabel, year, days }) {
                 <tr key={r.student_id}>
                   <td style={tdStyle}>{r.student}</td>
                   <td style={tdStyle}>{r.class_label}</td>
-                  <td style={tdStyle}>
-                    {r.percent === null ? "-" : badgePercent(r.percent)}
-                  </td>
-                  <td style={tdStyle}>
-                    {r.score === null ? "-" : `${r.score}/${r.total}`}
-                  </td>
+                  <td style={tdStyle}>{r.percent === null ? "-" : badgePercent(r.percent)}</td>
+                  <td style={tdStyle}>{r.score === null ? "-" : `${r.score}/${r.total}`}</td>
                   <td style={tdStyle}>{r.attempts_in_range}</td>
                 </tr>
               ))}
@@ -345,14 +332,12 @@ function LeaderboardPanel({ scope, classLabel, year, days }) {
   );
 }
 
-function MostImprovedPanel({ scope, classLabel, year, days }) {
-  // Placeholder panel (we can wire this to a new /api/teacher/improved endpoint next)
+function MostImprovedPanel() {
   return (
     <Card>
       <h2 style={{ marginTop: 0 }}>Most Improved</h2>
       <p style={{ color: "#475569" }}>
-        Next step: we’ll add an endpoint that compares each pupil’s first vs latest
-        attempt in the date range and ranks by improvement.
+        Next step: we’ll add an endpoint that compares each pupil’s first vs latest attempt in the date range and ranks by improvement.
       </p>
     </Card>
   );
@@ -364,13 +349,10 @@ function SettingsPanel({ me, classLabel }) {
   const [seconds, setSeconds] = useState(6);
   const [tables, setTables] = useState(Array.from({ length: 19 }, (_, i) => i + 1));
 
-  // load settings for selected class from server (we will create /api/teacher/settings next)
   useEffect(() => {
     const run = async () => {
       setStatus(null);
-      const res = await fetch(
-        `/api/teacher/settings?class_label=${encodeURIComponent(classLabel || "")}`
-      );
+      const res = await fetch(`/api/teacher/settings?class_label=${encodeURIComponent(classLabel || "")}`);
       const json = await res.json();
       if (json?.ok && json?.settings) {
         setQuestionCount(json.settings.question_count ?? 25);
@@ -410,9 +392,7 @@ function SettingsPanel({ me, classLabel }) {
   return (
     <Card>
       <h2 style={{ marginTop: 0 }}>Settings</h2>
-      <p style={{ marginTop: 0, color: "#475569" }}>
-        These settings apply to the class test students run.
-      </p>
+      <p style={{ marginTop: 0, color: "#475569" }}>These settings apply to the class test students run.</p>
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
         <div>
@@ -491,8 +471,7 @@ function PageShell({ children }) {
         minHeight: "100vh",
         background: "linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%)",
         padding: "22px",
-        fontFamily:
-          "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
         color: "#0f172a",
       }}
     >
@@ -521,12 +500,8 @@ function TopBar({ me }) {
           BM
         </div>
         <div>
-          <div style={{ fontSize: 13, color: "#64748b", letterSpacing: "0.12em" }}>
-            TEACHER DASHBOARD
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 900 }}>
-            Times Tables Arena
-          </div>
+          <div style={{ fontSize: 13, color: "#64748b", letterSpacing: "0.12em" }}>TEACHER DASHBOARD</div>
+          <div style={{ fontSize: 20, fontWeight: 900 }}>Times Tables Arena</div>
         </div>
       </div>
 
@@ -569,9 +544,25 @@ function HeatGrid({ tableHeat, onClickTable }) {
       {tableHeat.map((cell) => {
         const acc = cell.accuracy;
         const bg =
-          acc === null ? "#f1f5f9" : acc >= 90 ? "#dcfce7" : acc >= 70 ? "#e0f2fe" : acc >= 40 ? "#ffedd5" : "#fee2e2";
+          acc === null
+            ? "#f1f5f9"
+            : acc >= 90
+            ? "#dcfce7"
+            : acc >= 70
+            ? "#e0f2fe"
+            : acc >= 40
+            ? "#ffedd5"
+            : "#fee2e2";
         const border =
-          acc === null ? "#cbd5e1" : acc >= 90 ? "#22c55e" : acc >= 70 ? "#0ea5e9" : acc >= 40 ? "#fb923c" : "#ef4444";
+          acc === null
+            ? "#cbd5e1"
+            : acc >= 90
+            ? "#22c55e"
+            : acc >= 70
+            ? "#0ea5e9"
+            : acc >= 40
+            ? "#fb923c"
+            : "#ef4444";
 
         return (
           <button
@@ -587,9 +578,7 @@ function HeatGrid({ tableHeat, onClickTable }) {
               minHeight: 86,
             }}
           >
-            <div style={{ fontWeight: 900, fontSize: 18 }}>
-              × {cell.table_num}
-            </div>
+            <div style={{ fontWeight: 900, fontSize: 18 }}>× {cell.table_num}</div>
             <div style={{ marginTop: 6, color: "#475569", fontWeight: 800 }}>
               {acc === null ? "No data" : `${acc}%`}
             </div>
@@ -624,26 +613,18 @@ function badgePercent(percent) {
   );
 }
 
-const tableStyle = {
-  width: "100%",
-  borderCollapse: "collapse",
-  fontSize: 14,
-};
-
-const thStyle = {
-  textAlign: "left",
-  padding: "10px 10px",
-  borderBottom: "1px solid #e2e8f0",
-  color: "#334155",
-};
-
-const tdStyle = {
-  padding: "10px 10px",
-  borderBottom: "1px solid #f1f5f9",
-  color: "#0f172a",
-};
-
+const tableStyle = { width: "100%", borderCollapse: "collapse", fontSize: 14 };
+const thStyle = { textAlign: "left", padding: "10px 10px", borderBottom: "1px solid #e2e8f0", color: "#334155" };
+const tdStyle = { padding: "10px 10px", borderBottom: "1px solid #f1f5f9", color: "#0f172a" };
 const labelStyle = { display: "block", fontSize: 12, color: "#64748b", fontWeight: 900, marginBottom: 6 };
 const inputSmall = { padding: "10px 12px", borderRadius: 12, border: "1px solid #cbd5e1", fontWeight: 800 };
-const primaryBtn = { padding: "12px 14px", borderRadius: 14, border: "none", background: "linear-gradient(135deg,#0ea5e9,#22c55e)", color: "white", fontWeight: 900, cursor: "pointer" };
+const primaryBtn = {
+  padding: "12px 14px",
+  borderRadius: 14,
+  border: "none",
+  background: "linear-gradient(135deg,#0ea5e9,#22c55e)",
+  color: "white",
+  fontWeight: 900,
+  cursor: "pointer",
+};
 const linkStyle = { display: "inline-block", marginTop: 8, fontWeight: 900, color: "#0ea5e9", textDecoration: "none" };
