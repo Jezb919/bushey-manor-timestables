@@ -17,7 +17,9 @@ export default async function handler(req, res) {
       return res.status(405).json({ ok: false, error: "Use GET" });
     }
 
-    const classLabel = normaliseClassLabel(req.query?.class_label);
+    // ✅ Safe parse of query
+    const { class_label } = req.query || {};
+    const classLabel = normaliseClassLabel(class_label);
 
     if (!classLabel) {
       return res.status(400).json({ ok: false, error: "Missing class_label" });
@@ -62,7 +64,7 @@ export default async function handler(req, res) {
 
     const teacherId = tc?.[0]?.teacher_id || null;
 
-    // Default settings if no teacher assignment/settings yet
+    // Defaults if no teacher assignment / no saved settings yet
     const defaults = {
       question_count: 25,
       seconds_per_question: 6,
@@ -79,10 +81,12 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3) Pull that teacher’s saved settings for this class
+    // 3) Pull teacher’s saved settings for this class
     const { data: settingsRow, error: sErr } = await supabase
       .from("teacher_settings")
-      .select("question_count, seconds_per_question, tables_selected, class_label, updated_at")
+      .select(
+        "question_count, seconds_per_question, tables_selected, class_label, updated_at"
+      )
       .eq("teacher_id", teacherId)
       .eq("class_label", classLabel)
       .order("updated_at", { ascending: false })
@@ -112,12 +116,11 @@ export default async function handler(req, res) {
       year_group: cls.year_group,
       source: "teacher_settings",
       settings: {
-        class_label,
+        class_label: classLabel,
         question_count: settingsRow.question_count ?? defaults.question_count,
         seconds_per_question:
           settingsRow.seconds_per_question ?? defaults.seconds_per_question,
-        tables_selected:
-          settingsRow.tables_selected ?? defaults.tables_selected,
+        tables_selected: settingsRow.tables_selected ?? defaults.tables_selected,
         updated_at: settingsRow.updated_at ?? null,
       },
     });
