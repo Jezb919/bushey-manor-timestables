@@ -1,200 +1,214 @@
 // pages/api/teacher/settings.js
 import { createClient } from "@supabase/supabase-js";
 
-/**
- * Uses Service Role because this is a server API route.
- * Auth is handled via a teacher session cookie.
- */
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   { auth: { persistSession: false } }
 );
 
-/**
- * If you used a different cookie name in your login route, set:
- * TEACHER_SESSION_COOKIE=bmtt_teacher_session_v1 (or whatever yours is)
- */
-const COOKIE_NAME = process.env.TEACHER_SESSION_COOKIE || "bmtt_teacher_session";
+// --- tiny cookie parser ---
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const out = {};
+  header.split(";").forEach((part) => {
+    const [k, ...rest] = part.trim().split("=");
+    if (!k) return;
+    out[k] = decodeURIComponent(rest.join("=") || "");
+  });
+  return out;
+}
 
-/** very small helper */
-function isUuid(v) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+function looksLikeUUID(v) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     String(v || "")
   );
 }
 
-function normaliseClassLabel(value) {
-  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
-}
+// Try hard to find a teacher session value from cookies (different versions used different names)
+function getTeacherSessionValue(req) {
+  const c = parseCookies(req);
 
-function normaliseTablesSelected(value) {
-  // Accept: array of numbers, or comma string "1,2,3"
-  if (Array.isArray(value)) {
-    return value
-      .map((n) => Number(n))
-      .filter((n) => Number.isFinite(n) && n >= 1 && n <= 19);
-  }
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((s) => Number(String(s).trim()))
-      .filter((n) => Number.isFinite(n) && n >= 1 && n <= 19);
-  }
-  return [];
-}
+  // common cookie names we might have used
+  const candidates = [
+    c.bmtt_teacher_id,
+    c.bmtt_teacher,
+    c.bmtt_teacher_session,
+    c.teacher_id,
+    c.teacher,
+  ].filter(Boolean);
 
-function safeInt(v, fallback) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+  if (candidates.length) return candidates[0];
+
+  // last resort: any cookie containing "teacher"
+  for (const [k, v] of Object.entries(c)) {
+    if (k.toLowerCase().includes("teacher") && v) return v;
+  }
+
+  return null;
 }
 
 async function getLoggedInTeacher(req) {
-  // We expect the cookie value to be the teacher UUID.
-  // (That matches your /api/teacher/me behaviour where loggedIn becomes true/false.)
-  const cookieVal = req.cookies?.[COOKIE_NAME];
+  const raw = getTeacherSessionValue(req);
+  if (!raw) return { loggedIn: false };
 
-  if (!cookieVal) return null;
-  if (!isUuid(cookieVal)) return null;
+  // raw could be UUID, JSON, or something else
+  let teacherId = null;
+  let email = null;
 
-  const { data: teacher, error } = await supabase
-    .from("teachers")
-    .select("id, email, full_name, role")
-    .eq("id", cookieVal)
-    .maybeSingle();
+  if (looksLikeUUID(raw)) {
+    teacherId = raw;
+  } else {
+    // try JSON
+    try {
+      const parsed = JSON.parse(raw);
+      teacherId = parsed?.id || parsed?.teacherId || null;
+      email = parsed?.email || null;
+    } catch {
+      // try if it's an email
+      if (String(raw).includes("@")) email = raw;
+    }
+  }
 
-  if (error) throw new Error(error.message);
-  return teacher || null;
+  let teacher = null;
+
+  if (teacherId) {
+    const { data, error } = await supabase
+      .from("teachers")
+      .select("id, email, full_name, role")
+      .eq("id", teacherId)
+      .maybeSingle();
+    if (error) return { loggedIn: false, error: error.message };
+    teacher = data;
+  } else if (email) {
+    const { data, error } = await supabase
+      .from("teachers")
+      .select("id, email, full_name, role")
+      .eq("email", email)
+      .maybeSingle();
+    if (error) return { loggedIn: false, error: error.message };
+    teacher = data;
+  }
+
+  if (!teacher?.id) return { loggedIn: false };
+
+  // load classes this teacher can access
+  const { data: classes, error: cErr } = await supabase
+    .from("teacher_classes")
+    .select("class_label")
+    .eq("teacher_id", teacher.id);
+
+  // admins can access everything
+  let allowedClasses = classes || [];
+  if (teacher.role === "admin") {
+    const { data: all, error: allErr } = await supabase
+      .from("classes")
+      .select("class_label, year_group")
+      .order("year_group", { ascending: true });
+    if (!allErr && all) allowedClasses = all;
+  }
+
+  if (cErr) {
+    // even if teacher_classes fails, still treat as logged in (admin screens may still work)
+    return { loggedIn: true, teacher, classes: [] };
+  }
+
+  return { loggedIn: true, teacher, classes: allowedClasses };
+}
+
+function normaliseClassLabel(v) {
+  return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function clampInt(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+function normaliseTables(arr) {
+  const nums = (Array.isArray(arr) ? arr : [])
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 19)
+    .map((n) => Math.round(n));
+  const uniq = Array.from(new Set(nums)).sort((a, b) => a - b);
+  return uniq.length ? uniq : Array.from({ length: 19 }, (_, i) => i + 1);
 }
 
 export default async function handler(req, res) {
   try {
-    const teacher = await getLoggedInTeacher(req);
-
-    if (!teacher) {
+    const auth = await getLoggedInTeacher(req);
+    if (!auth.loggedIn) {
       return res.status(200).json({ ok: true, loggedIn: false });
     }
 
-    // GET:
-    //  - /api/teacher/settings                 -> returns settings for all teacher classes (if stored)
-    //  - /api/teacher/settings?class_label=M4  -> returns settings for that class
+    const teacher = auth.teacher;
+
     if (req.method === "GET") {
-      const classLabel = req.query?.class_label
-        ? normaliseClassLabel(req.query.class_label)
-        : null;
-
-      let q = supabase
-        .from("teacher_settings")
-        .select(
-          "teacher_id, class_label, question_count, seconds_per_question, tables_selected, updated_at"
-        )
-        .eq("teacher_id", teacher.id);
-
-      if (classLabel) q = q.eq("class_label", classLabel);
-
-      const { data, error } = await q.order("updated_at", { ascending: false });
-
-      if (error) {
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to load teacher_settings",
-          details: error.message,
-        });
+      const class_label = normaliseClassLabel(req.query.class_label);
+      if (!class_label) {
+        return res.status(400).json({ ok: false, error: "Missing class_label" });
       }
 
-      // Provide a sane default if nothing saved yet
-      const defaultSettings = {
+      // teacher can only read settings for their class unless admin
+      const allowed = teacher.role === "admin"
+        ? true
+        : (auth.classes || []).some((c) => normaliseClassLabel(c.class_label) === class_label);
+
+      if (!allowed) {
+        return res.status(403).json({ ok: false, error: "Not allowed for this class" });
+      }
+
+      const { data, error } = await supabase
+        .from("teacher_settings")
+        .select("teacher_id, class_label, question_count, seconds_per_question, tables_selected, updated_at")
+        .eq("teacher_id", teacher.id)
+        .eq("class_label", class_label)
+        .maybeSingle();
+
+      if (error) {
+        return res.status(500).json({ ok: false, error: "Failed to load settings", details: error.message });
+      }
+
+      const defaults = {
         question_count: 25,
         seconds_per_question: 6,
         tables_selected: Array.from({ length: 19 }, (_, i) => i + 1),
       };
 
-      if (!data || data.length === 0) {
-        return res.status(200).json({
-          ok: true,
-          loggedIn: true,
-          teacher,
-          class_label: classLabel,
-          settings: classLabel ? { ...defaultSettings, class_label: classLabel } : null,
-          settingsByClass: classLabel ? null : [],
-          note:
-            "No saved settings yet for this teacher. Returning defaults (25 questions, 6 seconds, tables 1–19).",
-        });
-      }
-
-      if (classLabel) {
-        // take most recent row
-        const row = data[0];
-        return res.status(200).json({
-          ok: true,
-          loggedIn: true,
-          teacher,
-          class_label: classLabel,
-          settings: {
-            class_label: row.class_label,
-            question_count: row.question_count ?? defaultSettings.question_count,
-            seconds_per_question:
-              row.seconds_per_question ?? defaultSettings.seconds_per_question,
-            tables_selected:
-              row.tables_selected ?? defaultSettings.tables_selected,
-            updated_at: row.updated_at ?? null,
-          },
-        });
-      }
-
-      // all classes
-      const settingsByClass = data.map((row) => ({
-        class_label: row.class_label,
-        question_count: row.question_count ?? defaultSettings.question_count,
-        seconds_per_question:
-          row.seconds_per_question ?? defaultSettings.seconds_per_question,
-        tables_selected: row.tables_selected ?? defaultSettings.tables_selected,
-        updated_at: row.updated_at ?? null,
-      }));
-
       return res.status(200).json({
         ok: true,
         loggedIn: true,
-        teacher,
-        settingsByClass,
+        teacher: { id: teacher.id, email: teacher.email, role: teacher.role },
+        settings: data
+          ? {
+              question_count: data.question_count ?? defaults.question_count,
+              seconds_per_question: data.seconds_per_question ?? defaults.seconds_per_question,
+              tables_selected: data.tables_selected ?? defaults.tables_selected,
+              class_label,
+            }
+          : { ...defaults, class_label },
       });
     }
 
-    // POST:
-    // body: { class_label, question_count, seconds_per_question, tables_selected }
-    // Saves settings for THIS teacher + THIS class_label.
     if (req.method === "POST") {
       const body = req.body || {};
-
       const class_label = normaliseClassLabel(body.class_label);
-      const question_count = safeInt(body.question_count, 25);
-      const seconds_per_question = safeInt(body.seconds_per_question, 6);
-      const tables_selected = normaliseTablesSelected(body.tables_selected);
-
       if (!class_label) {
         return res.status(400).json({ ok: false, error: "Missing class_label" });
       }
 
-      if (question_count < 1 || question_count > 120) {
-        return res.status(400).json({
-          ok: false,
-          error: "question_count must be between 1 and 120",
-        });
+      const allowed = teacher.role === "admin"
+        ? true
+        : (auth.classes || []).some((c) => normaliseClassLabel(c.class_label) === class_label);
+
+      if (!allowed) {
+        return res.status(403).json({ ok: false, error: "Not allowed for this class" });
       }
 
-      if (seconds_per_question < 1 || seconds_per_question > 60) {
-        return res.status(400).json({
-          ok: false,
-          error: "seconds_per_question must be between 1 and 60",
-        });
-      }
-
-      if (!tables_selected.length) {
-        return res.status(400).json({
-          ok: false,
-          error: "Select at least 1 table (1–19)",
-        });
-      }
+      const question_count = clampInt(body.question_count, 10, 60, 25);
+      const seconds_per_question = clampInt(body.seconds_per_question, 3, 6, 6);
+      const tables_selected = normaliseTables(body.tables_selected);
 
       const row = {
         teacher_id: teacher.id,
@@ -205,13 +219,11 @@ export default async function handler(req, res) {
         updated_at: new Date().toISOString(),
       };
 
-      // Upsert on (teacher_id, class_label)
+      // upsert requires a unique constraint on (teacher_id, class_label)
       const { data, error } = await supabase
         .from("teacher_settings")
         .upsert(row, { onConflict: "teacher_id,class_label" })
-        .select(
-          "teacher_id, class_label, question_count, seconds_per_question, tables_selected, updated_at"
-        )
+        .select("teacher_id, class_label, question_count, seconds_per_question, tables_selected, updated_at")
         .single();
 
       if (error) {
@@ -219,12 +231,10 @@ export default async function handler(req, res) {
           ok: false,
           error: "Failed to save settings",
           details: error.message,
-          hint:
-            "If this mentions onConflict, you need a UNIQUE constraint on (teacher_id, class_label).",
         });
       }
 
-      return res.status(200).json({ ok: true, saved: data });
+      return res.status(200).json({ ok: true, loggedIn: true, settings: data });
     }
 
     return res.status(405).json({ ok: false, error: "Use GET or POST" });
