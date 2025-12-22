@@ -18,32 +18,17 @@ function parseCookies(req) {
   return out;
 }
 
+function normaliseClassLabel(v) {
+  return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
 function looksLikeUUID(v) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
     String(v || "")
   );
 }
 
-function normaliseClassLabel(v) {
-  return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
-}
-
-function clampInt(v, min, max, fallback) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, Math.round(n)));
-}
-
-function normaliseTables(arr) {
-  const nums = (Array.isArray(arr) ? arr : [])
-    .map((x) => Number(x))
-    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 19)
-    .map((n) => Math.round(n));
-  const uniq = Array.from(new Set(nums)).sort((a, b) => a - b);
-  return uniq.length ? uniq : Array.from({ length: 19 }, (_, i) => i + 1);
-}
-
-// --- decode bmtt_session (JWT-ish) payload without verifying (fine for lookup) ---
+// decode bmtt_session payload (no verify) to read teacher_id
 function decodeSessionTeacherId(bmtt_session) {
   try {
     const parts = String(bmtt_session || "").split(".");
@@ -62,25 +47,37 @@ function decodeSessionTeacherId(bmtt_session) {
 function getTeacherIdFromCookies(req) {
   const c = parseCookies(req);
 
-  // 1) Preferred: bmtt_teacher cookie (your system sets this)
-  // Example value (decoded): {"teacherId":"bae1d975-..."}
+  // 1) bmtt_teacher (your cookie)
   if (c.bmtt_teacher) {
     try {
       const parsed = JSON.parse(c.bmtt_teacher);
       const id = parsed?.teacherId || parsed?.teacher_id || parsed?.id || null;
       if (looksLikeUUID(id)) return id;
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
-  // 2) Fallback: bmtt_session token contains teacher_id
+  // 2) bmtt_session
   if (c.bmtt_session) {
     const id = decodeSessionTeacherId(c.bmtt_session);
     if (id) return id;
   }
 
   return null;
+}
+
+function clampInt(v, min, max, fallback) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+function normaliseTables(arr) {
+  const nums = (Array.isArray(arr) ? arr : [])
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 19)
+    .map((n) => Math.round(n));
+  const uniq = Array.from(new Set(nums)).sort((a, b) => a - b);
+  return uniq.length ? uniq : Array.from({ length: 19 }, (_, i) => i + 1);
 }
 
 async function getTeacher(req) {
@@ -94,32 +91,57 @@ async function getTeacher(req) {
     .maybeSingle();
 
   if (error || !teacher?.id) return { loggedIn: false };
-
-  // load classes this teacher can access
-  const { data: classes, error: cErr } = await supabase
-    .from("teacher_classes")
-    .select("class_label, year_group")
-    .eq("teacher_id", teacher.id);
-
-  // admin can access all classes
-  if (teacher.role === "admin") {
-    const { data: allClasses } = await supabase
-      .from("classes")
-      .select("class_label, year_group")
-      .order("year_group", { ascending: true });
-    return { loggedIn: true, teacher, classes: allClasses || [] };
-  }
-
-  return { loggedIn: true, teacher, classes: cErr ? [] : classes || [] };
+  return { loggedIn: true, teacher };
 }
 
-function teacherHasClass(auth, classLabel) {
-  if (!auth?.teacher) return false;
-  if (auth.teacher.role === "admin") return true;
-  const list = auth.classes || [];
-  return list.some(
-    (c) => normaliseClassLabel(c.class_label) === normaliseClassLabel(classLabel)
-  );
+// IMPORTANT: permission check directly in DB
+async function isAllowedForClass(teacherId, role, classLabel) {
+  if (role === "admin") return true;
+  if (!teacherId) return false;
+
+  const wanted = normaliseClassLabel(classLabel);
+
+  // First try: teacher_classes has class_label
+  const r1 = await supabase
+    .from("teacher_classes")
+    .select("id, class_label")
+    .eq("teacher_id", teacherId)
+    .maybeSingle();
+
+  // If the table doesn't have class_label, Supabase will error; ignore and try alternative
+  if (!r1.error) {
+    // If teacher_classes stores one row per teacher per class, we need to search all rows, not maybeSingle
+    const rAll = await supabase
+      .from("teacher_classes")
+      .select("class_label")
+      .eq("teacher_id", teacherId);
+
+    if (!rAll.error) {
+      return (rAll.data || []).some(
+        (row) => normaliseClassLabel(row.class_label) === wanted
+      );
+    }
+  }
+
+  // Second try: teacher_classes stores class_id instead
+  // join by looking up class id from classes table
+  const { data: cls, error: clsErr } = await supabase
+    .from("classes")
+    .select("id, class_label")
+    .eq("class_label", wanted)
+    .maybeSingle();
+
+  if (clsErr || !cls?.id) return false;
+
+  const { data: tc2, error: tc2Err } = await supabase
+    .from("teacher_classes")
+    .select("id")
+    .eq("teacher_id", teacherId)
+    .eq("class_id", cls.id)
+    .maybeSingle();
+
+  if (tc2Err) return false;
+  return !!tc2;
 }
 
 export default async function handler(req, res) {
@@ -129,16 +151,26 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, loggedIn: false });
     }
 
+    const teacher = auth.teacher;
+
     if (req.method === "GET") {
       const class_label = normaliseClassLabel(req.query.class_label);
       if (!class_label) {
         return res.status(400).json({ ok: false, error: "Missing class_label" });
       }
 
-      if (!teacherHasClass(auth, class_label)) {
-        return res
-          .status(403)
-          .json({ ok: false, error: "Not allowed for this class" });
+      const allowed = await isAllowedForClass(
+        teacher.id,
+        teacher.role,
+        class_label
+      );
+
+      if (!allowed) {
+        return res.status(403).json({
+          ok: false,
+          error: "Not allowed for this class",
+          debug: { teacher_id: teacher.id, role: teacher.role, class_label },
+        });
       }
 
       const { data, error } = await supabase
@@ -146,7 +178,7 @@ export default async function handler(req, res) {
         .select(
           "teacher_id, class_label, question_count, seconds_per_question, tables_selected, updated_at"
         )
-        .eq("teacher_id", auth.teacher.id)
+        .eq("teacher_id", teacher.id)
         .eq("class_label", class_label)
         .maybeSingle();
 
@@ -167,12 +199,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         ok: true,
         loggedIn: true,
-        teacher: {
-          id: auth.teacher.id,
-          email: auth.teacher.email,
-          role: auth.teacher.role,
-        },
-        classes: auth.classes || [],
+        teacher: { id: teacher.id, email: teacher.email, role: teacher.role },
         settings: data
           ? {
               class_label,
@@ -193,10 +220,14 @@ export default async function handler(req, res) {
         return res.status(400).json({ ok: false, error: "Missing class_label" });
       }
 
-      if (!teacherHasClass(auth, class_label)) {
-        return res
-          .status(403)
-          .json({ ok: false, error: "Not allowed for this class" });
+      const allowed = await isAllowedForClass(
+        teacher.id,
+        teacher.role,
+        class_label
+      );
+
+      if (!allowed) {
+        return res.status(403).json({ ok: false, error: "Not allowed for this class" });
       }
 
       const question_count = clampInt(body.question_count, 10, 60, 25);
@@ -204,7 +235,7 @@ export default async function handler(req, res) {
       const tables_selected = normaliseTables(body.tables_selected);
 
       const row = {
-        teacher_id: auth.teacher.id,
+        teacher_id: teacher.id,
         class_label,
         question_count,
         seconds_per_question,
