@@ -15,36 +15,46 @@ function parseCookies(cookieHeader = "") {
   }, {});
 }
 
+function base64UrlDecode(str) {
+  const pad = "=".repeat((4 - (str.length % 4)) % 4);
+  const base64 = (str + pad).replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(base64, "base64").toString("utf8");
+}
+
 async function getTeacherFromSession(req) {
   const cookies = parseCookies(req.headers.cookie || "");
-  const raw = cookies["bmtt_teacher"] || cookies["bmtt_session"];
-  if (!raw) return null;
+  const token = cookies["bmtt_teacher"] || cookies["bmtt_session"];
+  if (!token) return null;
 
   try {
-    const data = JSON.parse(raw); // your cookie is JSON
+    let json = token;
+    if (!json.trim().startsWith("{")) json = base64UrlDecode(token);
+    const data = JSON.parse(json);
+
     const teacher_id = data.teacher_id || data.teacherId;
     if (!teacher_id) return null;
+
     return { teacher_id, role: data.role || "teacher" };
   } catch {
     return null;
   }
 }
 
-function toPct(attempt) {
+function toPct(a) {
   const pct =
-    attempt.score_percent ?? attempt.scorePercent ?? attempt.percent ?? attempt.percentage ?? null;
+    a.score_percent ?? a.scorePercent ?? a.percent ?? a.percentage ?? a.score_pct ?? null;
   if (typeof pct === "number") return Math.max(0, Math.min(100, Math.round(pct)));
 
   const correct =
-    attempt.correct ?? attempt.correct_count ?? attempt.correctCount ?? attempt.num_correct ?? null;
+    a.correct ?? a.correct_count ?? a.correctCount ?? a.num_correct ?? a.right ?? null;
   const total =
-    attempt.total ?? attempt.total_count ?? attempt.totalCount ?? attempt.num_questions ?? attempt.question_count ?? null;
+    a.total ?? a.total_count ?? a.totalCount ?? a.num_questions ?? a.question_count ?? null;
 
   if (typeof correct === "number" && typeof total === "number" && total > 0) {
     return Math.round((correct / total) * 100);
   }
 
-  const score = attempt.score ?? attempt.result ?? null;
+  const score = a.score ?? a.result ?? null;
   if (typeof score === "number") {
     if (score <= 1) return Math.round(score * 100);
     return Math.round(Math.max(0, Math.min(100, score)));
@@ -64,33 +74,44 @@ export default async function handler(req, res) {
     const { student_id } = req.query;
     if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
 
-    // ✅ NOTE: adjust these if your students table is named differently
+    // ✅ Find student by EITHER students.id OR students.student_id
     const { data: student, error: stErr } = await supabaseAdmin
       .from("students")
-      .select("id, name, first_name, last_name, class_id, class_label, classes:class_id (id, class_label)")
-      .eq("id", student_id)
-      .single();
+      .select("id, student_id, first_name, year, class_label, class_id, username")
+      .or(`id.eq.${student_id},student_id.eq.${student_id}`)
+      .maybeSingle();
 
-    if (stErr || !student) return res.status(404).json({ ok: false, error: "Student not found" });
+    if (stErr) {
+      return res.status(500).json({ ok: false, error: "Failed to load student", debug: stErr.message });
+    }
+    if (!student) {
+      return res.status(404).json({
+        ok: false,
+        error: "Student not found",
+        debug: { student_id_received: student_id },
+      });
+    }
 
-    // Permission check for non-admin
-    const studentClassId = student.class_id || student.classes?.id || null;
-    if (!isAdmin && studentClassId) {
-      const { data: link } = await supabaseAdmin
+    // Permission check (teacher must be linked to student's class_id unless admin)
+    if (!isAdmin) {
+      const { data: link, error: lErr } = await supabaseAdmin
         .from("teacher_classes")
         .select("teacher_id, class_id")
         .eq("teacher_id", teacher_id)
-        .eq("class_id", studentClassId)
+        .eq("class_id", student.class_id)
         .maybeSingle();
 
+      if (lErr) return res.status(500).json({ ok: false, error: "Permission check failed", debug: lErr.message });
       if (!link) return res.status(403).json({ ok: false, error: "Not allowed" });
     }
 
-    // Pull attempts for that pupil
+    // ✅ Attempts usually link via attempts.student_id = students.student_id
+    const attemptStudentId = student.student_id || student.id;
+
     const { data: attempts, error: aErr } = await supabaseAdmin
       .from("attempts")
       .select("*")
-      .eq("student_id", student_id)
+      .eq("student_id", attemptStudentId)
       .order("created_at", { ascending: true })
       .limit(120);
 
@@ -105,14 +126,16 @@ export default async function handler(req, res) {
       })
       .filter(Boolean);
 
-    const name =
-      student.name || [student.first_name, student.last_name].filter(Boolean).join(" ").trim();
-
-    const class_label = student.class_label || student.classes?.class_label || null;
-
     return res.json({
       ok: true,
-      student: { id: student.id, name, class_label },
+      student: {
+        id: student.id,
+        student_id: student.student_id,
+        name: student.first_name || student.username || student.student_id || student.id,
+        year: student.year ?? null,
+        class_label: student.class_label ?? null,
+        class_id: student.class_id ?? null,
+      },
       series,
     });
   } catch (e) {
