@@ -40,15 +40,6 @@ async function getTeacherFromSession(req) {
   }
 }
 
-function studentDisplayName(s) {
-  const first = s.first_name || s.firstname || s.given_name || "";
-  const last = s.last_name || s.lastname || s.surname || "";
-  const full = [first, last].filter(Boolean).join(" ").trim();
-
-  // fallback to something stable if names missing
-  return full || s.username || s.upn || s.id;
-}
-
 export default async function handler(req, res) {
   try {
     const session = await getTeacherFromSession(req);
@@ -57,35 +48,31 @@ export default async function handler(req, res) {
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    // ✅ Only select columns that should exist (no "name")
+    // ✅ Pull the actual columns your table has
     const { data: students, error: sErr } = await supabaseAdmin
       .from("students")
-      .select("id, first_name, last_name, class_id, class_label");
+      .select("id, student_id, first_name, year, class_label, class_id, username");
 
     if (sErr) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to load students",
-        debug: sErr.message,
-        next_step:
-          "If this mentions another missing column, tell me which one and I’ll adjust the select list.",
-      });
+      return res.status(500).json({ ok: false, error: "Failed to load students", debug: sErr.message });
     }
 
-    // Admin = all students
+    // Admin: all students
     if (isAdmin) {
       return res.json({
         ok: true,
         students: (students || []).map((s) => ({
           id: s.id,
-          name: studentDisplayName(s),
-          class_id: s.class_id || null,
-          class_label: s.class_label || null,
+          student_id: s.student_id,
+          name: s.first_name || s.username || s.student_id || s.id,
+          year: s.year ?? null,
+          class_label: s.class_label ?? null,
+          class_id: s.class_id ?? null,
         })),
       });
     }
 
-    // Teacher = only their linked classes
+    // Teacher: only students in teacher's allowed classes
     const { data: links, error: lErr } = await supabaseAdmin
       .from("teacher_classes")
       .select("class_id")
@@ -97,18 +84,17 @@ export default async function handler(req, res) {
 
     const allowedClassIds = new Set((links || []).map((x) => x.class_id));
 
-    const filtered = (students || []).filter((s) => {
-      // Prefer class_id linking. If your students use class_label only, we’ll adjust next.
-      return s.class_id && allowedClassIds.has(s.class_id);
-    });
+    const filtered = (students || []).filter((s) => s.class_id && allowedClassIds.has(s.class_id));
 
     return res.json({
       ok: true,
       students: filtered.map((s) => ({
         id: s.id,
-        name: studentDisplayName(s),
-        class_id: s.class_id || null,
-        class_label: s.class_label || null,
+        student_id: s.student_id,
+        name: s.first_name || s.username || s.student_id || s.id,
+        year: s.year ?? null,
+        class_label: s.class_label ?? null,
+        class_id: s.class_id ?? null,
       })),
     });
   } catch (e) {
