@@ -40,6 +40,11 @@ async function getTeacherFromSession(req) {
   }
 }
 
+function displayName(s) {
+  // your table only has first_name reliably right now
+  return (s.first_name || s.username || (s.student_id != null ? String(s.student_id) : "") || s.id).trim();
+}
+
 export default async function handler(req, res) {
   try {
     const session = await getTeacherFromSession(req);
@@ -48,23 +53,18 @@ export default async function handler(req, res) {
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    // ✅ Pull the actual columns your table has
     const { data: students, error: sErr } = await supabaseAdmin
       .from("students")
-      .select("id, student_id, first_name, year, class_label, class_id, username");
+      .select("id, first_name, username, student_id, year, class_label, class_id");
 
-    if (sErr) {
-      return res.status(500).json({ ok: false, error: "Failed to load students", debug: sErr.message });
-    }
+    if (sErr) return res.status(500).json({ ok: false, error: "Failed to load students", debug: sErr.message });
 
-    // Admin: all students
     if (isAdmin) {
       return res.json({
         ok: true,
         students: (students || []).map((s) => ({
-          id: s.id,
-          student_id: s.student_id,
-          name: s.first_name || s.username || s.student_id || s.id,
+          id: s.id, // ✅ UUID
+          name: displayName(s),
           year: s.year ?? null,
           class_label: s.class_label ?? null,
           class_id: s.class_id ?? null,
@@ -72,26 +72,21 @@ export default async function handler(req, res) {
       });
     }
 
-    // Teacher: only students in teacher's allowed classes
     const { data: links, error: lErr } = await supabaseAdmin
       .from("teacher_classes")
       .select("class_id")
       .eq("teacher_id", teacher_id);
 
-    if (lErr) {
-      return res.status(500).json({ ok: false, error: "Failed to read teacher_classes", debug: lErr.message });
-    }
+    if (lErr) return res.status(500).json({ ok: false, error: "Failed to read teacher_classes", debug: lErr.message });
 
     const allowedClassIds = new Set((links || []).map((x) => x.class_id));
-
     const filtered = (students || []).filter((s) => s.class_id && allowedClassIds.has(s.class_id));
 
     return res.json({
       ok: true,
       students: filtered.map((s) => ({
-        id: s.id,
-        student_id: s.student_id,
-        name: s.first_name || s.username || s.student_id || s.id,
+        id: s.id, // ✅ UUID
+        name: displayName(s),
         year: s.year ?? null,
         class_label: s.class_label ?? null,
         class_id: s.class_id ?? null,
