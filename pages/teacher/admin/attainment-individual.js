@@ -1,24 +1,37 @@
 import { useEffect, useMemo, useState } from "react";
-import { Line } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-  Tooltip,
-  Legend,
-} from "chart.js";
+import dynamic from "next/dynamic";
 
-ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
+// ✅ Load the Line chart client-side only (prevents SSR crash)
+const Line = dynamic(() => import("react-chartjs-2").then((m) => m.Line), {
+  ssr: false,
+});
 
 export default function AttainmentIndividual() {
   const [students, setStudents] = useState([]);
-  const [studentUuid, setStudentUuid] = useState(""); // ✅ UUID from students.id
+  const [studentUuid, setStudentUuid] = useState("");
   const [student, setStudent] = useState(null);
   const [series, setSeries] = useState([]);
   const [error, setError] = useState("");
 
+  // Register Chart.js ONLY in the browser
+  useEffect(() => {
+    (async () => {
+      const ChartJS = await import("chart.js");
+      const {
+        Chart,
+        LineElement,
+        PointElement,
+        CategoryScale,
+        LinearScale,
+        Tooltip,
+        Legend,
+      } = ChartJS;
+
+      Chart.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
+    })();
+  }, []);
+
+  // Load students
   useEffect(() => {
     (async () => {
       setError("");
@@ -30,6 +43,7 @@ export default function AttainmentIndividual() {
     })();
   }, []);
 
+  // Load attainment series
   useEffect(() => {
     if (!studentUuid) return;
     (async () => {
@@ -110,6 +124,7 @@ export default function AttainmentIndividual() {
       ) : null}
 
       <div style={{ marginTop: 16 }}>
+        {/* Line is client-only now, so no SSR crash */}
         <Line key={studentUuid} data={data} options={options} />
       </div>
 
