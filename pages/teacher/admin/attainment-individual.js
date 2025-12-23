@@ -1,138 +1,151 @@
-import { useEffect, useMemo, useState } from "react";
-import dynamic from "next/dynamic";
+import { createClient } from "@supabase/supabase-js";
 
-// ✅ Load the Line chart client-side only (prevents SSR crash)
-const Line = dynamic(() => import("react-chartjs-2").then((m) => m.Line), {
-  ssr: false,
-});
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-export default function AttainmentIndividual() {
-  const [students, setStudents] = useState([]);
-  const [studentUuid, setStudentUuid] = useState("");
-  const [student, setStudent] = useState(null);
-  const [series, setSeries] = useState([]);
-  const [error, setError] = useState("");
+function parseCookies(cookieHeader = "") {
+  if (!cookieHeader) return {};
+  return cookieHeader.split(";").reduce((acc, part) => {
+    const [k, ...v] = part.trim().split("=");
+    if (!k) return acc;
+    acc[k] = decodeURIComponent(v.join("="));
+    return acc;
+  }, {});
+}
 
-  // Register Chart.js ONLY in the browser
-  useEffect(() => {
-    (async () => {
-      const ChartJS = await import("chart.js");
-      const {
-        Chart,
-        LineElement,
-        PointElement,
-        CategoryScale,
-        LinearScale,
-        Tooltip,
-        Legend,
-      } = ChartJS;
+function base64UrlDecode(str) {
+  const pad = "=".repeat((4 - (str.length % 4)) % 4);
+  const base64 = (str + pad).replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(base64, "base64").toString("utf8");
+}
 
-      Chart.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
-    })();
-  }, []);
+async function getTeacherFromSession(req) {
+  const cookies = parseCookies(req.headers.cookie || "");
+  const token = cookies["bmtt_teacher"] || cookies["bmtt_session"];
+  if (!token) return null;
 
-  // Load students
-  useEffect(() => {
-    (async () => {
-      setError("");
-      const r = await fetch("/api/teacher/students");
-      const j = await r.json();
-      if (!j.ok) return setError(j.error || "Failed to load students");
-      setStudents(j.students || []);
-      if ((j.students || []).length) setStudentUuid(j.students[0].id);
-    })();
-  }, []);
+  try {
+    let json = token;
+    if (!json.trim().startsWith("{")) json = base64UrlDecode(token);
+    const data = JSON.parse(json);
 
-  // Load attainment series
-  useEffect(() => {
-    if (!studentUuid) return;
-    (async () => {
-      setError("");
-      const r = await fetch(
-        `/api/teacher/attainment/student?student_id=${encodeURIComponent(studentUuid)}`
-      );
-      const j = await r.json();
-      if (!j.ok) return setError(j.error || "Failed to load student/attainment");
-      setStudent(j.student);
-      setSeries(j.series || []);
-    })();
-  }, [studentUuid]);
+    const teacher_id = data.teacher_id || data.teacherId;
+    if (!teacher_id) return null;
 
-  const labels = useMemo(
-    () => series.map((p) => new Date(p.date).toLocaleDateString("en-GB")),
-    [series]
+    return { teacher_id, role: data.role || "teacher" };
+  } catch {
+    return null;
+  }
+}
+
+function isUuid(s) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(s || "")
   );
+}
 
-  const data = useMemo(
-    () => ({
-      labels,
-      datasets: [
-        {
-          label: "Score (%)",
-          data: series.map((p) => p.score),
-          tension: 0.25,
-          pointRadius: 3,
-        },
-      ],
-    }),
-    [labels, series]
-  );
+function toPct(a) {
+  const pct =
+    a.score_percent ?? a.scorePercent ?? a.percent ?? a.percentage ?? a.score_pct ?? null;
+  if (typeof pct === "number") return Math.max(0, Math.min(100, Math.round(pct)));
 
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const correct =
+    a.correct ?? a.correct_count ?? a.correctCount ?? a.num_correct ?? a.right ?? null;
+  const total =
+    a.total ?? a.total_count ?? a.totalCount ?? a.num_questions ?? a.question_count ?? null;
 
-  const options = useMemo(
-    () => ({
-      responsive: true,
-      animation: prefersReducedMotion
-        ? false
-        : {
-            duration: 1000,
-            easing: "easeOutQuart",
-          },
-      scales: {
-        y: { min: 0, max: 100, ticks: { stepSize: 10 } },
+  if (typeof correct === "number" && typeof total === "number" && total > 0) {
+    return Math.round((correct / total) * 100);
+  }
+
+  const score = a.score ?? a.result ?? null;
+  if (typeof score === "number") {
+    if (score <= 1) return Math.round(score * 100);
+    return Math.round(Math.max(0, Math.min(100, score)));
+  }
+
+  return null;
+}
+
+export default async function handler(req, res) {
+  try {
+    const session = await getTeacherFromSession(req);
+    if (!session) return res.status(401).json({ ok: false, error: "Not logged in" });
+
+    const { teacher_id, role } = session;
+    const isAdmin = role === "admin";
+
+    const { student_id } = req.query;
+    if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
+
+    // ✅ If it looks like a UUID, it is students.id (NOT students.student_id)
+    let studentQuery = supabaseAdmin
+      .from("students")
+      .select("id, student_id, first_name, year, class_label, class_id, username");
+
+    if (isUuid(student_id)) {
+      studentQuery = studentQuery.eq("id", student_id);
+    } else {
+      // student_id column is integer — use the raw value and let Postgres cast safely
+      studentQuery = studentQuery.eq("student_id", student_id);
+    }
+
+    const { data: student, error: stErr } = await studentQuery.maybeSingle();
+
+    if (stErr) {
+      return res.status(500).json({ ok: false, error: "Failed to load student", debug: stErr.message });
+    }
+    if (!student) {
+      return res.status(404).json({ ok: false, error: "Student not found", debug: { student_id_received: student_id } });
+    }
+
+    // Permission check: teacher must be linked to student's class_id unless admin
+    if (!isAdmin) {
+      const { data: link, error: lErr } = await supabaseAdmin
+        .from("teacher_classes")
+        .select("teacher_id, class_id")
+        .eq("teacher_id", teacher_id)
+        .eq("class_id", student.class_id)
+        .maybeSingle();
+
+      if (lErr) return res.status(500).json({ ok: false, error: "Permission check failed", debug: lErr.message });
+      if (!link) return res.status(403).json({ ok: false, error: "Not allowed" });
+    }
+
+    // ✅ attempts.student_id is a UUID that matches students.id
+    const { data: attempts, error: aErr } = await supabaseAdmin
+      .from("attempts")
+      .select("*")
+      .eq("student_id", student.id)
+      .order("created_at", { ascending: true })
+      .limit(120);
+
+    if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
+
+    const series = (attempts || [])
+      .map((a) => {
+        const date = a.created_at || a.taken_at || a.date;
+        const score = toPct(a);
+        if (!date || score === null) return null;
+        return { date, score };
+      })
+      .filter(Boolean);
+
+    return res.json({
+      ok: true,
+      student: {
+        id: student.id,
+        student_id: student.student_id,
+        name: student.first_name || student.username || String(student.student_id ?? "") || student.id,
+        year: student.year ?? null,
+        class_label: student.class_label ?? null,
+        class_id: student.class_id ?? null,
       },
-    }),
-    [prefersReducedMotion]
-  );
-
-  return (
-    <div style={{ padding: 16 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700 }}>Individual Attainment</h1>
-
-      {error ? <div style={{ marginTop: 10, color: "crimson" }}>{String(error)}</div> : null}
-
-      <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center" }}>
-        <label style={{ fontWeight: 600 }}>Pupil</label>
-
-        <select value={studentUuid} onChange={(e) => setStudentUuid(e.target.value)}>
-          {students.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} {s.class_label ? `(${s.class_label})` : ""}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {student ? (
-        <div style={{ marginTop: 8, opacity: 0.8 }}>
-          Showing: <b>{student.name}</b> {student.class_label ? `— ${student.class_label}` : ""}
-        </div>
-      ) : null}
-
-      <div style={{ marginTop: 16 }}>
-        {/* Line is client-only now, so no SSR crash */}
-        <Line key={studentUuid} data={data} options={options} />
-      </div>
-
-      {studentUuid && series.length === 0 && !error ? (
-        <div style={{ marginTop: 10, opacity: 0.8 }}>
-          No attempts found for this pupil yet.
-        </div>
-      ) : null}
-    </div>
-  );
+      series,
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
+  }
 }
