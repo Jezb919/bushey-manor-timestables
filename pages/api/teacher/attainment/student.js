@@ -21,7 +21,7 @@ async function getTeacherFromSession(req) {
   if (!raw) return null;
 
   try {
-    const data = JSON.parse(raw);
+    const data = JSON.parse(raw); // your cookie is JSON
     const teacher_id = data.teacher_id || data.teacherId;
     if (!teacher_id) return null;
     return { teacher_id, role: data.role || "teacher" };
@@ -30,42 +30,27 @@ async function getTeacherFromSession(req) {
   }
 }
 
-function pickScoreRow(a) {
-  // Try common patterns in attempts rows:
-  // - score_percent / score / percent
-  // - correct / total (various names)
-  const percent =
-    a.score_percent ?? a.scorePercent ?? a.percent ?? a.percentage ?? a.score_pct ?? null;
-
-  if (typeof percent === "number") return Math.max(0, Math.min(100, percent));
+function toPct(attempt) {
+  const pct =
+    attempt.score_percent ?? attempt.scorePercent ?? attempt.percent ?? attempt.percentage ?? null;
+  if (typeof pct === "number") return Math.max(0, Math.min(100, Math.round(pct)));
 
   const correct =
-    a.correct ?? a.correct_count ?? a.correctCount ?? a.num_correct ?? a.right ?? a.correct_answers ?? null;
+    attempt.correct ?? attempt.correct_count ?? attempt.correctCount ?? attempt.num_correct ?? null;
   const total =
-    a.total ?? a.total_count ?? a.totalCount ?? a.num_questions ?? a.question_count ?? a.questions ?? null;
+    attempt.total ?? attempt.total_count ?? attempt.totalCount ?? attempt.num_questions ?? attempt.question_count ?? null;
 
   if (typeof correct === "number" && typeof total === "number" && total > 0) {
     return Math.round((correct / total) * 100);
   }
 
-  // If we only have a score 0..1 or 0..100:
-  const score = a.score ?? a.result ?? null;
+  const score = attempt.score ?? attempt.result ?? null;
   if (typeof score === "number") {
     if (score <= 1) return Math.round(score * 100);
     return Math.round(Math.max(0, Math.min(100, score)));
   }
 
   return null;
-}
-
-function pickSecsPerQ(a) {
-  return (
-    a.seconds_per_question ??
-    a.secs_per_question ??
-    a.time_per_question ??
-    a.secondsPerQuestion ??
-    null
-  );
 }
 
 export default async function handler(req, res) {
@@ -76,69 +61,58 @@ export default async function handler(req, res) {
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    const { student_id, limit } = req.query;
+    const { student_id } = req.query;
     if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
 
-    // 1) Load student + class (assumes students.class_id -> classes.id)
+    // ✅ NOTE: adjust these if your students table is named differently
     const { data: student, error: stErr } = await supabaseAdmin
       .from("students")
-      .select("id, name, first_name, last_name, class_id, classes:class_id (id, class_label)")
+      .select("id, name, first_name, last_name, class_id, class_label, classes:class_id (id, class_label)")
       .eq("id", student_id)
       .single();
 
-    if (stErr || !student) {
-      return res.status(404).json({ ok: false, error: "Student not found" });
-    }
+    if (stErr || !student) return res.status(404).json({ ok: false, error: "Student not found" });
 
-    // 2) Permission check: teacher must be linked to student's class_id (unless admin)
-    if (!isAdmin) {
-      const { data: link, error: lErr } = await supabaseAdmin
+    // Permission check for non-admin
+    const studentClassId = student.class_id || student.classes?.id || null;
+    if (!isAdmin && studentClassId) {
+      const { data: link } = await supabaseAdmin
         .from("teacher_classes")
         .select("teacher_id, class_id")
         .eq("teacher_id", teacher_id)
-        .eq("class_id", student.class_id)
+        .eq("class_id", studentClassId)
         .maybeSingle();
 
-      if (lErr) return res.status(500).json({ ok: false, error: "Permission check failed", debug: lErr.message });
-      if (!link) return res.status(403).json({ ok: false, error: "Not allowed", debug: { teacher_id, student_id } });
+      if (!link) return res.status(403).json({ ok: false, error: "Not allowed" });
     }
 
-    // 3) Load attempts over time (assumes attempts.student_id)
-    const rowLimit = Math.min(parseInt(limit || "60", 10) || 60, 200);
-
+    // Pull attempts for that pupil
     const { data: attempts, error: aErr } = await supabaseAdmin
       .from("attempts")
       .select("*")
       .eq("student_id", student_id)
       .order("created_at", { ascending: true })
-      .limit(rowLimit);
+      .limit(120);
 
     if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
 
     const series = (attempts || [])
       .map((a) => {
-        const created = a.created_at || a.createdAt || a.taken_at || a.date || null;
-        const score = pickScoreRow(a);
-        if (!created || score === null) return null;
-        return {
-          date: created,
-          score,
-          secsPerQ: pickSecsPerQ(a),
-        };
+        const date = a.created_at || a.taken_at || a.date;
+        const score = toPct(a);
+        if (!date || score === null) return null;
+        return { date, score };
       })
       .filter(Boolean);
 
-    const studentName =
+    const name =
       student.name || [student.first_name, student.last_name].filter(Boolean).join(" ").trim();
+
+    const class_label = student.class_label || student.classes?.class_label || null;
 
     return res.json({
       ok: true,
-      student: {
-        id: student.id,
-        name: studentName,
-        class_label: student.classes?.class_label || null,
-        class_id: student.class_id,
-      },
+      student: { id: student.id, name, class_label },
       series,
     });
   } catch (e) {
