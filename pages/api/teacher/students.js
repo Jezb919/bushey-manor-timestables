@@ -15,20 +15,38 @@ function parseCookies(cookieHeader = "") {
   }, {});
 }
 
+function base64UrlDecode(str) {
+  const pad = "=".repeat((4 - (str.length % 4)) % 4);
+  const base64 = (str + pad).replace(/-/g, "+").replace(/_/g, "/");
+  return Buffer.from(base64, "base64").toString("utf8");
+}
+
 async function getTeacherFromSession(req) {
   const cookies = parseCookies(req.headers.cookie || "");
-  const raw = cookies["bmtt_teacher"] || cookies["bmtt_session"];
-  if (!raw) return null;
+  const token = cookies["bmtt_teacher"] || cookies["bmtt_session"];
+  if (!token) return null;
 
   try {
-    // Your cookie is plain JSON and has teacherId
-    const data = JSON.parse(raw);
+    let json = token;
+    if (!json.trim().startsWith("{")) json = base64UrlDecode(token);
+    const data = JSON.parse(json);
+
     const teacher_id = data.teacher_id || data.teacherId;
     if (!teacher_id) return null;
+
     return { teacher_id, role: data.role || "teacher" };
   } catch {
     return null;
   }
+}
+
+function studentDisplayName(s) {
+  const first = s.first_name || s.firstname || s.given_name || "";
+  const last = s.last_name || s.lastname || s.surname || "";
+  const full = [first, last].filter(Boolean).join(" ").trim();
+
+  // fallback to something stable if names missing
+  return full || s.username || s.upn || s.id;
 }
 
 export default async function handler(req, res) {
@@ -39,53 +57,60 @@ export default async function handler(req, res) {
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    // Optional filter
-    const { class_label } = req.query;
-
-    // We need students + their class_id/class_label.
-    // Assumes tables: students, classes, teacher_classes (as you already have)
-    // students should have: id, first_name/last_name OR name, class_id
-    let studentsQuery = supabaseAdmin
+    // ✅ Only select columns that should exist (no "name")
+    const { data: students, error: sErr } = await supabaseAdmin
       .from("students")
-      .select("id, name, first_name, last_name, class_id, classes:class_id (id, class_label)");
+      .select("id, first_name, last_name, class_id, class_label");
 
-    if (class_label) {
-      studentsQuery = studentsQuery.eq("classes.class_label", class_label);
+    if (sErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load students",
+        debug: sErr.message,
+        next_step:
+          "If this mentions another missing column, tell me which one and I’ll adjust the select list.",
+      });
     }
 
-    const { data: students, error: sErr } = await studentsQuery;
-    if (sErr) return res.status(500).json({ ok: false, error: "Failed to load students", debug: sErr.message });
-
-    // If admin, return all (or all in class_label if provided)
+    // Admin = all students
     if (isAdmin) {
-      const out = (students || []).map((s) => ({
-        id: s.id,
-        name: s.name || [s.first_name, s.last_name].filter(Boolean).join(" ").trim(),
-        class_label: s.classes?.class_label || null,
-        class_id: s.class_id || s.classes?.id || null,
-      }));
-      return res.json({ ok: true, students: out });
+      return res.json({
+        ok: true,
+        students: (students || []).map((s) => ({
+          id: s.id,
+          name: studentDisplayName(s),
+          class_id: s.class_id || null,
+          class_label: s.class_label || null,
+        })),
+      });
     }
 
-    // Teacher: filter to only classes assigned in teacher_classes
+    // Teacher = only their linked classes
     const { data: links, error: lErr } = await supabaseAdmin
       .from("teacher_classes")
       .select("class_id")
       .eq("teacher_id", teacher_id);
 
-    if (lErr) return res.status(500).json({ ok: false, error: "Failed to check permissions", debug: lErr.message });
+    if (lErr) {
+      return res.status(500).json({ ok: false, error: "Failed to read teacher_classes", debug: lErr.message });
+    }
 
     const allowedClassIds = new Set((links || []).map((x) => x.class_id));
-    const allowedStudents = (students || []).filter((s) => allowedClassIds.has(s.class_id));
 
-    const out = allowedStudents.map((s) => ({
-      id: s.id,
-      name: s.name || [s.first_name, s.last_name].filter(Boolean).join(" ").trim(),
-      class_label: s.classes?.class_label || null,
-      class_id: s.class_id || s.classes?.id || null,
-    }));
+    const filtered = (students || []).filter((s) => {
+      // Prefer class_id linking. If your students use class_label only, we’ll adjust next.
+      return s.class_id && allowedClassIds.has(s.class_id);
+    });
 
-    return res.json({ ok: true, students: out });
+    return res.json({
+      ok: true,
+      students: filtered.map((s) => ({
+        id: s.id,
+        name: studentDisplayName(s),
+        class_id: s.class_id || null,
+        class_label: s.class_label || null,
+      })),
+    });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
