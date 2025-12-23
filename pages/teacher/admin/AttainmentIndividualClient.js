@@ -1,73 +1,95 @@
-import { useEffect, useMemo, useState } from "react";
-import { Line } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  LineElement,
-  PointElement,
-  CategoryScale,
-  LinearScale,
-  Tooltip,
-  Legend,
-} from "chart.js";
-
-ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
-
-export default function AttainmentIndividualClient() {
-  const [students, setStudents] = useState([]);
-  const [studentUuid, setStudentUuid] = useState("");
-  const [student, setStudent] = useState(null);
-  const [series, setSeries] = useState([]);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    fetch("/api/teacher/students")
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j.ok) return setError(j.error || "Failed to load students");
-        setStudents(j.students || []);
-        if (j.students?.length) setStudentUuid(j.students[0].id);
-      });
-  }, []);
-
-  useEffect(() => {
-    if (!studentUuid) return;
-    fetch(`/api/teacher/attainment/student?student_id=${studentUuid}`)
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j.ok) return setError(j.error || "Failed to load student");
-        setStudent(j.student);
-        setSeries(j.series || []);
-      });
-  }, [studentUuid]);
-
-  const data = {
+// --- add near the top of the component (inside AttainmentIndividualClient) ---
+const chartData = useMemo(() => {
+  return {
     labels: series.map((s) => new Date(s.date).toLocaleDateString("en-GB")),
     datasets: [
       {
         label: "Score (%)",
         data: series.map((s) => s.score),
-        tension: 0.3,
+
+        // Make the line bold + visible
+        borderWidth: 4,
+        pointRadius: 3,
+        pointHoverRadius: 7,
+        tension: 0.35,
+
+        // Nice filled area under the line
+        fill: true,
+
+        // Colors (feel free to change later)
+        borderColor: "rgba(59, 130, 246, 1)",          // strong blue line
+        backgroundColor: "rgba(59, 130, 246, 0.18)",   // soft blue fill
+        pointBackgroundColor: "rgba(59, 130, 246, 1)",
+        pointBorderColor: "#fff",
+        pointBorderWidth: 2,
       },
     ],
   };
+}, [series]);
 
-  return (
-    <div style={{ padding: 20 }}>
-      <h1>Individual Attainment</h1>
+const chartOptions = useMemo(() => {
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-      {error && <p style={{ color: "red" }}>{error}</p>}
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
 
-      <select value={studentUuid} onChange={(e) => setStudentUuid(e.target.value)}>
-        {students.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-      </select>
+    animation: prefersReducedMotion
+      ? false
+      : {
+          duration: 900,
+          easing: "easeOutQuart",
+        },
 
-      <div style={{ marginTop: 20 }}>
-        <Line data={data} />
-      </div>
-    </div>
-  );
-}
+    plugins: {
+      legend: {
+        display: true,
+        labels: {
+          boxWidth: 12,
+          boxHeight: 12,
+          padding: 16,
+        },
+      },
+      tooltip: {
+        enabled: true,
+        intersect: false,
+        mode: "index",
+        padding: 12,
+        displayColors: false,
+        callbacks: {
+          label: (ctx) => `Score: ${ctx.parsed.y}%`,
+        },
+      },
+    },
+
+    interaction: {
+      intersect: false,
+      mode: "nearest",
+    },
+
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { maxRotation: 0, autoSkip: true },
+      },
+      y: {
+        min: 0,
+        max: 100,
+        ticks: {
+          stepSize: 10,
+          callback: (v) => `${v}%`,
+        },
+        grid: {
+          drawBorder: false,
+        },
+      },
+    },
+
+    elements: {
+      line: { capBezierPoints: true },
+    },
+  };
+}, []);
