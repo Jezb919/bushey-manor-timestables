@@ -40,6 +40,12 @@ async function getTeacherFromSession(req) {
   }
 }
 
+function isUuid(s) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(s || "")
+  );
+}
+
 function toPct(a) {
   const pct =
     a.score_percent ?? a.scorePercent ?? a.percent ?? a.percentage ?? a.score_pct ?? null;
@@ -74,12 +80,20 @@ export default async function handler(req, res) {
     const { student_id } = req.query;
     if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
 
-    // ✅ Find student by EITHER students.id OR students.student_id
-    const { data: student, error: stErr } = await supabaseAdmin
+    // ✅ Safe student lookup:
+    // - if input is UUID => try match students.id OR students.student_id
+    // - else => match students.student_id only (avoids UUID cast errors)
+    let studentQuery = supabaseAdmin
       .from("students")
-      .select("id, student_id, first_name, year, class_label, class_id, username")
-      .or(`id.eq.${student_id},student_id.eq.${student_id}`)
-      .maybeSingle();
+      .select("id, student_id, first_name, year, class_label, class_id, username");
+
+    if (isUuid(student_id)) {
+      studentQuery = studentQuery.or(`id.eq.${student_id},student_id.eq.${student_id}`);
+    } else {
+      studentQuery = studentQuery.eq("student_id", String(student_id));
+    }
+
+    const { data: student, error: stErr } = await studentQuery.maybeSingle();
 
     if (stErr) {
       return res.status(500).json({ ok: false, error: "Failed to load student", debug: stErr.message });
@@ -92,7 +106,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Permission check (teacher must be linked to student's class_id unless admin)
+    // Permission check: teacher must be linked to student's class_id unless admin
     if (!isAdmin) {
       const { data: link, error: lErr } = await supabaseAdmin
         .from("teacher_classes")
@@ -105,8 +119,8 @@ export default async function handler(req, res) {
       if (!link) return res.status(403).json({ ok: false, error: "Not allowed" });
     }
 
-    // ✅ Attempts usually link via attempts.student_id = students.student_id
-    const attemptStudentId = student.student_id || student.id;
+    // Attempts match on attempts.student_id = students.student_id (most common in your schema)
+    const attemptStudentId = student.student_id;
 
     const { data: attempts, error: aErr } = await supabaseAdmin
       .from("attempts")
