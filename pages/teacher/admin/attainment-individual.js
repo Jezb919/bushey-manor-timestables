@@ -14,12 +14,12 @@ ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip,
 
 export default function AttainmentIndividual() {
   const [students, setStudents] = useState([]);
-  const [studentId, setStudentId] = useState("");
+  const [studentCode, setStudentCode] = useState(""); // <-- IMPORTANT: this is students.student_id (NOT uuid)
   const [student, setStudent] = useState(null);
   const [series, setSeries] = useState([]);
   const [error, setError] = useState("");
 
-  // For now: quick student list (admin can see all; teacher sees theirs)
+  // Load students teacher/admin is allowed to see
   useEffect(() => {
     (async () => {
       setError("");
@@ -27,21 +27,29 @@ export default function AttainmentIndividual() {
       const j = await r.json();
       if (!j.ok) return setError(j.error || "Failed to load students");
       setStudents(j.students || []);
-      if ((j.students || []).length) setStudentId((j.students || [])[0].id);
+
+      // pick first student's student_id
+      if ((j.students || []).length) {
+        const first = j.students[0];
+        setStudentCode(first.student_id || "");
+      }
     })();
   }, []);
 
+  // Load selected student's series
   useEffect(() => {
-    if (!studentId) return;
+    if (!studentCode) return;
     (async () => {
       setError("");
-      const r = await fetch(`/api/teacher/attainment/student?student_id=${encodeURIComponent(studentId)}`);
+      const r = await fetch(
+        `/api/teacher/attainment/student?student_id=${encodeURIComponent(studentCode)}`
+      );
       const j = await r.json();
-      if (!j.ok) return setError(j.error || "Failed to load attainment");
+      if (!j.ok) return setError(j.error || "Failed to load student/attainment");
       setStudent(j.student);
       setSeries(j.series || []);
     })();
-  }, [studentId]);
+  }, [studentCode]);
 
   const labels = useMemo(
     () => series.map((p) => new Date(p.date).toLocaleDateString("en-GB")),
@@ -92,10 +100,11 @@ export default function AttainmentIndividual() {
 
       <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center" }}>
         <label style={{ fontWeight: 600 }}>Pupil</label>
-        <select value={studentId} onChange={(e) => setStudentId(e.target.value)}>
+
+        <select value={studentCode} onChange={(e) => setStudentCode(e.target.value)}>
           {students.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name || s.id} {s.class_label ? `(${s.class_label})` : ""}
+            <option key={s.student_id || s.id} value={s.student_id}>
+              {s.name || s.student_id} {s.class_label ? `(${s.class_label})` : ""}
             </option>
           ))}
         </select>
@@ -108,8 +117,14 @@ export default function AttainmentIndividual() {
       ) : null}
 
       <div style={{ marginTop: 16 }}>
-        <Line key={studentId} data={data} options={options} />
+        <Line key={studentCode} data={data} options={options} />
       </div>
+
+      {studentCode && series.length === 0 && !error ? (
+        <div style={{ marginTop: 10, opacity: 0.8 }}>
+          No attempts found for this pupil yet.
+        </div>
+      ) : null}
     </div>
   );
 }
