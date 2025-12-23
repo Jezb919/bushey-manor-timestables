@@ -8,7 +8,6 @@ import {
   LinearScale,
   Tooltip,
   Legend,
-  TimeScale,
 } from "chart.js";
 
 ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend);
@@ -16,11 +15,11 @@ ChartJS.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip,
 export default function AttainmentIndividual() {
   const [students, setStudents] = useState([]);
   const [studentId, setStudentId] = useState("");
-  const [series, setSeries] = useState([]);
   const [student, setStudent] = useState(null);
+  const [series, setSeries] = useState([]);
   const [error, setError] = useState("");
 
-  // Load students teacher is allowed to see
+  // For now: quick student list (admin can see all; teacher sees theirs)
   useEffect(() => {
     (async () => {
       setError("");
@@ -28,12 +27,10 @@ export default function AttainmentIndividual() {
       const j = await r.json();
       if (!j.ok) return setError(j.error || "Failed to load students");
       setStudents(j.students || []);
-      if ((j.students || []).length && !studentId) setStudentId(j.students[0].id);
+      if ((j.students || []).length) setStudentId((j.students || [])[0].id);
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load selected student's series
   useEffect(() => {
     if (!studentId) return;
     (async () => {
@@ -50,12 +47,6 @@ export default function AttainmentIndividual() {
     () => series.map((p) => new Date(p.date).toLocaleDateString("en-GB")),
     [series]
   );
-  const scores = useMemo(() => series.map((p) => p.score), [series]);
-
-  const prefersReducedMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const data = useMemo(
     () => ({
@@ -63,15 +54,19 @@ export default function AttainmentIndividual() {
       datasets: [
         {
           label: "Score (%)",
-          data: scores,
-          // leave default colours (you asked not to specify)
+          data: series.map((p) => p.score),
           tension: 0.25,
           pointRadius: 3,
         },
       ],
     }),
-    [labels, scores]
+    [labels, series]
   );
+
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   const options = useMemo(
     () => ({
@@ -82,10 +77,6 @@ export default function AttainmentIndividual() {
             duration: 1000,
             easing: "easeOutQuart",
           },
-      plugins: {
-        legend: { display: true },
-        tooltip: { enabled: true },
-      },
       scales: {
         y: { min: 0, max: 100, ticks: { stepSize: 10 } },
       },
@@ -95,11 +86,9 @@ export default function AttainmentIndividual() {
 
   return (
     <div style={{ padding: 16 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700 }}>Individual Progress</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700 }}>Individual Attainment</h1>
 
-      {error ? (
-        <div style={{ marginTop: 12, color: "crimson" }}>{String(error)}</div>
-      ) : null}
+      {error ? <div style={{ marginTop: 10, color: "crimson" }}>{String(error)}</div> : null}
 
       <div style={{ marginTop: 12, display: "flex", gap: 12, alignItems: "center" }}>
         <label style={{ fontWeight: 600 }}>Pupil</label>
@@ -113,13 +102,12 @@ export default function AttainmentIndividual() {
       </div>
 
       {student ? (
-        <div style={{ marginTop: 10, opacity: 0.8 }}>
+        <div style={{ marginTop: 8, opacity: 0.8 }}>
           Showing: <b>{student.name}</b> {student.class_label ? `— ${student.class_label}` : ""}
         </div>
       ) : null}
 
       <div style={{ marginTop: 16 }}>
-        {/* key forces re-animation when pupil changes */}
         <Line key={studentId} data={data} options={options} />
       </div>
     </div>
