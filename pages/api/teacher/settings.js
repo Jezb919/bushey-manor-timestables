@@ -2,7 +2,6 @@ import { createClient } from "@supabase/supabase-js";
 
 /**
  * Admin Supabase client (server-side only)
- * This bypasses RLS safely inside API routes
  */
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -10,7 +9,7 @@ const supabaseAdmin = createClient(
 );
 
 /**
- * Small helpers to read cookies + decode session
+ * Cookie helpers
  */
 function parseCookies(cookieHeader = "") {
   return cookieHeader.split(";").reduce((acc, part) => {
@@ -28,16 +27,28 @@ function base64UrlDecode(str) {
 }
 
 /**
- * Reads the logged-in teacher from the bmtt_session cookie
- * Must return: { teacher_id, role }
+ * Read logged-in teacher from cookies
+ * Supports:
+ * - bmtt_teacher (JSON or base64 JSON)
+ * - bmtt_session (fallback)
  */
 async function getTeacherFromSession(req) {
   const cookies = parseCookies(req.headers.cookie || "");
-  const token = cookies["bmtt_session"];
+
+  const token =
+    cookies["bmtt_teacher"] ||
+    cookies["bmtt_session"];
+
   if (!token) return null;
 
   try {
-    const json = base64UrlDecode(token);
+    let json = token;
+
+    // If not plain JSON, assume base64 JSON
+    if (!json.trim().startsWith("{")) {
+      json = base64UrlDecode(token);
+    }
+
     const data = JSON.parse(json);
 
     if (!data.teacher_id) return null;
@@ -58,7 +69,7 @@ export default async function handler(req, res) {
   try {
     const { class_label } = req.query;
 
-    // 1️⃣ Get logged-in teacher
+    // 1) Identify logged-in teacher
     const session = await getTeacherFromSession(req);
     if (!session) {
       return res.status(401).json({
@@ -70,7 +81,7 @@ export default async function handler(req, res) {
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    // 2️⃣ Look up class by label (M4)
+    // 2) Look up class by label
     const { data: cls, error: classErr } = await supabaseAdmin
       .from("classes")
       .select("id, class_label")
@@ -84,7 +95,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3️⃣ Check teacher ↔ class permission
+    // 3) Permission check (skip for admin)
     if (!isAdmin) {
       const { data: link, error: linkErr } = await supabaseAdmin
         .from("teacher_classes")
@@ -110,7 +121,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4️⃣ Fetch settings (optional table)
+    // 4) Fetch settings (if table exists)
     const { data: settings } = await supabaseAdmin
       .from("teacher_settings")
       .select("*")
