@@ -12,6 +12,7 @@ const supabaseAdmin = createClient(
  * Cookie helpers
  */
 function parseCookies(cookieHeader = "") {
+  if (!cookieHeader) return {};
   return cookieHeader.split(";").reduce((acc, part) => {
     const [k, ...v] = part.trim().split("=");
     if (!k) return acc;
@@ -26,29 +27,17 @@ function base64UrlDecode(str) {
   return Buffer.from(base64, "base64").toString("utf8");
 }
 
-/**
- * Read logged-in teacher from cookies
- * Supports:
- * - bmtt_teacher (JSON or base64 JSON)
- * - bmtt_session (fallback)
- */
 async function getTeacherFromSession(req) {
   const cookies = parseCookies(req.headers.cookie || "");
 
-  const token =
-    cookies["bmtt_teacher"] ||
-    cookies["bmtt_session"];
-
+  const token = cookies["bmtt_teacher"] || cookies["bmtt_session"];
   if (!token) return null;
 
   try {
     let json = token;
-
-    // If not plain JSON, assume base64 JSON
     if (!json.trim().startsWith("{")) {
       json = base64UrlDecode(token);
     }
-
     const data = JSON.parse(json);
 
     if (!data.teacher_id) return null;
@@ -62,26 +51,38 @@ async function getTeacherFromSession(req) {
   }
 }
 
-/**
- * GET /api/teacher/settings?class_label=M4
- */
 export default async function handler(req, res) {
   try {
-    const { class_label } = req.query;
+    const { class_label, debug } = req.query;
 
-    // 1) Identify logged-in teacher
+    // ✅ Safe debug mode: shows which cookie NAMES the API receives (not values)
+    if (debug === "1") {
+      const cookies = parseCookies(req.headers.cookie || "");
+      return res.json({
+        ok: true,
+        received_cookie_header: !!req.headers.cookie,
+        received_cookie_names: Object.keys(cookies),
+        note:
+          "If bmtt_session/bmtt_teacher are missing here, your cookies are not being sent to /api (usually Path is not '/').",
+      });
+    }
+
     const session = await getTeacherFromSession(req);
     if (!session) {
+      const cookies = parseCookies(req.headers.cookie || "");
       return res.status(401).json({
         ok: false,
         error: "Not logged in",
+        received_cookie_header: !!req.headers.cookie,
+        received_cookie_names: Object.keys(cookies),
+        next_step:
+          "Open /api/teacher/settings?debug=1 and tell me what cookie names you see. If bmtt_* are missing, we must change the cookie Path to '/'.",
       });
     }
 
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    // 2) Look up class by label
     const { data: cls, error: classErr } = await supabaseAdmin
       .from("classes")
       .select("id, class_label")
@@ -89,13 +90,9 @@ export default async function handler(req, res) {
       .single();
 
     if (classErr || !cls) {
-      return res.status(404).json({
-        ok: false,
-        error: "Class not found",
-      });
+      return res.status(404).json({ ok: false, error: "Class not found" });
     }
 
-    // 3) Permission check (skip for admin)
     if (!isAdmin) {
       const { data: link, error: linkErr } = await supabaseAdmin
         .from("teacher_classes")
@@ -105,11 +102,9 @@ export default async function handler(req, res) {
         .maybeSingle();
 
       if (linkErr) {
-        return res.status(500).json({
-          ok: false,
-          error: "Access check failed",
-          debug: linkErr.message,
-        });
+        return res
+          .status(500)
+          .json({ ok: false, error: "Access check failed", debug: linkErr.message });
       }
 
       if (!link) {
@@ -121,24 +116,14 @@ export default async function handler(req, res) {
       }
     }
 
-    // 4) Fetch settings (if table exists)
     const { data: settings } = await supabaseAdmin
       .from("teacher_settings")
       .select("*")
       .eq("class_id", cls.id)
       .maybeSingle();
 
-    // ✅ SUCCESS
-    return res.json({
-      ok: true,
-      class: cls,
-      settings: settings || null,
-    });
+    return res.json({ ok: true, class: cls, settings: settings || null });
   } catch (e) {
-    return res.status(500).json({
-      ok: false,
-      error: "Server error",
-      debug: String(e),
-    });
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
 }
