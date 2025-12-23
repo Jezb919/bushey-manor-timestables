@@ -47,23 +47,14 @@ function isUuid(s) {
 }
 
 function toPct(a) {
-  const pct =
-    a.score_percent ?? a.scorePercent ?? a.percent ?? a.percentage ?? a.score_pct ?? null;
+  const pct = a.score_percent ?? a.scorePercent ?? a.percent ?? a.percentage ?? null;
   if (typeof pct === "number") return Math.max(0, Math.min(100, Math.round(pct)));
 
-  const correct =
-    a.correct ?? a.correct_count ?? a.correctCount ?? a.num_correct ?? a.right ?? null;
-  const total =
-    a.total ?? a.total_count ?? a.totalCount ?? a.num_questions ?? a.question_count ?? null;
+  const correct = a.correct ?? a.correct_count ?? a.correctCount ?? a.num_correct ?? null;
+  const total = a.total ?? a.total_count ?? a.totalCount ?? a.num_questions ?? a.question_count ?? null;
 
   if (typeof correct === "number" && typeof total === "number" && total > 0) {
     return Math.round((correct / total) * 100);
-  }
-
-  const score = a.score ?? a.result ?? null;
-  if (typeof score === "number") {
-    if (score <= 1) return Math.round(score * 100);
-    return Math.round(Math.max(0, Math.min(100, score)));
   }
 
   return null;
@@ -77,36 +68,30 @@ export default async function handler(req, res) {
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    const { student_id } = req.query;
-    if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
+    const input = req.query.student_id;
+    if (!input) return res.status(400).json({ ok: false, error: "Missing student_id" });
 
-    // ✅ Safe student lookup:
-    // - if input is UUID => try match students.id OR students.student_id
-    // - else => match students.student_id only (avoids UUID cast errors)
-    let studentQuery = supabaseAdmin
+    // ✅ Correct student lookup
+    let q = supabaseAdmin
       .from("students")
-      .select("id, student_id, first_name, year, class_label, class_id, username");
+      .select("id, student_id, first_name, username, year, class_label, class_id");
 
-    if (isUuid(student_id)) {
-      studentQuery = studentQuery.or(`id.eq.${student_id},student_id.eq.${student_id}`);
+    if (isUuid(input)) {
+      q = q.eq("id", input); // UUID => students.id
     } else {
-      studentQuery = studentQuery.eq("student_id", String(student_id));
+      q = q.eq("student_id", input); // number => students.student_id
     }
 
-    const { data: student, error: stErr } = await studentQuery.maybeSingle();
+    const { data: student, error: stErr } = await q.maybeSingle();
 
     if (stErr) {
       return res.status(500).json({ ok: false, error: "Failed to load student", debug: stErr.message });
     }
     if (!student) {
-      return res.status(404).json({
-        ok: false,
-        error: "Student not found",
-        debug: { student_id_received: student_id },
-      });
+      return res.status(404).json({ ok: false, error: "Student not found" });
     }
 
-    // Permission check: teacher must be linked to student's class_id unless admin
+    // Permission check: teachers only see their classes
     if (!isAdmin) {
       const { data: link, error: lErr } = await supabaseAdmin
         .from("teacher_classes")
@@ -119,17 +104,17 @@ export default async function handler(req, res) {
       if (!link) return res.status(403).json({ ok: false, error: "Not allowed" });
     }
 
-    // Attempts match on attempts.student_id = students.student_id (most common in your schema)
-    const attemptStudentId = student.student_id;
-
+    // ✅ attempts.student_id is a UUID and matches students.id
     const { data: attempts, error: aErr } = await supabaseAdmin
       .from("attempts")
       .select("*")
-      .eq("student_id", attemptStudentId)
+      .eq("student_id", student.id)
       .order("created_at", { ascending: true })
       .limit(120);
 
-    if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
+    if (aErr) {
+      return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
+    }
 
     const series = (attempts || [])
       .map((a) => {
@@ -144,11 +129,9 @@ export default async function handler(req, res) {
       ok: true,
       student: {
         id: student.id,
-        student_id: student.student_id,
-        name: student.first_name || student.username || student.student_id || student.id,
-        year: student.year ?? null,
+        name: student.first_name || student.username || String(student.student_id ?? "") || student.id,
         class_label: student.class_label ?? null,
-        class_id: student.class_id ?? null,
+        year: student.year ?? null,
       },
       series,
     });
