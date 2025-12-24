@@ -30,7 +30,7 @@ export default function AttainmentIndividualClient() {
   const [series, setSeries] = useState([]);
   const [error, setError] = useState("");
 
-  // 1) Load students
+  // Load students
   useEffect(() => {
     (async () => {
       try {
@@ -42,15 +42,12 @@ export default function AttainmentIndividualClient() {
         const list = j.students || [];
         setStudents(list);
 
-        // ✅ Preselect from URL if provided
+        // Preselect from URL if provided
         const fromUrl = typeof router.query.student_id === "string" ? router.query.student_id : "";
         const found = fromUrl && list.find((s) => s.id === fromUrl);
 
-        if (found) {
-          setStudentId(found.id);
-        } else if (list.length) {
-          setStudentId(list[0].id);
-        }
+        if (found) setStudentId(found.id);
+        else if (list.length) setStudentId(list[0].id);
       } catch (e) {
         setError(String(e));
       }
@@ -58,21 +55,18 @@ export default function AttainmentIndividualClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router.isReady]);
 
-  // 2) When studentId changes, update URL (so refresh keeps the selection)
+  // Keep URL updated
   useEffect(() => {
     if (!studentId) return;
     router.replace(
-      {
-        pathname: "/teacher/admin/attainment-individual",
-        query: { student_id: studentId },
-      },
+      { pathname: "/teacher/admin/attainment-individual", query: { student_id: studentId } },
       undefined,
       { shallow: true }
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
 
-  // 3) Load student attainment series
+  // Load series
   useEffect(() => {
     if (!studentId) return;
     (async () => {
@@ -81,7 +75,6 @@ export default function AttainmentIndividualClient() {
         const r = await fetch(`/api/teacher/attainment/student?student_id=${encodeURIComponent(studentId)}`);
         const j = await r.json();
         if (!j.ok) return setError(j.error || "Failed to load student");
-
         setStudent(j.student || null);
         setSeries(j.series || []);
       } catch (e) {
@@ -94,6 +87,9 @@ export default function AttainmentIndividualClient() {
     const labels = (series || []).map((p) => new Date(p.date).toLocaleDateString("en-GB"));
     const values = (series || []).map((p) => p.score);
 
+    // 90% target line
+    const target = labels.map(() => 90);
+
     return {
       labels,
       datasets: [
@@ -105,6 +101,15 @@ export default function AttainmentIndividualClient() {
           pointRadius: 3,
           pointHoverRadius: 6,
           fill: true,
+        },
+        {
+          label: "Target (90%)",
+          data: target,
+          tension: 0,
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: false,
+          borderDash: [8, 6],
         },
       ],
     };
@@ -192,6 +197,11 @@ export default function AttainmentIndividualClient() {
             border: "1px solid rgba(0,0,0,0.06)",
           }}
         >
+          <div style={{ fontWeight: 900, marginBottom: 6 }}>Progress over time</div>
+          <div style={{ opacity: 0.7, fontSize: 12, marginBottom: 10 }}>
+            Dashed line = <b>90%</b> target
+          </div>
+
           <div style={{ height: 420 }}>
             <Line data={chartData} options={options} />
           </div>
