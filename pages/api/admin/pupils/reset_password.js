@@ -15,25 +15,33 @@ function parseCookies(cookieHeader = "") {
     return acc;
   }, {});
 }
+
 function base64UrlDecode(str) {
   const pad = "=".repeat((4 - (str.length % 4)) % 4);
   const base64 = (str + pad).replace(/-/g, "+").replace(/_/g, "/");
   return Buffer.from(base64, "base64").toString("utf8");
 }
+
 async function getTeacherFromSession(req) {
   const cookies = parseCookies(req.headers.cookie || "");
   const token = cookies["bmtt_teacher"] || cookies["bmtt_session"];
-  if (!token) return null;
+  if (!token) return { session: null, cookieNames: Object.keys(cookies) };
 
   try {
     let json = token;
     if (!json.trim().startsWith("{")) json = base64UrlDecode(token);
     const data = JSON.parse(json);
+
     const teacher_id = data.teacher_id || data.teacherId;
-    if (!teacher_id) return null;
-    return { teacher_id, role: data.role || "teacher" };
+    if (!teacher_id) return { session: null, cookieNames: Object.keys(cookies), parsedKeys: Object.keys(data) };
+
+    return {
+      session: { teacher_id, role: data.role || "teacher" },
+      cookieNames: Object.keys(cookies),
+      parsedKeys: Object.keys(data),
+    };
   } catch {
-    return null;
+    return { session: null, cookieNames: Object.keys(cookies), note: "Cookie present but not parseable" };
   }
 }
 
@@ -54,9 +62,24 @@ export default async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
 
-    const session = await getTeacherFromSession(req);
-    if (!session) return res.status(401).json({ ok: false, error: "Not logged in" });
-    if (session.role !== "admin") return res.status(403).json({ ok: false, error: "Admins only" });
+    const sessInfo = await getTeacherFromSession(req);
+    const session = sessInfo.session;
+
+    if (!session) {
+      return res.status(401).json({
+        ok: false,
+        error: "Not logged in",
+        debug: { cookieNames: sessInfo.cookieNames, note: sessInfo.note || null, parsedKeys: sessInfo.parsedKeys || null },
+      });
+    }
+
+    if (session.role !== "admin") {
+      return res.status(403).json({
+        ok: false,
+        error: "Admins only",
+        debug: { role: session.role, teacher_id: session.teacher_id, cookieNames: sessInfo.cookieNames, parsedKeys: sessInfo.parsedKeys },
+      });
+    }
 
     const { student_id } = req.body || {};
     if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
@@ -71,7 +94,13 @@ export default async function handler(req, res) {
       .select("id, first_name, last_name, username, class_label")
       .single();
 
-    if (error) return res.status(500).json({ ok: false, error: "Failed to reset password", debug: error.message });
+    if (error) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to reset password",
+        debug: error.message,
+      });
+    }
 
     return res.json({
       ok: true,
