@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 
-// Chart (client-side only)
-const Bar = dynamic(() => import("react-chartjs-2").then((m) => m.Bar), { ssr: false });
+// Chart (client-only)
+const Bar = dynamic(() => import("react-chartjs-2").then((m) => m.Bar), {
+  ssr: false,
+});
 
 import {
   Chart as ChartJS,
@@ -31,10 +33,10 @@ export default function AttainmentClassPage() {
   const [classes, setClasses] = useState([]);
   const [classId, setClassId] = useState("");
   const [cls, setCls] = useState(null);
-  const [series, setSeries] = useState([]); // [{month, score}]
+  const [series, setSeries] = useState([]);
   const [error, setError] = useState("");
 
-  // Load allowed classes
+  // Load classes
   useEffect(() => {
     fetch("/api/teacher/classes")
       .then((r) => r.json())
@@ -61,32 +63,22 @@ export default function AttainmentClassPage() {
       .catch((e) => setError(String(e)));
   }, [classId]);
 
-  // Convert months to labels + build trend line
+  // Build labels + bars + trend
   const { labels, barValues, lineValues } = useMemo(() => {
+    const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const keys = (series || []).map((s) => s.month);
     const lastKeys = keys.slice(Math.max(0, keys.length - 12));
 
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
     const labels = lastKeys.map((k) => {
       const [y, m] = k.split("-");
-      const mi = Number(m) - 1;
-      return `${monthNames[mi]} ${y.slice(2)}`;
+      return `${monthNames[Number(m) - 1]} ${y.slice(2)}`;
     });
 
-    const map = new Map((series || []).map((s) => [s.month, s.score]));
-    const barValues = lastKeys.map((k) => {
-      const v = map.get(k);
-      return typeof v === "number" ? v : null;
-    });
+    const map = new Map(series.map((s) => [s.month, s.score]));
+    const barValues = lastKeys.map((k) => map.get(k));
 
-    // 3-month moving average
     const lineValues = barValues.map((_, i) => {
-      const vals = [];
-      for (let j = Math.max(0, i - 2); j <= i; j++) {
-        const n = barValues[j];
-        if (typeof n === "number") vals.push(n);
-      }
+      const vals = barValues.slice(Math.max(0, i - 2), i + 1).filter(Number.isFinite);
       if (!vals.length) return null;
       return Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
     });
@@ -94,137 +86,55 @@ export default function AttainmentClassPage() {
     return { labels, barValues, lineValues };
   }, [series]);
 
-  const chartData = useMemo(() => {
-    return {
+  const chartData = useMemo(
+    () => ({
       labels,
       datasets: [
         {
           type: "bar",
-          label: "Class Average (Monthly)",
+          label: "Class Average",
           data: barValues,
-          borderWidth: 0,
+          backgroundColor: "rgba(46,125,50,0.85)",
           borderRadius: 8,
-          backgroundColor: "rgba(46, 125, 50, 0.85)", // green
         },
         {
           type: "line",
-          label: "Trend (3-month avg)",
+          label: "Trend",
           data: lineValues,
+          borderColor: "rgba(244,114,182,1)",
           borderWidth: 3,
           tension: 0.35,
-          fill: false,
-          borderColor: "rgba(244, 114, 182, 1)", // pink/red
           pointRadius: 3,
-          pointHoverRadius: 6,
-          pointBackgroundColor: "rgba(244, 114, 182, 1)",
-          pointBorderColor: "#fff",
-          pointBorderWidth: 2,
         },
       ],
-    };
-  }, [labels, barValues, lineValues]);
+    }),
+    [labels, barValues, lineValues]
+  );
 
-  const chartOptions = useMemo(() => {
-    const prefersReducedMotion =
-      typeof window !== "undefined" &&
-      window.matchMedia &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-    return {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: prefersReducedMotion ? false : { duration: 900, easing: "easeOutQuart" },
-      plugins: {
-        legend: { display: true, labels: { boxWidth: 12, boxHeight: 12, padding: 14 } },
-        tooltip: {
-          intersect: false,
-          mode: "index",
-          padding: 12,
-          callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}%` },
-        },
-      },
-      interaction: { intersect: false, mode: "nearest" },
-      scales: {
-        x: { grid: { display: false } },
-        y: { min: 0, max: 100, ticks: { stepSize: 10, callback: (v) => `${v}%` } },
-      },
-    };
-  }, []);
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    scales: {
+      y: { min: 0, max: 100 },
+    },
+  };
 
   return (
-    <div style={{ padding: 20, background: "#f3f4f6", minHeight: "100vh" }}>
-      <div style={{ maxWidth: 980, margin: "0 auto" }}>
-        <h1 style={{ fontSize: 26, fontWeight: 900, marginBottom: 8 }}>Class Attainment</h1>
+    <div style={{ padding: 20 }}>
+      <h1>Class Attainment</h1>
 
-        {error ? <div style={{ color: "#b91c1c", marginBottom: 12 }}>{error}</div> : null}
+      {error && <div style={{ color: "red" }}>{error}</div>}
 
-        <div
-          style={{
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-            flexWrap: "wrap",
-            padding: 14,
-            borderRadius: 16,
-            background: "#fff",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
-            border: "1px solid rgba(0,0,0,0.06)",
-          }}
-        >
-          <div style={{ fontWeight: 800 }}>Class</div>
-          <select
-            value={classId}
-            onChange={(e) => setClassId(e.target.value)}
-            style={{
-              padding: "10px 12px",
-              borderRadius: 12,
-              border: "1px solid rgba(0,0,0,0.12)",
-              minWidth: 240,
-            }}
-          >
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.class_label} {c.year ? `(Y${c.year})` : ""}
-              </option>
-            ))}
-          </select>
+      <select value={classId} onChange={(e) => setClassId(e.target.value)}>
+        {classes.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.class_label}
+          </option>
+        ))}
+      </select>
 
-          <div style={{ marginLeft: "auto", opacity: 0.7 }}>
-            {cls ? (
-              <>
-                <b>{cls.class_label}</b> {cls.year ? `— Year ${cls.year}` : ""}
-              </>
-            ) : (
-              "Loading…"
-            )}
-          </div>
-        </div>
-
-        <div
-          style={{
-            marginTop: 14,
-            padding: 16,
-            borderRadius: 16,
-            background: "#fff",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
-            border: "1px solid rgba(0,0,0,0.06)",
-          }}
-        >
-          <div style={{ fontWeight: 900, fontSize: 16 }}>Monthly Class Average (Bars + Trend)</div>
-          <div style={{ opacity: 0.7, fontSize: 12, marginTop: 4 }}>
-            Bars = average score per month. Line = 3-month trend.
-          </div>
-
-          <div style={{ height: 380, marginTop: 10 }}>
-            <Bar data={chartData} options={chartOptions} />
-          </div>
-
-          {!error && labels.length === 0 ? (
-            <div style={{ marginTop: 10, opacity: 0.75 }}>
-              No attempts found for this class yet.
-            </div>
-          ) : null}
-        </div>
+      <div style={{ height: 380, marginTop: 20 }}>
+        <Bar data={chartData} options={chartOptions} />
       </div>
     </div>
   );
