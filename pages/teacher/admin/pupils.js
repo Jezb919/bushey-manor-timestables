@@ -13,9 +13,15 @@ export default function AdminPupilsPage() {
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // credsBox shows after add pupil OR reset password
   const [credsBox, setCredsBox] = useState(null);
 
+  /* ---------------- LOGOUT ---------------- */
+  async function logout() {
+    await fetch("/api/teacher/logout");
+    window.location.href = "/teacher/login";
+  }
+
+  /* ---------------- LOAD DATA ---------------- */
   async function loadClasses() {
     const r = await fetch("/api/teacher/classes");
     const j = await r.json();
@@ -30,15 +36,12 @@ export default function AdminPupilsPage() {
     if (!j.ok) throw new Error(j.error || "Failed to load pupils");
 
     const list = j.students || [];
-    // ✅ reliable filter by class_id
-    const filtered = list.filter((s) => s.class_id === selectedClassId);
-    setPupils(filtered);
+    setPupils(list.filter((s) => s.class_id === selectedClassId));
   }
 
   useEffect(() => {
     (async () => {
       try {
-        setErr("");
         await loadClasses();
       } catch (e) {
         setErr(String(e.message || e));
@@ -49,23 +52,22 @@ export default function AdminPupilsPage() {
   useEffect(() => {
     (async () => {
       try {
-        if (!classId) return;
-        setErr("");
-        await loadPupils(classId);
+        if (classId) await loadPupils(classId);
       } catch (e) {
         setErr(String(e.message || e));
       }
     })();
   }, [classId]);
 
+  /* ---------------- ACTIONS ---------------- */
   async function addPupil() {
     setMsg("");
     setErr("");
     setCredsBox(null);
 
-    if (!firstName.trim()) return setErr("Please type the pupil's first name");
-    if (!lastName.trim()) return setErr("Please type the pupil's surname");
-    if (!classId) return setErr("Please choose a class");
+    if (!firstName.trim() || !lastName.trim()) {
+      return setErr("Please enter first name and surname");
+    }
 
     setSaving(true);
     try {
@@ -80,28 +82,23 @@ export default function AdminPupilsPage() {
       });
 
       const j = await r.json();
+      if (!j.ok) return setErr(j.error);
 
-      if (!j.ok) {
-        const dbg = j.debug ? (typeof j.debug === "string" ? j.debug : JSON.stringify(j.debug)) : "";
-        return setErr(`${j.error || "Failed to add pupil"}${dbg ? ` (${dbg})` : ""}`);
-      }
+      const name = `${j.pupil.first_name} ${j.pupil.last_name}`;
 
-      const fullName = `${j.pupil.first_name} ${j.pupil.last_name}`.trim();
-      setMsg(`Added ${fullName} ✅`);
-
+      setMsg(`Added ${name} ✅`);
       setCredsBox({
         title: "New pupil login (copy now)",
-        name: fullName,
-        username: j.credentials?.username || j.pupil.username || "(not returned)",
-        tempPassword: j.credentials?.tempPassword || "(not returned)",
+        name,
+        username: j.credentials.username,
+        tempPassword: j.credentials.tempPassword,
       });
 
       setFirstName("");
       setLastName("");
-
       await loadPupils(classId);
     } catch (e) {
-      setErr(String(e.message || e));
+      setErr(String(e));
     } finally {
       setSaving(false);
     }
@@ -112,73 +109,45 @@ export default function AdminPupilsPage() {
     setErr("");
     setCredsBox(null);
 
-    try {
-      const r = await fetch("/api/admin/pupils/reset_password", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id }),
-      });
+    const r = await fetch("/api/admin/pupils/reset_password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ student_id }),
+    });
 
-      const j = await r.json();
+    const j = await r.json();
+    if (!j.ok) return setErr(j.error);
 
-      if (!j.ok) {
-        const dbg = j.debug ? (typeof j.debug === "string" ? j.debug : JSON.stringify(j.debug)) : "";
-        return setErr(`${j.error || "Failed to reset password"}${dbg ? ` (${dbg})` : ""}`);
-      }
+    setMsg(`Password reset for ${name} ✅`);
+    setCredsBox({
+      title: "Reset password (copy now)",
+      name,
+      username: j.credentials.username,
+      tempPassword: j.credentials.tempPassword,
+    });
 
-      const username =
-        j.credentials?.username ||
-        j.pupil?.username ||
-        "(username not returned)";
-
-      const tempPassword =
-        j.credentials?.tempPassword ||
-        j.tempPassword ||
-        j.password ||
-        "(temp password not returned)";
-
-      setMsg(`Password reset for ${name} ✅`);
-
-      setCredsBox({
-        title: "Reset password (copy now)",
-        name,
-        username,
-        tempPassword,
-      });
-
-      await loadPupils(classId);
-    } catch (e) {
-      setErr(String(e.message || e));
-    }
+    await loadPupils(classId);
   }
 
   async function changeUsername(student_id, currentUsername, name) {
-    const newUsernameRaw = prompt(`New username for ${name}`, currentUsername || "");
-    if (!newUsernameRaw) return;
+    const newUsername = prompt(`New username for ${name}`, currentUsername || "");
+    if (!newUsername) return;
 
     setMsg("");
     setErr("");
     setCredsBox(null);
 
-    try {
-      const r = await fetch("/api/admin/pupils/change_username", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id, new_username: newUsernameRaw }),
-      });
+    const r = await fetch("/api/admin/pupils/change_username", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ student_id, new_username: newUsername }),
+    });
 
-      const j = await r.json();
+    const j = await r.json();
+    if (!j.ok) return setErr(j.error);
 
-      if (!j.ok) {
-        const dbg = j.debug ? (typeof j.debug === "string" ? j.debug : JSON.stringify(j.debug)) : "";
-        return setErr(`${j.error || "Failed to change username"}${dbg ? ` (${dbg})` : ""}`);
-      }
-
-      setMsg(`Username changed for ${name} → ${j.pupil.username} ✅`);
-      await loadPupils(classId);
-    } catch (e) {
-      setErr(String(e.message || e));
-    }
+    setMsg(`Username changed → ${j.pupil.username} ✅`);
+    await loadPupils(classId);
   }
 
   const classLabel = useMemo(
@@ -186,140 +155,93 @@ export default function AdminPupilsPage() {
     [classes, classId]
   );
 
+  /* ---------------- UI ---------------- */
   return (
     <div style={{ padding: 20, background: "#f3f4f6", minHeight: "100vh" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-        <h1 style={{ fontSize: 26, fontWeight: 900, marginBottom: 8 }}>Pupils</h1>
-        <div style={{ opacity: 0.75, marginBottom: 12 }}>
-          Create pupils, generate logins, reset passwords.
-        </div>
+        <h1 style={{ fontSize: 26, fontWeight: 900 }}>Pupils</h1>
 
-        {err ? <div style={{ color: "#b91c1c", fontWeight: 800, marginBottom: 10 }}>{err}</div> : null}
-        {msg ? <div style={{ color: "#166534", fontWeight: 800, marginBottom: 10 }}>{msg}</div> : null}
+        <button onClick={logout} style={logoutBtn}>
+          Log out
+        </button>
+
+        {err && <div style={errStyle}>{err}</div>}
+        {msg && <div style={msgStyle}>{msg}</div>}
 
         <div style={card}>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
-            <label style={label}>
-              Class
-              <select value={classId} onChange={(e) => setClassId(e.target.value)} style={input}>
-                {classes.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.class_label}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <h3>Add pupil to {classLabel}</h3>
 
-            <label style={label}>
-              First name
-              <input value={firstName} onChange={(e) => setFirstName(e.target.value)} style={input} />
-            </label>
+          <select value={classId} onChange={(e) => setClassId(e.target.value)} style={input}>
+            {classes.map((c) => (
+              <option key={c.id} value={c.id}>{c.class_label}</option>
+            ))}
+          </select>
 
-            <label style={label}>
-              Surname
-              <input value={lastName} onChange={(e) => setLastName(e.target.value)} style={input} />
-            </label>
+          <input
+            placeholder="First name"
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            style={input}
+          />
 
-            <button onClick={addPupil} disabled={saving} style={button(saving)}>
-              {saving ? "Adding..." : "Add pupil"}
-            </button>
-          </div>
+          <input
+            placeholder="Surname"
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            style={input}
+          />
 
-          <div style={{ fontSize: 12, opacity: 0.7 }}>
-            Tip: usernames are cleaned to letters/numbers only (no dots/spaces). If it says “already taken”, add a number.
-          </div>
+          <button onClick={addPupil} disabled={saving} style={button}>
+            {saving ? "Adding…" : "Add pupil"}
+          </button>
         </div>
 
-        {credsBox ? (
-          <div style={{ ...card, marginTop: 14 }}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>{credsBox.title || "Login details"}</div>
-            <div style={{ display: "grid", gap: 6 }}>
-              <div><b>Pupil:</b> {credsBox.name}</div>
-              <div><b>Username:</b> <code>{credsBox.username}</code></div>
-              <div><b>Temporary password:</b> <code>{credsBox.tempPassword}</code></div>
-            </div>
+        {credsBox && (
+          <div style={card}>
+            <h3>{credsBox.title}</h3>
+            <p><b>Pupil:</b> {credsBox.name}</p>
+            <p><b>Username:</b> <code>{credsBox.username}</code></p>
+            <p><b>Password:</b> <code>{credsBox.tempPassword}</code></p>
           </div>
-        ) : null}
+        )}
 
-        <div style={{ ...card, marginTop: 14 }}>
-          <div style={{ fontWeight: 900, marginBottom: 10 }}>
-            Pupils in {classLabel || "selected class"} ({pupils.length})
-          </div>
+        <div style={card}>
+          <h3>Pupils in {classLabel}</h3>
 
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={th}>Name</th>
-                  <th style={th}>Username</th>
-                  <th style={th}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pupils.map((p) => {
-                  const name = `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Pupil";
-                  return (
-                    <tr key={p.id}>
-                      <td style={tdStrong}>{name}</td>
-                      <td style={td}><code>{p.username || "—"}</code></td>
-                      <td style={td}>
-                        <button style={smallBtn} onClick={() => resetPassword(p.id, name)}>
-                          Reset password
-                        </button>{" "}
-                        <button style={smallBtn} onClick={() => changeUsername(p.id, p.username, name)}>
-                          Change username
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-
-                {!pupils.length ? (
-                  <tr>
-                    <td style={td} colSpan={3}>No pupils found for this class yet.</td>
+          <table style={{ width: "100%" }}>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Username</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pupils.map((p) => {
+                const name = `${p.first_name} ${p.last_name}`;
+                return (
+                  <tr key={p.id}>
+                    <td>{name}</td>
+                    <td><code>{p.username}</code></td>
+                    <td>
+                      <button onClick={() => resetPassword(p.id, name)}>Reset password</button>{" "}
+                      <button onClick={() => changeUsername(p.id, p.username, name)}>Change username</button>
+                    </td>
                   </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
   );
 }
 
-const card = {
-  padding: 16,
-  borderRadius: 16,
-  background: "#fff",
-  boxShadow: "0 8px 24px rgba(0,0,0,0.08)",
-  border: "1px solid rgba(0,0,0,0.06)",
-  display: "grid",
-  gap: 12,
-};
-
-const label = { display: "grid", gap: 6, fontWeight: 800 };
-const input = { padding: "10px 12px", borderRadius: 12, border: "1px solid rgba(0,0,0,0.12)" };
-
-const button = (saving) => ({
-  padding: "12px 14px",
-  borderRadius: 14,
-  border: "1px solid rgba(0,0,0,0.12)",
-  background: saving ? "rgba(0,0,0,0.06)" : "#111827",
-  color: saving ? "#111827" : "#fff",
-  fontWeight: 900,
-  cursor: saving ? "not-allowed" : "pointer",
-});
-
-const th = { textAlign: "left", padding: "10px 12px", fontSize: 12, opacity: 0.75, borderBottom: "1px solid rgba(0,0,0,0.08)" };
-const td = { padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)" };
-const tdStrong = { ...td, fontWeight: 900 };
-
-const smallBtn = {
-  padding: "8px 10px",
-  borderRadius: 12,
-  border: "1px solid rgba(0,0,0,0.12)",
-  background: "#fff",
-  fontWeight: 800,
-  cursor: "pointer",
-};
+/* ---------------- STYLES ---------------- */
+const card = { background: "#fff", padding: 16, borderRadius: 12, marginTop: 16 };
+const input = { padding: 8, marginRight: 8 };
+const button = { padding: 10, fontWeight: 700 };
+const logoutBtn = { marginBottom: 12, padding: 8, fontWeight: 700 };
+const errStyle = { color: "red", fontWeight: 700, marginTop: 8 };
+const msgStyle = { color: "green", fontWeight: 700, marginTop: 8 };
