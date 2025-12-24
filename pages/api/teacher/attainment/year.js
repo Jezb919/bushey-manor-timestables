@@ -70,7 +70,7 @@ export default async function handler(req, res) {
     const isAdmin = role === "admin";
 
     const year = Number(req.query.year);
-    if (!year || Number.isNaN(year)) return res.status(400).json({ ok: false, error: "Missing/invalid year" });
+    if (!Number.isFinite(year)) return res.status(400).json({ ok: false, error: "Missing/invalid year" });
 
     // Teachers: only allow years they belong to
     if (!isAdmin) {
@@ -91,12 +91,12 @@ export default async function handler(req, res) {
 
       if (aErr) return res.status(500).json({ ok: false, error: "Failed to load allowed classes", debug: aErr.message });
 
-      const allowedYears = new Set((allowedClasses || []).map((c) => c.year_group));
+      const allowedYears = new Set((allowedClasses || []).map((c) => Number(c.year_group)).filter((y) => Number.isFinite(y)));
       if (!allowedYears.has(year)) return res.status(403).json({ ok: false, error: "Not allowed" });
     }
 
-    // Load all classes in this year
-    const { data: classes, error: cErr } = await supabaseAdmin
+    // Load all classes in this year (try numeric first, then string if needed)
+    let { data: classes, error: cErr } = await supabaseAdmin
       .from("classes")
       .select("id, class_label, year_group")
       .eq("year_group", year)
@@ -104,10 +104,23 @@ export default async function handler(req, res) {
 
     if (cErr) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: cErr.message });
 
+    if (!classes || classes.length === 0) {
+      const retry = await supabaseAdmin
+        .from("classes")
+        .select("id, class_label, year_group")
+        .eq("year_group", String(year))
+        .order("class_label", { ascending: true });
+
+      if (retry.error) {
+        return res.status(500).json({ ok: false, error: "Failed to load classes", debug: retry.error.message });
+      }
+      classes = retry.data || [];
+    }
+
     const classIds = (classes || []).map((c) => c.id);
     if (!classIds.length) return res.json({ ok: true, year, classes: [] });
 
-    // Load students across those classes
+    // Students across those classes
     const { data: students, error: sErr } = await supabaseAdmin
       .from("students")
       .select("id, class_id")
@@ -115,7 +128,7 @@ export default async function handler(req, res) {
 
     if (sErr) return res.status(500).json({ ok: false, error: "Failed to load students", debug: sErr.message });
 
-    const studentIds = (students || []).map((s) => s.id);
+    const studentIds = (students || []).map((s) => s.id).filter(Boolean);
     if (!studentIds.length) {
       return res.json({
         ok: true,
@@ -124,22 +137,24 @@ export default async function handler(req, res) {
       });
     }
 
-    // Attempts across those students (single query)
+    // ✅ IMPORTANT FIX: select("*") so we never break on column name differences
     const { data: attempts, error: aErr } = await supabaseAdmin
       .from("attempts")
-      .select("student_id, created_at, score, score_percent, correct, total, num_questions, question_count")
+      .select("*")
       .in("student_id", studentIds)
       .order("created_at", { ascending: true })
-      .limit(10000);
+      .limit(20000);
 
-    if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
+    if (aErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load attempts",
+        debug: aErr.message,
+      });
+    }
 
-    // Build helper maps
     const studentToClass = new Map((students || []).map((s) => [s.id, s.class_id]));
-
-    // bucket per class per month
-    // key: `${classId}|YYYY-MM` -> {sum,count}
-    const bucket = new Map();
+    const bucket = new Map(); // `${classId}|YYYY-MM` -> {sum,count}
 
     for (const a of attempts || []) {
       const score = toPct(a);
@@ -148,7 +163,7 @@ export default async function handler(req, res) {
       const classId = studentToClass.get(a.student_id);
       if (!classId) continue;
 
-      const d = new Date(a.created_at);
+      const d = new Date(a.created_at || a.taken_at || a.date);
       if (Number.isNaN(d.getTime())) continue;
 
       const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -161,7 +176,6 @@ export default async function handler(req, res) {
     }
 
     const out = (classes || []).map((c) => {
-      // collect all months for this class
       const series = [];
       for (const [key, v] of bucket.entries()) {
         const [cid, month] = key.split("|");
