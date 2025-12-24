@@ -5,6 +5,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+// --- helpers ---
 function parseCookies(cookieHeader = "") {
   if (!cookieHeader) return {};
   return cookieHeader.split(";").reduce((acc, part) => {
@@ -40,49 +41,74 @@ async function getTeacherFromSession(req) {
   }
 }
 
+// --- handler ---
 export default async function handler(req, res) {
   try {
     const session = await getTeacherFromSession(req);
-    if (!session) return res.status(401).json({ ok: false, error: "Not logged in" });
+    if (!session) {
+      return res.status(401).json({ ok: false, error: "Not logged in" });
+    }
 
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    // Admin: see all classes
+    // ADMIN: all classes
     if (isAdmin) {
       const { data: classes, error } = await supabaseAdmin
         .from("classes")
-        .select("id, class_label, year")
-        .order("year", { ascending: true })
+        .select("id, class_label")
         .order("class_label", { ascending: true });
 
-      if (error) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: error.message });
+      if (error) {
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to load classes",
+          debug: error.message,
+        });
+      }
 
       return res.json({ ok: true, classes: classes || [] });
     }
 
-    // Teacher: only mapped classes
+    // TEACHER: only mapped classes
     const { data: links, error: linkErr } = await supabaseAdmin
       .from("teacher_classes")
       .select("class_id")
       .eq("teacher_id", teacher_id);
 
-    if (linkErr) return res.status(500).json({ ok: false, error: "Failed to read teacher_classes", debug: linkErr.message });
+    if (linkErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to read teacher_classes",
+        debug: linkErr.message,
+      });
+    }
 
     const classIds = (links || []).map((l) => l.class_id).filter(Boolean);
-    if (!classIds.length) return res.json({ ok: true, classes: [] });
+    if (!classIds.length) {
+      return res.json({ ok: true, classes: [] });
+    }
 
     const { data: classes, error: cErr } = await supabaseAdmin
       .from("classes")
-      .select("id, class_label, year")
+      .select("id, class_label")
       .in("id", classIds)
-      .order("year", { ascending: true })
       .order("class_label", { ascending: true });
 
-    if (cErr) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: cErr.message });
+    if (cErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load classes",
+        debug: cErr.message,
+      });
+    }
 
     return res.json({ ok: true, classes: classes || [] });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
+    return res.status(500).json({
+      ok: false,
+      error: "Server error",
+      debug: String(e),
+    });
   }
 }
