@@ -29,12 +29,8 @@ export default function AdminPupilsPage() {
     if (!j.ok) throw new Error(j.error || "Failed to load pupils");
 
     const list = j.students || [];
-    const cl = classes.find((c) => c.id === selectedClassId)?.class_label;
-
-    // Prefer class_id match; fallback to class_label match
-    const filtered = list.filter(
-      (s) => s.class_id === selectedClassId || (cl && s.class_label === cl)
-    );
+    // ✅ Filter strictly by class_id (this is reliable)
+    const filtered = list.filter((s) => s.class_id === selectedClassId);
     setPupils(filtered);
   }
 
@@ -61,7 +57,7 @@ export default function AdminPupilsPage() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classId, classes.length]);
+  }, [classId]);
 
   async function addPupil() {
     setMsg("");
@@ -85,15 +81,16 @@ export default function AdminPupilsPage() {
       });
 
       const j = await r.json();
-      if (!j.ok) return setErr(j.error || "Failed to add pupil");
+      if (!j.ok) return setErr(`${j.error || "Failed to add pupil"}${j.debug ? ` (${j.debug})` : ""}`);
 
       const fullName = `${j.pupil.first_name} ${j.pupil.last_name}`.trim();
       setMsg(`Added ${fullName} ✅`);
 
       setCredsBox({
+        title: "New pupil login (copy now)",
         name: fullName,
-        username: j.credentials?.username || j.pupil.username || "(no username returned)",
-        tempPassword: j.credentials?.tempPassword || "(no temp password returned)",
+        username: j.credentials?.username || j.pupil.username || "(not returned)",
+        tempPassword: j.credentials?.tempPassword || "(not returned)",
       });
 
       setFirstName("");
@@ -120,10 +117,11 @@ export default function AdminPupilsPage() {
       });
 
       const j = await r.json();
-      if (!j.ok) return setErr(j.error || "Failed to reset password");
+      if (!j.ok) return setErr(`${j.error || "Failed to reset password"}${j.debug ? ` (${j.debug})` : ""}`);
 
       setMsg(`Password reset for ${name} ✅`);
       setCredsBox({
+        title: "Reset password (copy now)",
         name,
         username: j.credentials?.username || j.pupil?.username || "(unknown)",
         tempPassword: j.credentials?.tempPassword || "(not returned)",
@@ -136,9 +134,9 @@ export default function AdminPupilsPage() {
   }
 
   async function changeUsername(student_id, currentUsername, name) {
-    const prefill = currentUsername || "";
-    const newUsername = prompt(`New username for ${name}`, prefill);
-    if (!newUsername) return;
+    // ✅ show current username in prompt
+    const newUsernameRaw = prompt(`New username for ${name}`, currentUsername || "");
+    if (!newUsernameRaw) return;
 
     setMsg("");
     setErr("");
@@ -148,10 +146,13 @@ export default function AdminPupilsPage() {
       const r = await fetch("/api/admin/pupils/change_username", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id, new_username: newUsername }),
+        body: JSON.stringify({ student_id, new_username: newUsernameRaw }),
       });
       const j = await r.json();
-      if (!j.ok) return setErr(j.error || "Failed to change username");
+
+      if (!j.ok) {
+        return setErr(`${j.error || "Failed to change username"}${j.debug ? ` (${j.debug})` : ""}`);
+      }
 
       setMsg(`Username changed for ${name} → ${j.pupil.username} ✅`);
       await loadPupils(classId);
@@ -160,7 +161,10 @@ export default function AdminPupilsPage() {
     }
   }
 
-  const classLabel = useMemo(() => classes.find((c) => c.id === classId)?.class_label || "", [classes, classId]);
+  const classLabel = useMemo(
+    () => classes.find((c) => c.id === classId)?.class_label || "",
+    [classes, classId]
+  );
 
   return (
     <div style={{ padding: 20, background: "#f3f4f6", minHeight: "100vh" }}>
@@ -200,13 +204,13 @@ export default function AdminPupilsPage() {
           </div>
 
           <div style={{ fontSize: 12, opacity: 0.7 }}>
-            Username generated (unique). Password generated and shown once (copy it).
+            Tip: usernames are cleaned to letters/numbers only (no dots/spaces). If it says “already taken”, try adding a number.
           </div>
         </div>
 
         {credsBox ? (
           <div style={{ ...card, marginTop: 14 }}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>Login details (copy now)</div>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>{credsBox.title}</div>
             <div style={{ display: "grid", gap: 6 }}>
               <div><b>Pupil:</b> {credsBox.name}</div>
               <div><b>Username:</b> <code>{credsBox.username}</code></div>
@@ -235,7 +239,7 @@ export default function AdminPupilsPage() {
                   return (
                     <tr key={p.id}>
                       <td style={tdStrong}>{name}</td>
-                      <td style={td}><code>{p.username || "— (not set yet)"}</code></td>
+                      <td style={td}><code>{p.username || "—"}</code></td>
                       <td style={td}>
                         <button style={smallBtn} onClick={() => resetPassword(p.id, name)}>
                           Reset password
