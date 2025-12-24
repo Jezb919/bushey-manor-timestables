@@ -132,7 +132,17 @@ export default function AttainmentOverviewPage() {
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id}>
-                  <td style={nameCell}>{r.name}</td>
+                  {/* ✅ CLICKABLE pupil name -> individual page preselected */}
+                  <td style={nameCell}>
+                    <a
+                      href={`/teacher/admin/attainment-individual?student_id=${encodeURIComponent(r.id)}`}
+                      style={nameLink}
+                      title="Open individual attainment"
+                    >
+                      {r.name}
+                    </a>
+                  </td>
+
                   {months.map((m) => {
                     const v = r.values?.[m];
                     if (v == null) return <td key={m} style={emptyCell}>—</td>;
@@ -183,6 +193,13 @@ const nameCell = {
   fontWeight: 900,
   borderBottom: "1px solid rgba(0,0,0,0.06)",
   whiteSpace: "nowrap",
+};
+
+const nameLink = {
+  color: "inherit",
+  textDecoration: "none",
+  borderBottom: "1px dashed rgba(0,0,0,0.25)",
+  paddingBottom: 1,
 };
 
 const scoreCell = {
