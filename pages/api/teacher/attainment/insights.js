@@ -5,7 +5,7 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// ---- session helpers (same pattern you used elsewhere) ----
+// ---- session helpers ----
 function parseCookies(cookieHeader = "") {
   if (!cookieHeader) return {};
   return cookieHeader.split(";").reduce((acc, part) => {
@@ -41,7 +41,7 @@ async function getTeacherFromSession(req) {
   }
 }
 
-// ---- score normaliser (robust to different attempt schemas) ----
+// ---- score normaliser ----
 function toPct(a) {
   const pct =
     a.score_percent ?? a.scorePercent ?? a.percent ?? a.percentage ?? a.score_pct ?? null;
@@ -66,7 +66,6 @@ function toPct(a) {
 }
 
 function safeStudentName(s) {
-  // Your students table has: first_name, username, student_id (often null)
   return s.first_name || s.username || s.student_id || "Pupil";
 }
 
@@ -85,14 +84,16 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: "Missing/invalid year" });
     }
 
-    // Teachers: only allow years they belong to (same logic as year dashboard)
+    // Teachers: only allow years they belong to
     if (!isAdmin) {
       const { data: links, error: linkErr } = await supabaseAdmin
         .from("teacher_classes")
         .select("class_id")
         .eq("teacher_id", teacher_id);
 
-      if (linkErr) return res.status(500).json({ ok: false, error: "Failed to read teacher_classes", debug: linkErr.message });
+      if (linkErr) {
+        return res.status(500).json({ ok: false, error: "Failed to read teacher_classes", debug: linkErr.message });
+      }
 
       const classIds = (links || []).map((l) => l.class_id).filter(Boolean);
       if (!classIds.length) return res.status(403).json({ ok: false, error: "Not allowed" });
@@ -102,13 +103,17 @@ export default async function handler(req, res) {
         .select("id, year_group")
         .in("id", classIds);
 
-      if (aErr) return res.status(500).json({ ok: false, error: "Failed to load allowed classes", debug: aErr.message });
+      if (aErr) {
+        return res.status(500).json({ ok: false, error: "Failed to load allowed classes", debug: aErr.message });
+      }
 
-      const allowedYears = new Set((allowedClasses || []).map((c) => Number(c.year_group)).filter((y) => Number.isFinite(y)));
+      const allowedYears = new Set(
+        (allowedClasses || []).map((c) => Number(c.year_group)).filter((y) => Number.isFinite(y))
+      );
       if (!allowedYears.has(year)) return res.status(403).json({ ok: false, error: "Not allowed" });
     }
 
-    // Get classes in year
+    // Load classes in year
     let { data: classes, error: cErr } = await supabaseAdmin
       .from("classes")
       .select("id, class_label, year_group")
@@ -117,7 +122,7 @@ export default async function handler(req, res) {
 
     if (cErr) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: cErr.message });
 
-    // If year_group stored as text, retry
+    // retry if year_group stored as text
     if (!classes || classes.length === 0) {
       const retry = await supabaseAdmin
         .from("classes")
@@ -130,11 +135,9 @@ export default async function handler(req, res) {
     }
 
     const classIds = (classes || []).map((c) => c.id);
-    if (!classIds.length) {
-      return res.json({ ok: true, year, windowDays, topImprovers: [], concerns: [] });
-    }
+    if (!classIds.length) return res.json({ ok: true, year, windowDays, topImprovers: [], concerns: [] });
 
-    // Students for those classes (need names + class)
+    // Students in those classes
     const { data: students, error: sErr } = await supabaseAdmin
       .from("students")
       .select("id, first_name, username, student_id, class_id, class_label")
@@ -143,9 +146,7 @@ export default async function handler(req, res) {
     if (sErr) return res.status(500).json({ ok: false, error: "Failed to load students", debug: sErr.message });
 
     const studentIds = (students || []).map((s) => s.id).filter(Boolean);
-    if (!studentIds.length) {
-      return res.json({ ok: true, year, windowDays, topImprovers: [], concerns: [] });
-    }
+    if (!studentIds.length) return res.json({ ok: true, year, windowDays, topImprovers: [], concerns: [] });
 
     // Attempts (select * to avoid schema mismatch)
     const { data: attempts, error: aErr } = await supabaseAdmin
@@ -157,19 +158,18 @@ export default async function handler(req, res) {
 
     if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
 
-    // Cutoffs
+    // time windows
     const now = new Date();
     const msDay = 24 * 60 * 60 * 1000;
     const recentStart = new Date(now.getTime() - windowDays * msDay);
     const prevStart = new Date(now.getTime() - windowDays * 2 * msDay);
 
-    // Maps for quick lookups
+    // maps
     const classLabelById = new Map((classes || []).map((c) => [c.id, c.class_label]));
     const studentById = new Map((students || []).map((s) => [s.id, s]));
 
-    // Per student buckets
-    // { recentSum, recentCount, prevSum, prevCount }
-    const stats = new Map();
+    // per-student stats
+    const stats = new Map(); // sid -> { recentSum, recentCount, prevSum, prevCount }
 
     for (const a of attempts || []) {
       const sid = a.student_id;
@@ -196,7 +196,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // Build rows
+    // build rows
     const rows = [];
     for (const [sid, st] of stats.entries()) {
       const s = studentById.get(sid);
@@ -218,17 +218,21 @@ export default async function handler(req, res) {
       });
     }
 
-    // Rules (simple & fair):
-    // - improvers: need >=2 attempts in both windows and positive delta
-    // - concerns: need >=2 recent attempts, sort by lowest recentAvg
+    // Top improvers: must have data in both windows, positive delta
     const topImprovers = rows
       .filter((r) => r.delta != null && r.delta > 0 && r.recentCount >= 2 && r.prevCount >= 2)
       .sort((a, b) => (b.delta - a.delta) || (b.recentAvg - a.recentAvg))
       .slice(0, 10);
 
+    // ✅ Concern list: ONLY 70% or below, with 2+ recent attempts
     const concerns = rows
-      .filter((r) => r.recentAvg != null && r.recentCount >= 2)
-      .sort((a, b) => (a.recentAvg - b.recentAvg) || ((a.delta ?? 0) - (b.delta ?? 0)))
+      .filter(
+        (r) =>
+          r.recentAvg !== null &&
+          Number(r.recentAvg) <= 70 &&
+          r.recentCount >= 2
+      )
+      .sort((a, b) => Number(a.recentAvg) - Number(b.recentAvg))
       .slice(0, 10);
 
     return res.json({ ok: true, year, windowDays, topImprovers, concerns });
