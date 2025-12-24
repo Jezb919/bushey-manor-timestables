@@ -68,21 +68,23 @@ function MetricPill({ label, value }) {
   );
 }
 
-// ✅ Colour rules requested:
-// 100% = light green
-// 90–99% = dark green
-// 70–89% = orange
-// <70% = red
+// ✅ Bulletproof: convert score to Number first
 function scoreColour(score) {
-  if (score === 100) {
+  const s = Number(score);
+
+  // 100% = light green
+  if (s === 100) {
     return { bg: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.4)", text: "#166534" };
   }
-  if (score >= 90) {
+  // 90–99 = dark green
+  if (s >= 90 && s <= 99) {
     return { bg: "rgba(21,128,61,0.15)", border: "rgba(21,128,61,0.4)", text: "#14532d" };
   }
-  if (score >= 70) {
+  // 70–89 = orange
+  if (s >= 70 && s <= 89) {
     return { bg: "rgba(245,158,11,0.15)", border: "rgba(245,158,11,0.4)", text: "#92400e" };
   }
+  // below 70 = red
   return { bg: "rgba(185,28,28,0.15)", border: "rgba(185,28,28,0.4)", text: "#7f1d1d" };
 }
 
@@ -129,7 +131,7 @@ export default function AttainmentYearPage() {
     })();
   }, [year]);
 
-  // Load insights (improvers/concerns)
+  // Load insights
   useEffect(() => {
     if (!year) return;
     (async () => {
@@ -315,7 +317,7 @@ export default function AttainmentYearPage() {
               border: "1px solid rgba(0,0,0,0.06)",
             }}
           >
-            <div style={{ fontWeight: 900, fontSize: 16 }}>Concern List (Below 80%)</div>
+            <div style={{ fontWeight: 900, fontSize: 16 }}>Concern List (70% or below)</div>
             <div style={{ opacity: 0.7, fontSize: 12, marginTop: 4 }}>
               Colour key: 100% light green • 90–99% dark green • 70–89% orange • &lt;70% red
             </div>
@@ -359,7 +361,7 @@ export default function AttainmentYearPage() {
                 );
               }) : (
                 <div style={{ opacity: 0.75, marginTop: 8 }}>
-                  Not enough recent attempts yet to build a concern list.
+                  No pupils are at 70% or below in the selected window (or not enough attempts yet).
                 </div>
               )}
             </div>
