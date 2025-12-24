@@ -13,42 +13,55 @@ export default function AdminPupilsPage() {
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const [credsBox, setCredsBox] = useState(null); // {username,tempPassword, name}
+  const [credsBox, setCredsBox] = useState(null);
 
-  // Load class list
+  async function loadClasses() {
+    const r = await fetch("/api/teacher/classes");
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "Failed to load classes");
+    setClasses(j.classes || []);
+    if (j.classes?.length) setClassId((prev) => prev || j.classes[0].id);
+  }
+
+  async function loadPupils(selectedClassId) {
+    const r = await fetch("/api/teacher/students");
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || "Failed to load pupils");
+
+    const list = j.students || [];
+    const cl = classes.find((c) => c.id === selectedClassId)?.class_label;
+
+    // Prefer class_id match; fallback to class_label match
+    const filtered = list.filter(
+      (s) => s.class_id === selectedClassId || (cl && s.class_label === cl)
+    );
+    setPupils(filtered);
+  }
+
   useEffect(() => {
     (async () => {
       try {
         setErr("");
-        const r = await fetch("/api/teacher/classes");
-        const j = await r.json();
-        if (!j.ok) return setErr(j.error || "Failed to load classes");
-        setClasses(j.classes || []);
-        if (j.classes?.length) setClassId(j.classes[0].id);
+        await loadClasses();
       } catch (e) {
-        setErr(String(e));
+        setErr(String(e.message || e));
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load pupils for selected class (simple: reuse /api/teacher/students and filter client-side)
   useEffect(() => {
     (async () => {
       try {
         if (!classId) return;
         setErr("");
-        const r = await fetch("/api/teacher/students");
-        const j = await r.json();
-        if (!j.ok) return setErr(j.error || "Failed to load pupils");
-        const list = j.students || [];
-        const filtered = list.filter((s) => s.class_id === classId || s.class_label === classes.find(c => c.id === classId)?.class_label);
-        setPupils(filtered);
+        await loadPupils(classId);
       } catch (e) {
-        setErr(String(e));
+        setErr(String(e.message || e));
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classId]);
+  }, [classId, classes.length]);
 
   async function addPupil() {
     setMsg("");
@@ -79,29 +92,22 @@ export default function AdminPupilsPage() {
 
       setCredsBox({
         name: fullName,
-        username: j.credentials?.username || j.pupil.username,
-        tempPassword: j.credentials?.tempPassword || null,
+        username: j.credentials?.username || j.pupil.username || "(no username returned)",
+        tempPassword: j.credentials?.tempPassword || "(no temp password returned)",
       });
 
       setFirstName("");
       setLastName("");
 
-      // refresh list
-      const rr = await fetch("/api/teacher/students");
-      const jj = await rr.json();
-      if (jj.ok) {
-        const list = jj.students || [];
-        const filtered = list.filter((s) => s.class_id === classId || s.class_label === classes.find(c => c.id === classId)?.class_label);
-        setPupils(filtered);
-      }
+      await loadPupils(classId);
     } catch (e) {
-      setErr(String(e));
+      setErr(String(e.message || e));
     } finally {
       setSaving(false);
     }
   }
 
-  async function resetPassword(student_id, name, username) {
+  async function resetPassword(student_id, name) {
     setMsg("");
     setErr("");
     setCredsBox(null);
@@ -112,22 +118,26 @@ export default function AdminPupilsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ student_id }),
       });
+
       const j = await r.json();
       if (!j.ok) return setErr(j.error || "Failed to reset password");
 
       setMsg(`Password reset for ${name} ✅`);
       setCredsBox({
         name,
-        username: j.credentials?.username || username,
-        tempPassword: j.credentials?.tempPassword || null,
+        username: j.credentials?.username || j.pupil?.username || "(unknown)",
+        tempPassword: j.credentials?.tempPassword || "(not returned)",
       });
+
+      await loadPupils(classId);
     } catch (e) {
-      setErr(String(e));
+      setErr(String(e.message || e));
     }
   }
 
   async function changeUsername(student_id, currentUsername, name) {
-    const newUsername = prompt(`New username for ${name}`, currentUsername || "");
+    const prefill = currentUsername || "";
+    const newUsername = prompt(`New username for ${name}`, prefill);
     if (!newUsername) return;
 
     setMsg("");
@@ -143,18 +153,10 @@ export default function AdminPupilsPage() {
       const j = await r.json();
       if (!j.ok) return setErr(j.error || "Failed to change username");
 
-      setMsg(`Username updated for ${name} ✅`);
-
-      // refresh list
-      const rr = await fetch("/api/teacher/students");
-      const jj = await rr.json();
-      if (jj.ok) {
-        const list = jj.students || [];
-        const filtered = list.filter((s) => s.class_id === classId || s.class_label === classes.find(c => c.id === classId)?.class_label);
-        setPupils(filtered);
-      }
+      setMsg(`Username changed for ${name} → ${j.pupil.username} ✅`);
+      await loadPupils(classId);
     } catch (e) {
-      setErr(String(e));
+      setErr(String(e.message || e));
     }
   }
 
@@ -170,7 +172,7 @@ export default function AdminPupilsPage() {
         {msg ? <div style={{ color: "#166534", fontWeight: 800, marginBottom: 10 }}>{msg}</div> : null}
 
         <div style={card}>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "end" }}>
             <label style={label}>
               Class
               <select value={classId} onChange={(e) => setClassId(e.target.value)} style={input}>
@@ -198,8 +200,7 @@ export default function AdminPupilsPage() {
           </div>
 
           <div style={{ fontSize: 12, opacity: 0.7 }}>
-            Username is generated like: <b>firstname + surname initial + number</b> (unique).
-            Password is generated and shown once (copy it).
+            Username generated (unique). Password generated and shown once (copy it).
           </div>
         </div>
 
@@ -230,13 +231,13 @@ export default function AdminPupilsPage() {
               </thead>
               <tbody>
                 {pupils.map((p) => {
-                  const name = `${p.first_name || ""} ${p.last_name || ""}`.trim() || p.name || "Pupil";
+                  const name = `${p.first_name || ""} ${p.last_name || ""}`.trim() || "Pupil";
                   return (
                     <tr key={p.id}>
                       <td style={tdStrong}>{name}</td>
-                      <td style={td}><code>{p.username || "—"}</code></td>
+                      <td style={td}><code>{p.username || "— (not set yet)"}</code></td>
                       <td style={td}>
-                        <button style={smallBtn} onClick={() => resetPassword(p.id, name, p.username)}>
+                        <button style={smallBtn} onClick={() => resetPassword(p.id, name)}>
                           Reset password
                         </button>{" "}
                         <button style={smallBtn} onClick={() => changeUsername(p.id, p.username, name)}>
@@ -249,9 +250,7 @@ export default function AdminPupilsPage() {
 
                 {!pupils.length ? (
                   <tr>
-                    <td style={td} colSpan={3}>
-                      No pupils found for this class yet.
-                    </td>
+                    <td style={td} colSpan={3}>No pupils found for this class yet.</td>
                   </tr>
                 ) : null}
               </tbody>
@@ -274,12 +273,7 @@ const card = {
 };
 
 const label = { display: "grid", gap: 6, fontWeight: 800 };
-
-const input = {
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: "1px solid rgba(0,0,0,0.12)",
-};
+const input = { padding: "10px 12px", borderRadius: 12, border: "1px solid rgba(0,0,0,0.12)" };
 
 const button = (saving) => ({
   padding: "12px 14px",
@@ -289,26 +283,11 @@ const button = (saving) => ({
   color: saving ? "#111827" : "#fff",
   fontWeight: 900,
   cursor: saving ? "not-allowed" : "pointer",
-  alignSelf: "end",
 });
 
-const th = {
-  textAlign: "left",
-  padding: "10px 12px",
-  fontSize: 12,
-  opacity: 0.75,
-  borderBottom: "1px solid rgba(0,0,0,0.08)",
-};
-
-const td = {
-  padding: "10px 12px",
-  borderBottom: "1px solid rgba(0,0,0,0.06)",
-};
-
-const tdStrong = {
-  ...td,
-  fontWeight: 900,
-};
+const th = { textAlign: "left", padding: "10px 12px", fontSize: 12, opacity: 0.75, borderBottom: "1px solid rgba(0,0,0,0.08)" };
+const td = { padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)" };
+const tdStrong = { ...td, fontWeight: 900 };
 
 const smallBtn = {
   padding: "8px 10px",
