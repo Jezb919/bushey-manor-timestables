@@ -68,23 +68,18 @@ function MetricPill({ label, value }) {
   );
 }
 
-// ✅ Bulletproof: convert score to Number first
 function scoreColour(score) {
   const s = Number(score);
 
-  // 100% = light green
   if (s === 100) {
     return { bg: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.4)", text: "#166534" };
   }
-  // 90–99 = dark green
   if (s >= 90 && s <= 99) {
     return { bg: "rgba(21,128,61,0.15)", border: "rgba(21,128,61,0.4)", text: "#14532d" };
   }
-  // 70–89 = orange
   if (s >= 70 && s <= 89) {
     return { bg: "rgba(245,158,11,0.15)", border: "rgba(245,158,11,0.4)", text: "#92400e" };
   }
-  // below 70 = red
   return { bg: "rgba(185,28,28,0.15)", border: "rgba(185,28,28,0.4)", text: "#7f1d1d" };
 }
 
@@ -99,7 +94,6 @@ export default function AttainmentYearPage() {
 
   const [error, setError] = useState("");
 
-  // Load available years
   useEffect(() => {
     (async () => {
       try {
@@ -115,7 +109,6 @@ export default function AttainmentYearPage() {
     })();
   }, []);
 
-  // Load charts data
   useEffect(() => {
     if (!year) return;
     (async () => {
@@ -131,7 +124,6 @@ export default function AttainmentYearPage() {
     })();
   }, [year]);
 
-  // Load insights
   useEffect(() => {
     if (!year) return;
     (async () => {
@@ -188,7 +180,6 @@ export default function AttainmentYearPage() {
           </div>
         ) : null}
 
-        {/* Controls */}
         <div
           style={{
             display: "flex",
@@ -243,7 +234,6 @@ export default function AttainmentYearPage() {
           </div>
         </div>
 
-        {/* Insights row */}
         <div
           style={{
             marginTop: 14,
@@ -294,14 +284,19 @@ export default function AttainmentYearPage() {
                     <div style={{ fontWeight: 900, color: "rgba(46,125,50,1)" }}>
                       +{r.delta}%
                     </div>
-                    <a href="/teacher/admin/attainment-individual" style={{ fontSize: 12, opacity: 0.75 }}>
+
+                    {/* ✅ PRESELECT LINK */}
+                    <a
+                      href={`/teacher/admin/attainment-individual?student_id=${encodeURIComponent(r.student_id)}`}
+                      style={{ fontSize: 12, opacity: 0.75 }}
+                    >
                       Open individual
                     </a>
                   </div>
                 </div>
               )) : (
                 <div style={{ opacity: 0.75, marginTop: 8 }}>
-                  Not enough data yet to calculate improvers (needs attempts in both windows).
+                  Not enough data yet to calculate improvers.
                 </div>
               )}
             </div>
@@ -353,7 +348,12 @@ export default function AttainmentYearPage() {
                       <div style={{ fontWeight: 900, color: colours.text }}>
                         {r.recentAvg}%
                       </div>
-                      <a href="/teacher/admin/attainment-individual" style={{ fontSize: 12, opacity: 0.75 }}>
+
+                      {/* ✅ PRESELECT LINK */}
+                      <a
+                        href={`/teacher/admin/attainment-individual?student_id=${encodeURIComponent(r.student_id)}`}
+                        style={{ fontSize: 12, opacity: 0.75 }}
+                      >
                         Open individual
                       </a>
                     </div>
@@ -368,7 +368,7 @@ export default function AttainmentYearPage() {
           </div>
         </div>
 
-        {/* Cards grid: class charts */}
+        {/* Class charts */}
         <div
           style={{
             marginTop: 14,
