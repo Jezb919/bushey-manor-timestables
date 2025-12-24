@@ -48,16 +48,12 @@ export default async function handler(req, res) {
     const { teacher_id, role } = session;
     const isAdmin = role === "admin";
 
-    // Admin: all year groups that exist
     if (isAdmin) {
-      const { data, error } = await supabaseAdmin
-        .from("classes")
-        .select("year_group");
-
+      const { data, error } = await supabaseAdmin.from("classes").select("year_group");
       if (error) return res.status(500).json({ ok: false, error: "Failed to load year groups", debug: error.message });
 
-      const years = [...new Set((data || []).map((r) => r.year_group).filter((y) => y != null))]
-        .sort((a, b) => Number(a) - Number(b));
+      const years = [...new Set((data || []).map((r) => Number(r.year_group)).filter((y) => Number.isFinite(y)))]
+        .sort((a, b) => a - b);
 
       return res.json({ ok: true, years });
     }
@@ -80,8 +76,8 @@ export default async function handler(req, res) {
 
     if (cErr) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: cErr.message });
 
-    const years = [...new Set((classes || []).map((r) => r.year_group).filter((y) => y != null))]
-      .sort((a, b) => Number(a) - Number(b));
+    const years = [...new Set((classes || []).map((r) => Number(r.year_group)).filter((y) => Number.isFinite(y)))]
+      .sort((a, b) => a - b);
 
     return res.json({ ok: true, years });
   } catch (e) {
