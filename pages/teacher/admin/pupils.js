@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import AdminHeader from "../../../components/AdminHeader";
 
 export default function AdminPupilsPage() {
   const [classes, setClasses] = useState([]);
@@ -15,13 +16,8 @@ export default function AdminPupilsPage() {
 
   const [credsBox, setCredsBox] = useState(null);
 
-  /* ---------------- LOGOUT ---------------- */
-  async function logout() {
-    await fetch("/api/teacher/logout");
-    window.location.href = "/teacher/login";
-  }
-
   /* ---------------- LOAD DATA ---------------- */
+
   async function loadClasses() {
     const r = await fetch("/api/teacher/classes");
     const j = await r.json();
@@ -60,6 +56,7 @@ export default function AdminPupilsPage() {
   }, [classId]);
 
   /* ---------------- ACTIONS ---------------- */
+
   async function addPupil() {
     setMsg("");
     setErr("");
@@ -156,14 +153,12 @@ export default function AdminPupilsPage() {
   );
 
   /* ---------------- UI ---------------- */
+
   return (
     <div style={{ padding: 20, background: "#f3f4f6", minHeight: "100vh" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-        <h1 style={{ fontSize: 26, fontWeight: 900 }}>Pupils</h1>
-
-        <button onClick={logout} style={logoutBtn}>
-          Log out
-        </button>
+        {/* ✅ HEADER WITH LOGOUT */}
+        <AdminHeader title="Pupils" />
 
         {err && <div style={errStyle}>{err}</div>}
         {msg && <div style={msgStyle}>{msg}</div>}
@@ -239,9 +234,10 @@ export default function AdminPupilsPage() {
 }
 
 /* ---------------- STYLES ---------------- */
+
 const card = { background: "#fff", padding: 16, borderRadius: 12, marginTop: 16 };
 const input = { padding: 8, marginRight: 8 };
 const button = { padding: 10, fontWeight: 700 };
-const logoutBtn = { marginBottom: 12, padding: 8, fontWeight: 700 };
+
 const errStyle = { color: "red", fontWeight: 700, marginTop: 8 };
 const msgStyle = { color: "green", fontWeight: 700, marginTop: 8 };
