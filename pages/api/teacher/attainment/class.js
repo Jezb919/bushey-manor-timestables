@@ -86,10 +86,10 @@ export default async function handler(req, res) {
       if (!link) return res.status(403).json({ ok: false, error: "Not allowed" });
     }
 
-    // Get class label
+    // ✅ IMPORTANT: no 'year' column here
     const { data: cls, error: cErr } = await supabaseAdmin
       .from("classes")
-      .select("id, class_label, year")
+      .select("id, class_label")
       .eq("id", class_id)
       .maybeSingle();
 
@@ -105,9 +105,7 @@ export default async function handler(req, res) {
     if (sErr) return res.status(500).json({ ok: false, error: "Failed to load students", debug: sErr.message });
 
     const studentIds = (students || []).map((s) => s.id).filter(Boolean);
-    if (!studentIds.length) {
-      return res.json({ ok: true, class: cls, series: [] });
-    }
+    if (!studentIds.length) return res.json({ ok: true, class: cls, series: [] });
 
     // Attempts for those students
     const { data: attempts, error: aErr } = await supabaseAdmin
@@ -138,7 +136,6 @@ export default async function handler(req, res) {
     const series = [...bucket.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([month, v]) => ({
-        // keep as month key; client will label it nicely
         month,
         score: v.count ? Math.round(v.sum / v.count) : null,
       }))
