@@ -68,6 +68,24 @@ function MetricPill({ label, value }) {
   );
 }
 
+// ✅ Colour rules requested:
+// 100% = light green
+// 90–99% = dark green
+// 70–89% = orange
+// <70% = red
+function scoreColour(score) {
+  if (score === 100) {
+    return { bg: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.4)", text: "#166534" };
+  }
+  if (score >= 90) {
+    return { bg: "rgba(21,128,61,0.15)", border: "rgba(21,128,61,0.4)", text: "#14532d" };
+  }
+  if (score >= 70) {
+    return { bg: "rgba(245,158,11,0.15)", border: "rgba(245,158,11,0.4)", text: "#92400e" };
+  }
+  return { bg: "rgba(185,28,28,0.15)", border: "rgba(185,28,28,0.4)", text: "#7f1d1d" };
+}
+
 export default function AttainmentYearPage() {
   const [years, setYears] = useState([]);
   const [year, setYear] = useState("");
@@ -117,7 +135,9 @@ export default function AttainmentYearPage() {
     (async () => {
       try {
         setError("");
-        const r = await fetch(`/api/teacher/attainment/insights?year=${encodeURIComponent(year)}&window=${encodeURIComponent(windowDays)}`);
+        const r = await fetch(
+          `/api/teacher/attainment/insights?year=${encodeURIComponent(year)}&window=${encodeURIComponent(windowDays)}`
+        );
         const j = await r.json();
         if (!j.ok) return setError(j.error || "Failed to load insights");
         setTopImprovers(j.topImprovers || []);
@@ -272,10 +292,7 @@ export default function AttainmentYearPage() {
                     <div style={{ fontWeight: 900, color: "rgba(46,125,50,1)" }}>
                       +{r.delta}%
                     </div>
-                    <a
-                      href="/teacher/admin/attainment-individual"
-                      style={{ fontSize: 12, opacity: 0.75 }}
-                    >
+                    <a href="/teacher/admin/attainment-individual" style={{ fontSize: 12, opacity: 0.75 }}>
                       Open individual
                     </a>
                   </div>
@@ -298,47 +315,49 @@ export default function AttainmentYearPage() {
               border: "1px solid rgba(0,0,0,0.06)",
             }}
           >
-            <div style={{ fontWeight: 900, fontSize: 16 }}>Concern List</div>
+            <div style={{ fontWeight: 900, fontSize: 16 }}>Concern List (Below 80%)</div>
             <div style={{ opacity: 0.7, fontSize: 12, marginTop: 4 }}>
-              Lowest recent average (needs 2+ attempts in the selected window).
+              Colour key: 100% light green • 90–99% dark green • 70–89% orange • &lt;70% red
             </div>
 
             <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-              {concerns.length ? concerns.map((r, idx) => (
-                <div
-                  key={r.student_id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    padding: "10px 12px",
-                    borderRadius: 14,
-                    background: "rgba(185,28,28,0.06)",
-                    border: "1px solid rgba(185,28,28,0.15)",
-                  }}
-                >
-                  <div>
-                    <div style={{ fontWeight: 900 }}>
-                      {idx + 1}. {r.name} <span style={{ opacity: 0.6 }}>({r.class_label})</span>
-                    </div>
-                    <div style={{ fontSize: 12, opacity: 0.75 }}>
-                      Recent: {r.recentAvg}% ({r.recentCount}){r.prevAvg != null ? ` • Prev: ${r.prevAvg}% (${r.prevCount})` : ""}
-                    </div>
-                  </div>
+              {concerns.length ? concerns.map((r, idx) => {
+                const colours = scoreColour(r.recentAvg);
 
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontWeight: 900, color: "rgba(185,28,28,1)" }}>
-                      {r.recentAvg}%
+                return (
+                  <div
+                    key={r.student_id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "10px 12px",
+                      borderRadius: 14,
+                      background: colours.bg,
+                      border: `1px solid ${colours.border}`,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 900 }}>
+                        {idx + 1}. {r.name} <span style={{ opacity: 0.6 }}>({r.class_label})</span>
+                      </div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        Recent: {r.recentAvg}% ({r.recentCount})
+                        {r.prevAvg != null ? ` • Prev: ${r.prevAvg}% (${r.prevCount})` : ""}
+                      </div>
                     </div>
-                    <a
-                      href="/teacher/admin/attainment-individual"
-                      style={{ fontSize: 12, opacity: 0.75 }}
-                    >
-                      Open individual
-                    </a>
+
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontWeight: 900, color: colours.text }}>
+                        {r.recentAvg}%
+                      </div>
+                      <a href="/teacher/admin/attainment-individual" style={{ fontSize: 12, opacity: 0.75 }}>
+                        Open individual
+                      </a>
+                    </div>
                   </div>
-                </div>
-              )) : (
+                );
+              }) : (
                 <div style={{ opacity: 0.75, marginTop: 8 }}>
                   Not enough recent attempts yet to build a concern list.
                 </div>
