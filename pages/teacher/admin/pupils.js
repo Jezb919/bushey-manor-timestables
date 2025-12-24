@@ -13,6 +13,7 @@ export default function AdminPupilsPage() {
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // credsBox shows after add pupil OR reset password
   const [credsBox, setCredsBox] = useState(null);
 
   async function loadClasses() {
@@ -29,7 +30,7 @@ export default function AdminPupilsPage() {
     if (!j.ok) throw new Error(j.error || "Failed to load pupils");
 
     const list = j.students || [];
-    // ✅ Filter strictly by class_id (this is reliable)
+    // ✅ reliable filter by class_id
     const filtered = list.filter((s) => s.class_id === selectedClassId);
     setPupils(filtered);
   }
@@ -43,7 +44,6 @@ export default function AdminPupilsPage() {
         setErr(String(e.message || e));
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -56,7 +56,6 @@ export default function AdminPupilsPage() {
         setErr(String(e.message || e));
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classId]);
 
   async function addPupil() {
@@ -81,7 +80,11 @@ export default function AdminPupilsPage() {
       });
 
       const j = await r.json();
-      if (!j.ok) return setErr(`${j.error || "Failed to add pupil"}${j.debug ? ` (${j.debug})` : ""}`);
+
+      if (!j.ok) {
+        const dbg = j.debug ? (typeof j.debug === "string" ? j.debug : JSON.stringify(j.debug)) : "";
+        return setErr(`${j.error || "Failed to add pupil"}${dbg ? ` (${dbg})` : ""}`);
+      }
 
       const fullName = `${j.pupil.first_name} ${j.pupil.last_name}`.trim();
       setMsg(`Added ${fullName} ✅`);
@@ -117,14 +120,30 @@ export default function AdminPupilsPage() {
       });
 
       const j = await r.json();
-      if (!j.ok) return setErr(`${j.error || "Failed to reset password"}${j.debug ? ` (${j.debug})` : ""}`);
+
+      if (!j.ok) {
+        const dbg = j.debug ? (typeof j.debug === "string" ? j.debug : JSON.stringify(j.debug)) : "";
+        return setErr(`${j.error || "Failed to reset password"}${dbg ? ` (${dbg})` : ""}`);
+      }
+
+      const username =
+        j.credentials?.username ||
+        j.pupil?.username ||
+        "(username not returned)";
+
+      const tempPassword =
+        j.credentials?.tempPassword ||
+        j.tempPassword ||
+        j.password ||
+        "(temp password not returned)";
 
       setMsg(`Password reset for ${name} ✅`);
+
       setCredsBox({
         title: "Reset password (copy now)",
         name,
-        username: j.credentials?.username || j.pupil?.username || "(unknown)",
-        tempPassword: j.credentials?.tempPassword || "(not returned)",
+        username,
+        tempPassword,
       });
 
       await loadPupils(classId);
@@ -134,7 +153,6 @@ export default function AdminPupilsPage() {
   }
 
   async function changeUsername(student_id, currentUsername, name) {
-    // ✅ show current username in prompt
     const newUsernameRaw = prompt(`New username for ${name}`, currentUsername || "");
     if (!newUsernameRaw) return;
 
@@ -148,10 +166,12 @@ export default function AdminPupilsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ student_id, new_username: newUsernameRaw }),
       });
+
       const j = await r.json();
 
       if (!j.ok) {
-        return setErr(`${j.error || "Failed to change username"}${j.debug ? ` (${j.debug})` : ""}`);
+        const dbg = j.debug ? (typeof j.debug === "string" ? j.debug : JSON.stringify(j.debug)) : "";
+        return setErr(`${j.error || "Failed to change username"}${dbg ? ` (${dbg})` : ""}`);
       }
 
       setMsg(`Username changed for ${name} → ${j.pupil.username} ✅`);
@@ -170,7 +190,9 @@ export default function AdminPupilsPage() {
     <div style={{ padding: 20, background: "#f3f4f6", minHeight: "100vh" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
         <h1 style={{ fontSize: 26, fontWeight: 900, marginBottom: 8 }}>Pupils</h1>
-        <div style={{ opacity: 0.75, marginBottom: 12 }}>Create pupils, generate logins, reset passwords.</div>
+        <div style={{ opacity: 0.75, marginBottom: 12 }}>
+          Create pupils, generate logins, reset passwords.
+        </div>
 
         {err ? <div style={{ color: "#b91c1c", fontWeight: 800, marginBottom: 10 }}>{err}</div> : null}
         {msg ? <div style={{ color: "#166534", fontWeight: 800, marginBottom: 10 }}>{msg}</div> : null}
@@ -204,13 +226,13 @@ export default function AdminPupilsPage() {
           </div>
 
           <div style={{ fontSize: 12, opacity: 0.7 }}>
-            Tip: usernames are cleaned to letters/numbers only (no dots/spaces). If it says “already taken”, try adding a number.
+            Tip: usernames are cleaned to letters/numbers only (no dots/spaces). If it says “already taken”, add a number.
           </div>
         </div>
 
         {credsBox ? (
           <div style={{ ...card, marginTop: 14 }}>
-            <div style={{ fontWeight: 900, marginBottom: 8 }}>{credsBox.title}</div>
+            <div style={{ fontWeight: 900, marginBottom: 8 }}>{credsBox.title || "Login details"}</div>
             <div style={{ display: "grid", gap: 6 }}>
               <div><b>Pupil:</b> {credsBox.name}</div>
               <div><b>Username:</b> <code>{credsBox.username}</code></div>
