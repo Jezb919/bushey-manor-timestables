@@ -6,7 +6,6 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// ---------- session helpers ----------
 function parseCookies(cookieHeader = "") {
   if (!cookieHeader) return {};
   return cookieHeader.split(";").reduce((acc, part) => {
@@ -42,7 +41,6 @@ async function getTeacherFromSession(req) {
   }
 }
 
-// ---------- credential helpers ----------
 function cleanName(s = "") {
   return String(s).trim().replace(/\s+/g, " ");
 }
@@ -51,12 +49,11 @@ function baseUsername(first, last) {
   const f = cleanName(first).toLowerCase().replace(/[^a-z]/g, "");
   const l = cleanName(last).toLowerCase().replace(/[^a-z]/g, "");
   const li = l ? l[0] : "x";
-  return `${f}${li}`; // e.g. sam + b => samb
+  return `${f}${li}`; // e.g. zac + j => zacj
 }
 
 async function generateUniqueUsername(first, last) {
   const base = baseUsername(first, last);
-  // Try base1..base99
   for (let n = 1; n <= 99; n++) {
     const candidate = `${base}${n}`;
     const { data, error } = await supabaseAdmin
@@ -66,25 +63,22 @@ async function generateUniqueUsername(first, last) {
       .maybeSingle();
 
     if (error) throw new Error(error.message);
-    if (!data) return candidate; // free
+    if (!data) return candidate;
   }
-  // fallback: add random 3 digits
   const rand = Math.floor(100 + Math.random() * 900);
   return `${base}${rand}`;
 }
 
 function generateTempPassword() {
-  // easy to type, no confusing chars
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
   for (let i = 0; i < 8; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return out; // e.g. K7P2M8QZ
+  return out;
 }
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
   const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  // store as "scrypt$salt$hash"
   return `scrypt$${salt}$${hash}`;
 }
 
@@ -94,8 +88,6 @@ export default async function handler(req, res) {
 
     const session = await getTeacherFromSession(req);
     if (!session) return res.status(401).json({ ok: false, error: "Not logged in" });
-
-    // Admin-only (simple + safe)
     if (session.role !== "admin") return res.status(403).json({ ok: false, error: "Admins only" });
 
     const { first_name, last_name, class_id } = req.body || {};
@@ -103,7 +95,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: "Missing first_name, last_name or class_id" });
     }
 
-    // Get class_label
     const { data: cls, error: clsErr } = await supabaseAdmin
       .from("classes")
       .select("id, class_label")
@@ -112,12 +103,10 @@ export default async function handler(req, res) {
 
     if (clsErr || !cls) return res.status(404).json({ ok: false, error: "Class not found" });
 
-    // Generate username + temp password
     const username = await generateUniqueUsername(first_name, last_name);
     const tempPassword = generateTempPassword();
     const password_hash = hashPassword(tempPassword);
 
-    // Insert pupil
     const { data: created, error: insErr } = await supabaseAdmin
       .from("students")
       .insert({
@@ -135,12 +124,10 @@ export default async function handler(req, res) {
       return res.status(500).json({ ok: false, error: "Failed to create pupil", debug: insErr.message });
     }
 
-    // ✅ Return temp password ONCE (you copy it / print it)
     return res.json({
       ok: true,
       pupil: created,
       credentials: { username, tempPassword },
-      note: "Copy the temp password now. You can reset it later, but you can't view old passwords."
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e.message || e) });
