@@ -19,6 +19,7 @@ function getSession(req) {
   }
 }
 
+// Try lots of common attempt schemas, return % as integer
 function pctFromAttempt(a) {
   const direct =
     a.score ??
@@ -33,8 +34,14 @@ function pctFromAttempt(a) {
     return Number.isFinite(n) ? Math.round(n) : null;
   }
 
-  const correct = a.correct ?? a.num_correct ?? null;
-  const total = a.total ?? a.num_questions ?? a.question_count ?? a.total_questions ?? null;
+  const correct = a.correct ?? a.num_correct ?? a.correct_count ?? null;
+  const total =
+    a.total ??
+    a.num_questions ??
+    a.question_count ??
+    a.total_questions ??
+    a.questions_total ??
+    null;
 
   if (correct !== null && total) {
     const n = Math.round((Number(correct) / Number(total)) * 100);
@@ -75,25 +82,29 @@ export default async function handler(req, res) {
 
     if (!classes.length) return res.json({ ok: true, classes: [], selected: "", pupils: [] });
 
+    // 2) Pick class
     const selectedLabel = (req.query.class_label || classes[0].class_label || "").toString();
     const selected = classes.find((c) => c.class_label === selectedLabel) || classes[0];
 
-    // 2) Load pupils in that class
-    // ✅ students table DOES NOT have surname yet, so we only use first_name
+    // 3) Load pupils
     const { data: pupils, error: pErr } = await supabase
       .from("students")
-      .select("id, first_name, class_label")
+      .select("id, first_name, surname, class_label")
       .eq("class_label", selected.class_label)
       .order("first_name", { ascending: true });
 
     if (pErr) return res.status(500).json({ ok: false, error: "Failed to load pupils", debug: pErr.message });
 
-    const pupilList = pupils || [];
+    const pupilList = (pupils || []).map((s) => ({
+      ...s,
+      full_name: `${s.first_name || ""} ${s.surname || ""}`.trim(),
+    }));
+
     if (!pupilList.length) {
       return res.json({ ok: true, classes, selected: selected.class_label, pupils: [] });
     }
 
-    // 3) Recent attempts for these pupils
+    // 4) Load attempts for all pupils in one go
     const ids = pupilList.map((s) => s.id);
 
     const { data: attempts, error: aErr } = await supabase
@@ -101,7 +112,7 @@ export default async function handler(req, res) {
       .select("*")
       .in("student_id", ids)
       .order("created_at", { ascending: false })
-      .limit(2000);
+      .limit(5000);
 
     if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
 
@@ -120,13 +131,11 @@ export default async function handler(req, res) {
       const last10 = scores.slice(0, 10);
 
       const latest = last5.length ? last5[0] : null;
-      const avg10 = last10.length
-        ? Math.round(last10.reduce((a, b) => a + b, 0) / last10.length)
-        : null;
+      const avg10 = last10.length ? Math.round(last10.reduce((a, b) => a + b, 0) / last10.length) : null;
 
       return {
         id: s.id,
-        name: s.first_name || "",
+        name: s.full_name || s.first_name || "",
         class_label: s.class_label,
         latest,
         last5,
