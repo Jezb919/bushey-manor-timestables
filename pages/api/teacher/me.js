@@ -1,97 +1,71 @@
-// pages/api/teacher/me.js
-import { createClient } from "@supabase/supabase-js";
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const out = {};
+  header.split(";").forEach((part) => {
+    const [k, ...v] = part.trim().split("=");
+    if (!k) return;
+    out[k] = decodeURIComponent(v.join("=") || "");
+  });
+  return out;
+}
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { persistSession: false } }
-);
-
-export default async function handler(req, res) {
+function safeJsonParse(str) {
   try {
-    const raw = req.cookies?.bmtt_teacher;
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
+}
 
-    if (!raw) {
-      return res.status(200).json({ ok: true, loggedIn: false });
+export default function handler(req, res) {
+  try {
+    const cookies = parseCookies(req);
+
+    // ✅ Your app is now using bmtt_teacher as the main cookie
+    const raw = cookies.bmtt_teacher || null;
+    const parsed = raw ? safeJsonParse(raw) : null;
+
+    if (!parsed) {
+      return res.status(401).json({
+        ok: false,
+        error: "Not logged in",
+        debug: {
+          cookieNames: Object.keys(cookies),
+          has_bmtt_teacher: !!cookies.bmtt_teacher,
+          note: "bmtt_teacher exists but could not be parsed as JSON",
+        },
+      });
     }
 
-    // Decode then parse
-    let session = null;
-    try {
-      session = JSON.parse(decodeURIComponent(String(raw)));
-    } catch {
-      return res.status(200).json({ ok: true, loggedIn: false });
+    // Accept either teacherId or teacher_id
+    const teacherId = parsed.teacherId || parsed.teacher_id || null;
+    const role = parsed.role || null;
+    const email = parsed.email || null;
+    const full_name = parsed.full_name || "";
+
+    if (!teacherId || !role || !email) {
+      return res.status(401).json({
+        ok: false,
+        error: "Not logged in",
+        debug: {
+          parsedKeys: Object.keys(parsed || {}),
+          note: "bmtt_teacher parsed but missing required fields",
+        },
+      });
     }
 
-    const teacherId = session?.teacherId;
-    if (!teacherId) {
-      return res.status(200).json({ ok: true, loggedIn: false });
-    }
-
-    const { data: teacher, error: tErr } = await supabase
-      .from("teachers")
-      .select("id, email, full_name, role")
-      .eq("id", teacherId)
-      .maybeSingle();
-
-    if (tErr || !teacher) {
-      return res.status(200).json({ ok: true, loggedIn: false });
-    }
-
-    // Admin sees all classes. Teachers see assigned classes.
-    let classes = [];
-
-    if (teacher.role === "admin") {
-      const { data, error } = await supabase
-        .from("classes")
-        .select("id, class_label, year_group")
-        .not("class_label", "is", null)
-        .order("year_group", { ascending: true })
-        .order("class_label", { ascending: true });
-
-      if (error) {
-        return res.status(500).json({ ok: false, error: "Failed to load classes", details: error.message });
-      }
-      classes = data || [];
-    } else {
-      const { data: links, error: linkErr } = await supabase
-        .from("teacher_classes")
-        .select("class_id")
-        .eq("teacher_id", teacher.id);
-
-      if (linkErr) {
-        return res.status(500).json({ ok: false, error: "Failed to load teacher_classes", details: linkErr.message });
-      }
-
-      const classIds = (links || []).map((l) => l.class_id).filter(Boolean);
-
-      if (classIds.length > 0) {
-        const { data, error } = await supabase
-          .from("classes")
-          .select("id, class_label, year_group")
-          .in("id", classIds)
-          .not("class_label", "is", null)
-          .order("year_group", { ascending: true })
-          .order("class_label", { ascending: true });
-
-        if (error) {
-          return res.status(500).json({ ok: false, error: "Failed to load classes", details: error.message });
-        }
-        classes = data || [];
-      }
-    }
-
-    return res.status(200).json({
+    // ✅ Return exactly what your pages expect: { ok: true, user: {...} }
+    return res.json({
       ok: true,
-      loggedIn: true,
-      teacher,
-      classes,
+      user: {
+        id: teacherId,
+        teacher_id: teacherId,
+        role,
+        email,
+        full_name,
+      },
     });
-  } catch (err) {
-    return res.status(500).json({
-      ok: false,
-      error: "Server error",
-      details: String(err?.message || err),
-    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
 }
