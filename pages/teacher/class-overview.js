@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 function colourFor(score) {
-  if (score === null || score === undefined) return "#f1f5f9";
+  if (score === null || score === undefined) return "#f1f5f9"; // grey
   if (score === 100) return "#dcfce7"; // light green
   if (score >= 90) return "#86efac"; // green
   if (score >= 70) return "#fed7aa"; // orange
@@ -51,7 +51,7 @@ export default function ClassOverviewPage() {
       <div style={{ maxWidth: 1200, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <h1 style={{ fontSize: 40, fontWeight: 900, margin: 0 }}>Class overview</h1>
+            <h1 style={{ fontSize: 46, fontWeight: 900, margin: 0 }}>Class overview</h1>
             <div style={{ opacity: 0.75, marginTop: 6 }}>
               Colour key: 100% light green • 90–99% green • 70–89% orange • &lt;70% red
             </div>
@@ -94,30 +94,29 @@ export default function ClassOverviewPage() {
                   <th style={thRight}>Attempts</th>
                 </tr>
               </thead>
+
               <tbody>
                 {pupils.map((p) => {
-                  const bg = colourFor(p.latest);
+                  const rowBg = colourFor(p.latest);
                   const link = `/teacher/admin/attainment-individual?student_id=${encodeURIComponent(p.id)}`;
 
                   return (
                     <tr
                       key={p.id}
                       onClick={() => (window.location.href = link)}
-                      style={{ cursor: "pointer" }}
+                      style={{ cursor: "pointer", background: rowBg }}
                       title="Click to open individual graphs"
                     >
                       <td style={tdStrong}>{p.name || "—"}</td>
-
-                      <td style={{ ...td, background: bg, fontWeight: 900 }}>
+                      <td style={{ ...td, fontWeight: 900 }}>
                         {p.latest === null ? "—" : `${p.latest}%`}
                       </td>
-
                       <td style={tdMono}>
                         {p.last5?.length ? p.last5.map((x) => `${x}%`).join(", ") : "—"}
                       </td>
-
-                      <td style={td}>{p.avg10 === null ? "—" : `${p.avg10}%`}</td>
-
+                      <td style={td}>
+                        {p.avg10 === null ? "—" : `${p.avg10}%`}
+                      </td>
                       <td style={tdRight}>{p.attempts_count || 0}</td>
                     </tr>
                   );
@@ -136,13 +135,14 @@ export default function ClassOverviewPage() {
         </div>
 
         <div style={{ marginTop: 14, opacity: 0.75, fontSize: 12 }}>
-          Next we’ll add: clickable pupil detail page + heatmap + attempt list.
+          Next: pupil detail page + heatmap + attempts list + concern list & target line (90%).
         </div>
       </div>
     </div>
   );
 }
 
+/* styles */
 const card = {
   background: "#fff",
   borderRadius: 16,
@@ -160,9 +160,20 @@ const select = {
 };
 
 const table = { width: "100%", borderCollapse: "collapse" };
-const th = { textAlign: "left", padding: "10px 12px", fontSize: 12, opacity: 0.7, borderBottom: "1px solid rgba(0,0,0,0.1)" };
+const th = {
+  textAlign: "left",
+  padding: "10px 12px",
+  fontSize: 12,
+  opacity: 0.7,
+  borderBottom: "1px solid rgba(0,0,0,0.1)",
+  background: "#fff",
+};
 const thRight = { ...th, textAlign: "right" };
-const td = { padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)" };
+
+const td = {
+  padding: "10px 12px",
+  borderBottom: "1px solid rgba(0,0,0,0.06)",
+};
 const tdStrong = { ...td, fontWeight: 900 };
 const tdMono = { ...td, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
 const tdRight = { ...td, textAlign: "right", fontWeight: 900 };
