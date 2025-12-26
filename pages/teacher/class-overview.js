@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 function colourFor(score) {
-  if (score === null || score === undefined) return "#f1f5f9"; // grey
+  if (score === null || score === undefined) return "#f1f5f9";
   if (score === 100) return "#dcfce7"; // light green
-  if (score >= 90) return "#86efac"; // darker green
+  if (score >= 90) return "#86efac"; // green
   if (score >= 70) return "#fed7aa"; // orange
   return "#fecaca"; // red
 }
@@ -25,9 +25,7 @@ export default function ClassOverviewPage() {
         : `/api/teacher/class_overview`;
       const r = await fetch(url);
       const j = await r.json();
-
       if (!j.ok) throw new Error(j.error || "Failed");
-
       setClasses(j.classes || []);
       setSelected(j.selected || "");
       setPupils(j.pupils || []);
@@ -58,7 +56,6 @@ export default function ClassOverviewPage() {
               Colour key: 100% light green • 90–99% green • 70–89% orange • &lt;70% red
             </div>
           </div>
-
           <Link href="/teacher/dashboard" style={{ fontWeight: 900 }}>
             Back to dashboard
           </Link>
@@ -109,7 +106,7 @@ export default function ClassOverviewPage() {
                       style={{ cursor: "pointer" }}
                       title="Click to open individual graphs"
                     >
-                      <td style={tdStrong}>{p.full_name || "—"}</td>
+                      <td style={tdStrong}>{p.name || "—"}</td>
 
                       <td style={{ ...td, background: bg, fontWeight: 900 }}>
                         {p.latest === null ? "—" : `${p.latest}%`}
@@ -119,9 +116,7 @@ export default function ClassOverviewPage() {
                         {p.last5?.length ? p.last5.map((x) => `${x}%`).join(", ") : "—"}
                       </td>
 
-                      <td style={td}>
-                        {p.avg10 === null ? "—" : `${p.avg10}%`}
-                      </td>
+                      <td style={td}>{p.avg10 === null ? "—" : `${p.avg10}%`}</td>
 
                       <td style={tdRight}>{p.attempts_count || 0}</td>
                     </tr>
@@ -141,14 +136,13 @@ export default function ClassOverviewPage() {
         </div>
 
         <div style={{ marginTop: 14, opacity: 0.75, fontSize: 12 }}>
-          Next we can add: concern list (below 70%), target line at 90%, heatmap, and a pupil detail page.
+          Next we’ll add: clickable pupil detail page + heatmap + attempt list.
         </div>
       </div>
     </div>
   );
 }
 
-/* styles */
 const card = {
   background: "#fff",
   borderRadius: 16,
