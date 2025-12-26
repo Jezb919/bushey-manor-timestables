@@ -7,7 +7,6 @@ export async function getServerSideProps(context) {
 
   try {
     const s = JSON.parse(raw);
-    // only admins allowed
     if (s.role !== "admin") {
       return { redirect: { destination: "/teacher/dashboard", permanent: false } };
     }
@@ -33,6 +32,9 @@ export default function AdminTeachersPage() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
 
+  // shows the password ONCE so you can copy it
+  const [creds, setCreds] = useState(null);
+
   async function loadTeachers() {
     setLoading(true);
     setErr("");
@@ -55,6 +57,7 @@ export default function AdminTeachersPage() {
   async function setRoleFor(teacher_id, newRole, emailAddr) {
     setErr("");
     setMsg("");
+    setCreds(null);
     try {
       const r = await fetch("/api/admin/teachers/set_role", {
         method: "POST",
@@ -70,6 +73,33 @@ export default function AdminTeachersPage() {
     }
   }
 
+  async function resetPassword(teacher_id, emailAddr) {
+    setErr("");
+    setMsg("");
+    setCreds(null);
+
+    const ok = confirm(`Reset password for ${emailAddr}?`);
+    if (!ok) return;
+
+    try {
+      const r = await fetch("/api/admin/teachers/reset_password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teacher_id }),
+      });
+      const j = await safeJson(r);
+      if (!j.ok) throw new Error(j.error || "Failed to reset password");
+
+      setMsg(`Password reset for ${emailAddr} ✅`);
+      setCreds({
+        email: j.credentials.email,
+        tempPassword: j.credentials.tempPassword,
+      });
+    } catch (e) {
+      setErr(String(e.message || e));
+    }
+  }
+
   return (
     <div style={{ padding: 20, background: "#f3f4f6", minHeight: "100vh" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
@@ -77,6 +107,17 @@ export default function AdminTeachersPage() {
 
         {err && <div style={{ color: "#b91c1c", fontWeight: 900, marginTop: 10 }}>{err}</div>}
         {msg && <div style={{ color: "#166534", fontWeight: 900, marginTop: 10 }}>{msg}</div>}
+
+        {creds && (
+          <div style={card}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>New login (copy now)</div>
+            <div><b>Email:</b> <code>{creds.email}</code></div>
+            <div><b>New password:</b> <code>{creds.tempPassword}</code></div>
+            <div style={{ marginTop: 6, opacity: 0.7, fontSize: 12 }}>
+              This password will not be shown again. Teacher logs in at <code>/teacher/login</code>.
+            </div>
+          </div>
+        )}
 
         <div style={card}>
           {loading ? (
@@ -88,7 +129,7 @@ export default function AdminTeachersPage() {
                   <th style={th}>Name</th>
                   <th style={th}>Email</th>
                   <th style={th}>Role</th>
-                  <th style={thRight}>Action</th>
+                  <th style={thRight}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -106,7 +147,10 @@ export default function AdminTeachersPage() {
                         <button style={btn} onClick={() => setRoleFor(t.id, "admin", t.email)}>
                           Make admin
                         </button>
-                      )}
+                      )}{" "}
+                      <button style={btn} onClick={() => resetPassword(t.id, t.email)}>
+                        Reset password
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -125,6 +169,7 @@ export default function AdminTeachersPage() {
   );
 }
 
+/* styles */
 const card = {
   background: "#fff",
   borderRadius: 16,
