@@ -22,7 +22,7 @@ async function safeJson(res) {
   try {
     return JSON.parse(text);
   } catch {
-    return { ok: false, error: "Bad response from server", debug: text?.slice(0, 120) || "" };
+    return { ok: false, error: "Bad response from server", debug: text?.slice(0, 180) || "" };
   }
 }
 
@@ -32,8 +32,11 @@ export default function AdminTeachersPage() {
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(true);
 
-  // shows the password ONCE so you can copy it
+  // shows password ONCE so you can copy it
   const [creds, setCreds] = useState(null);
+
+  // shows email fallback setup link (copy/paste) if email sending isn't configured
+  const [inviteLink, setInviteLink] = useState(null);
 
   async function loadTeachers() {
     setLoading(true);
@@ -58,6 +61,7 @@ export default function AdminTeachersPage() {
     setErr("");
     setMsg("");
     setCreds(null);
+    setInviteLink(null);
     try {
       const r = await fetch("/api/admin/teachers/set_role", {
         method: "POST",
@@ -77,6 +81,7 @@ export default function AdminTeachersPage() {
     setErr("");
     setMsg("");
     setCreds(null);
+    setInviteLink(null);
 
     const ok = confirm(`Reset password for ${emailAddr}?`);
     if (!ok) return;
@@ -100,6 +105,43 @@ export default function AdminTeachersPage() {
     }
   }
 
+  async function sendSetupLink(teacher_id, emailAddr) {
+    setErr("");
+    setMsg("");
+    setCreds(null);
+    setInviteLink(null);
+
+    const ok = confirm(`Send setup link to ${emailAddr}?`);
+    if (!ok) return;
+
+    try {
+      const r = await fetch("/api/admin/teachers/send_invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teacher_id }),
+      });
+
+      const j = await safeJson(r);
+
+      // If email works, ok:true
+      if (j.ok) {
+        setMsg(`Setup link sent to ${emailAddr} ✅`);
+        return;
+      }
+
+      // If email isn't configured, we return ok:false + fallback_link
+      if (j.fallback_link) {
+        setErr(`Email could not be sent automatically. Copy the link below and send it to ${emailAddr}.`);
+        setInviteLink(j.fallback_link);
+        return;
+      }
+
+      throw new Error(j.error || "Failed to send setup link");
+    } catch (e) {
+      setErr(String(e.message || e));
+    }
+  }
+
   return (
     <div style={{ padding: 20, background: "#f3f4f6", minHeight: "100vh" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
@@ -107,6 +149,18 @@ export default function AdminTeachersPage() {
 
         {err && <div style={{ color: "#b91c1c", fontWeight: 900, marginTop: 10 }}>{err}</div>}
         {msg && <div style={{ color: "#166534", fontWeight: 900, marginTop: 10 }}>{msg}</div>}
+
+        {inviteLink && (
+          <div style={card}>
+            <div style={{ fontWeight: 900, marginBottom: 6 }}>Setup link (copy & send)</div>
+            <div style={{ opacity: 0.75, fontSize: 12, marginBottom: 8 }}>
+              This link expires in 24 hours. If it expires, just click “Send setup link” again to generate a new one.
+            </div>
+            <div>
+              <code style={codeBox}>{inviteLink}</code>
+            </div>
+          </div>
+        )}
 
         {creds && (
           <div style={card}>
@@ -150,6 +204,9 @@ export default function AdminTeachersPage() {
                       )}{" "}
                       <button style={btn} onClick={() => resetPassword(t.id, t.email)}>
                         Reset password
+                      </button>{" "}
+                      <button style={btnPrimary} onClick={() => sendSetupLink(t.id, t.email)}>
+                        Send setup link
                       </button>
                     </td>
                   </tr>
@@ -179,6 +236,15 @@ const card = {
   marginTop: 16,
 };
 
+const codeBox = {
+  display: "block",
+  padding: 10,
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "#f8fafc",
+  overflowX: "auto",
+};
+
 const table = { width: "100%", borderCollapse: "collapse" };
 const th = { textAlign: "left", padding: "10px 12px", fontSize: 12, opacity: 0.7, borderBottom: "1px solid rgba(0,0,0,0.1)" };
 const thRight = { ...th, textAlign: "right" };
@@ -187,4 +253,17 @@ const tdStrong = { ...td, fontWeight: 900 };
 const tdMono = { ...td, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
 const tdRole = { ...td, fontWeight: 900, textTransform: "lowercase" };
 const tdRight = { ...td, textAlign: "right" };
-const btn = { padding: "8px 10px", borderRadius: 12, border: "1px solid rgba(0,0,0,0.12)", background: "#fff", fontWeight: 900, cursor: "pointer" };
+
+const btn = {
+  padding: "8px 10px",
+  borderRadius: 12,
+  border: "1px solid rgba(0,0,0,0.12)",
+  background: "#fff",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const btnPrimary = {
+  ...btn,
+  border: "1px solid rgba(0,0,0,0.25)",
+};
