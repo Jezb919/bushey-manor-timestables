@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 
 function colourFor(score) {
-  if (score === null || score === undefined) return "#f1f5f9"; // grey
-  if (score === 100) return "#dcfce7"; // light green
-  if (score >= 90) return "#86efac"; // green
-  if (score >= 70) return "#fed7aa"; // orange
-  return "#fecaca"; // red
+  if (score === null || score === undefined) return "#f1f5f9";
+  if (score === 100) return "#dcfce7";
+  if (score >= 90) return "#86efac";
+  if (score >= 70) return "#fed7aa";
+  return "#fecaca";
 }
 
 export default function ClassOverviewPage() {
@@ -21,8 +21,8 @@ export default function ClassOverviewPage() {
     setErr("");
     try {
       const url = class_label
-        ? `/api/teacher/class_overview?class_label=${encodeURIComponent(class_label)}`
-        : `/api/teacher/class_overview`;
+        ? `/api/teacher/class-overview?class_label=${encodeURIComponent(class_label)}`
+        : `/api/teacher/class-overview`;
       const r = await fetch(url);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "Failed");
@@ -94,7 +94,6 @@ export default function ClassOverviewPage() {
                   <th style={thRight}>Attempts</th>
                 </tr>
               </thead>
-
               <tbody>
                 {pupils.map((p) => {
                   const rowBg = colourFor(p.latest);
@@ -114,9 +113,7 @@ export default function ClassOverviewPage() {
                       <td style={tdMono}>
                         {p.last5?.length ? p.last5.map((x) => `${x}%`).join(", ") : "—"}
                       </td>
-                      <td style={td}>
-                        {p.avg10 === null ? "—" : `${p.avg10}%`}
-                      </td>
+                      <td style={td}>{p.avg10 === null ? "—" : `${p.avg10}%`}</td>
                       <td style={tdRight}>{p.attempts_count || 0}</td>
                     </tr>
                   );
@@ -133,16 +130,11 @@ export default function ClassOverviewPage() {
             </table>
           )}
         </div>
-
-        <div style={{ marginTop: 14, opacity: 0.75, fontSize: 12 }}>
-          Next: pupil detail page + heatmap + attempts list + concern list & target line (90%).
-        </div>
       </div>
     </div>
   );
 }
 
-/* styles */
 const card = {
   background: "#fff",
   borderRadius: 16,
@@ -160,20 +152,9 @@ const select = {
 };
 
 const table = { width: "100%", borderCollapse: "collapse" };
-const th = {
-  textAlign: "left",
-  padding: "10px 12px",
-  fontSize: 12,
-  opacity: 0.7,
-  borderBottom: "1px solid rgba(0,0,0,0.1)",
-  background: "#fff",
-};
+const th = { textAlign: "left", padding: "10px 12px", fontSize: 12, opacity: 0.7, borderBottom: "1px solid rgba(0,0,0,0.1)", background: "#fff" };
 const thRight = { ...th, textAlign: "right" };
-
-const td = {
-  padding: "10px 12px",
-  borderBottom: "1px solid rgba(0,0,0,0.06)",
-};
+const td = { padding: "10px 12px", borderBottom: "1px solid rgba(0,0,0,0.06)" };
 const tdStrong = { ...td, fontWeight: 900 };
 const tdMono = { ...td, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" };
 const tdRight = { ...td, textAlign: "right", fontWeight: 900 };
