@@ -20,7 +20,6 @@ function getSession(req) {
 }
 
 function pctFromAttempt(a) {
-  // try common field names
   const direct =
     a.score ??
     a.score_percent ??
@@ -34,14 +33,8 @@ function pctFromAttempt(a) {
     return Number.isFinite(n) ? Math.round(n) : null;
   }
 
-  // try correct/total style
   const correct = a.correct ?? a.num_correct ?? null;
-  const total =
-    a.total ??
-    a.num_questions ??
-    a.question_count ??
-    a.total_questions ??
-    null;
+  const total = a.total ?? a.num_questions ?? a.question_count ?? a.total_questions ?? null;
 
   if (correct !== null && total) {
     const n = Math.round((Number(correct) / Number(total)) * 100);
@@ -56,7 +49,7 @@ export default async function handler(req, res) {
     const session = getSession(req);
     if (!session?.teacher_id) return res.status(401).json({ ok: false, error: "Not logged in" });
 
-    // 1) Determine which classes this user can see
+    // 1) Which classes can this user see?
     let classes = [];
     if (session.role === "admin") {
       const { data, error } = await supabase
@@ -67,7 +60,6 @@ export default async function handler(req, res) {
       if (error) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: error.message });
       classes = data || [];
     } else {
-      // teacher -> only assigned classes
       const { data, error } = await supabase
         .from("teacher_classes")
         .select("class_id, classes:class_id(id, class_label, year_group)")
@@ -81,19 +73,16 @@ export default async function handler(req, res) {
         .sort((a, b) => String(a.class_label).localeCompare(String(b.class_label)));
     }
 
-    if (!classes.length) {
-      return res.json({ ok: true, classes: [], pupils: [] });
-    }
+    if (!classes.length) return res.json({ ok: true, classes: [], selected: "", pupils: [] });
 
-    // 2) Choose class_label (from query or default first)
     const selectedLabel = (req.query.class_label || classes[0].class_label || "").toString();
-
     const selected = classes.find((c) => c.class_label === selectedLabel) || classes[0];
 
-    // 3) Load pupils in that class (your students table uses first_name + surname)
+    // 2) Load pupils in that class
+    // ✅ students table DOES NOT have surname yet, so we only use first_name
     const { data: pupils, error: pErr } = await supabase
       .from("students")
-      .select("id, first_name, surname, class_label")
+      .select("id, first_name, class_label")
       .eq("class_label", selected.class_label)
       .order("first_name", { ascending: true });
 
@@ -104,10 +93,9 @@ export default async function handler(req, res) {
       return res.json({ ok: true, classes, selected: selected.class_label, pupils: [] });
     }
 
-    // 4) Pull recent attempts for all pupils in one go (fast)
+    // 3) Recent attempts for these pupils
     const ids = pupilList.map((s) => s.id);
 
-    // IMPORTANT: your database uses attempts.student_id in this project (uuid in working attainment endpoints)
     const { data: attempts, error: aErr } = await supabase
       .from("attempts")
       .select("*")
@@ -115,15 +103,8 @@ export default async function handler(req, res) {
       .order("created_at", { ascending: false })
       .limit(2000);
 
-    if (aErr) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to load attempts",
-        debug: aErr.message,
-      });
-    }
+    if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
 
-    // Group attempts by student_id
     const byStudent = {};
     for (const a of attempts || []) {
       const sid = a.student_id;
@@ -139,13 +120,13 @@ export default async function handler(req, res) {
       const last10 = scores.slice(0, 10);
 
       const latest = last5.length ? last5[0] : null;
-      const avg10 = last10.length ? Math.round(last10.reduce((a, b) => a + b, 0) / last10.length) : null;
+      const avg10 = last10.length
+        ? Math.round(last10.reduce((a, b) => a + b, 0) / last10.length)
+        : null;
 
       return {
         id: s.id,
-        first_name: s.first_name || "",
-        surname: s.surname || "",
-        full_name: `${s.first_name || ""} ${s.surname || ""}`.trim(),
+        name: s.first_name || "",
         class_label: s.class_label,
         latest,
         last5,
@@ -154,12 +135,7 @@ export default async function handler(req, res) {
       };
     });
 
-    return res.json({
-      ok: true,
-      classes,
-      selected: selected.class_label,
-      pupils: out,
-    });
+    return res.json({ ok: true, classes, selected: selected.class_label, pupils: out });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
