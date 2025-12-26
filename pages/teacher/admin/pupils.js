@@ -4,7 +4,7 @@ import Link from "next/link";
 export default function AdminPupilsPage() {
   const [me, setMe] = useState(null);
   const [classes, setClasses] = useState([]);
-  const [selectedClass, setSelectedClass] = useState("M4");
+  const [selectedClass, setSelectedClass] = useState("");
 
   const [firstName, setFirstName] = useState("");
   const [surname, setSurname] = useState("");
@@ -12,90 +12,111 @@ export default function AdminPupilsPage() {
   const [pupils, setPupils] = useState([]);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-
   const [newCreds, setNewCreds] = useState(null);
 
-  // ---------- load logged-in user + classes ----------
+  // --------- helpers ----------
+  async function safeJson(res) {
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+  }
+
+  async function loadPupils(class_label) {
+    setErr("");
+    setMsg("");
+    setNewCreds(null);
+
+    // 1) Prefer admin list endpoint if you have it
+    try {
+      const r = await fetch(`/api/admin/pupils/list?class_label=${encodeURIComponent(class_label)}`);
+      const j = await safeJson(r);
+      if (!j.ok) throw new Error(j.error || "Failed to load pupils");
+      setPupils(j.pupils || []);
+      return;
+    } catch {
+      // 2) Fallback: teacher students endpoint
+      const r2 = await fetch("/api/teacher/students");
+      const j2 = await safeJson(r2);
+      if (!j2.ok) throw new Error(j2.error || "Failed to load pupils");
+      const filtered = (j2.students || []).filter((s) => s.class_label === class_label);
+      setPupils(filtered);
+    }
+  }
+
+  // --------- load me + classes ----------
   useEffect(() => {
     (async () => {
       setErr("");
       setMsg("");
       try {
         const r = await fetch("/api/teacher/me");
-        const j = await r.json();
-        if (!j.ok) {
+        const j = await safeJson(r);
+
+        // ✅ If not logged in OR user missing, go login
+        if (!j.ok || !j.user) {
           window.location.href = "/teacher/login";
           return;
         }
+
         setMe(j.user);
+
         if (j.user.role !== "admin") {
           setErr("Admins only");
           return;
         }
 
         const cr = await fetch("/api/teacher/classes");
-        const cj = await cr.json();
+        const cj = await safeJson(cr);
         if (!cj.ok) throw new Error(cj.error || "Failed to load classes");
 
-        setClasses(cj.classes || []);
-        if (cj.classes?.length) {
-          setSelectedClass(cj.classes[0].class_label);
-        }
+        const cls = cj.classes || [];
+        setClasses(cls);
+
+        const defaultLabel = cls[0]?.class_label || "M4";
+        setSelectedClass(defaultLabel);
+
+        // load pupils list
+        await loadPupils(defaultLabel);
       } catch (e) {
         setErr(String(e.message || e));
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---------- load pupils for selected class ----------
-  async function loadPupils(class_label) {
-    setErr("");
-    setMsg("");
-    setNewCreds(null);
-
+  // --------- change class ----------
+  async function onChangeClass(e) {
+    const v = e.target.value;
+    setSelectedClass(v);
     try {
-      // You may already have an endpoint for this; if not, this will be the only thing to adjust.
-      const r = await fetch(`/api/admin/pupils/list?class_label=${encodeURIComponent(class_label)}`);
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || "Failed to load pupils");
-      setPupils(j.pupils || []);
-    } catch (e) {
-      // fallback: use /api/teacher/students and filter client-side
-      try {
-        const r2 = await fetch("/api/teacher/students");
-        const j2 = await r2.json();
-        if (!j2.ok) throw new Error(j2.error || "Failed to load pupils");
-        const filtered = (j2.students || []).filter((s) => s.class_label === class_label);
-        setPupils(filtered);
-      } catch (e2) {
-        setErr(String(e2.message || e2));
-      }
+      await loadPupils(v);
+    } catch (e2) {
+      setErr(String(e2.message || e2));
     }
   }
 
-  useEffect(() => {
-    if (me?.role === "admin" && selectedClass) {
-      loadPupils(selectedClass);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClass, me?.role]);
-
-  // ---------- logout ----------
+  // --------- logout ----------
   async function logout() {
     await fetch("/api/teacher/logout", { method: "POST" });
     window.location.href = "/teacher/login";
   }
 
-  // ---------- add pupil ----------
+  // --------- add pupil ----------
   async function addPupil() {
     setErr("");
     setMsg("");
     setNewCreds(null);
 
     try {
+      if (!selectedClass) throw new Error("Pick a class first");
+      if (!firstName.trim()) throw new Error("Enter first name");
+      if (!surname.trim()) throw new Error("Enter surname");
+
       const body = {
-        // ✅ IMPORTANT: API expects class_label (NOT class, NOT classId)
-        class_label: selectedClass,
+        class_label: selectedClass, // ✅ IMPORTANT
         first_name: firstName,
         surname: surname,
       };
@@ -106,7 +127,7 @@ export default function AdminPupilsPage() {
         body: JSON.stringify(body),
       });
 
-      const j = await r.json();
+      const j = await safeJson(r);
       if (!j.ok) throw new Error(j.error || "Failed to create pupil");
 
       setMsg(`Added ${j.pupil?.first_name} ${j.pupil?.surname} to ${j.pupil?.class_label} ✅`);
@@ -121,7 +142,6 @@ export default function AdminPupilsPage() {
     }
   }
 
-  // ---------- UI ----------
   const classOptions = useMemo(() => classes.map((c) => c.class_label), [classes]);
 
   return (
@@ -130,28 +150,23 @@ export default function AdminPupilsPage() {
         <div>
           <h1 style={{ margin: 0 }}>Pupils</h1>
           <div style={{ opacity: 0.7 }}>Admin area</div>
+          <div style={{ marginTop: 8 }}>
+            <Link href="/teacher/dashboard">← Back to dashboard</Link>
+          </div>
         </div>
         <button onClick={logout} style={btn}>
           Log out
         </button>
       </div>
 
-      <div style={{ marginTop: 10 }}>
-        <Link href="/teacher/dashboard">← Back to dashboard</Link>
-      </div>
-
       {err && <div style={errorBox}>{err}</div>}
       {msg && <div style={okBox}>{msg}</div>}
 
       <div style={card}>
-        <h2 style={{ marginTop: 0 }}>Add pupil to {selectedClass}</h2>
+        <h2 style={{ marginTop: 0 }}>Add pupil to {selectedClass || "…"}</h2>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <select
-            value={selectedClass}
-            onChange={(e) => setSelectedClass(e.target.value)}
-            style={input}
-          >
+          <select value={selectedClass} onChange={onChangeClass} style={input}>
             {classOptions.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -196,7 +211,7 @@ export default function AdminPupilsPage() {
       </div>
 
       <div style={card}>
-        <h2 style={{ marginTop: 0 }}>Pupils in {selectedClass}</h2>
+        <h2 style={{ marginTop: 0 }}>Pupils in {selectedClass || "…"}</h2>
 
         <table style={table}>
           <thead>
@@ -245,7 +260,7 @@ export default function AdminPupilsPage() {
 
 /* styles */
 const page = { padding: 24, background: "#f3f4f6", minHeight: "100vh" };
-const topRow = { display: "flex", justifyContent: "space-between", alignItems: "center" };
+const topRow = { display: "flex", justifyContent: "space-between", alignItems: "flex-start" };
 const card = {
   background: "white",
   borderRadius: 14,
