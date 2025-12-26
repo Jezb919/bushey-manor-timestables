@@ -7,27 +7,31 @@ export async function getServerSideProps(context) {
     return { redirect: { destination: "/teacher/login", permanent: false } };
   }
 
-  let session = null;
   try {
-    session = JSON.parse(raw);
+    const session = JSON.parse(raw);
+    return { props: { session } };
   } catch {
     return { redirect: { destination: "/teacher/login", permanent: false } };
   }
-
-  return { props: { session } };
 }
 
 export default function TeacherDashboard({ session }) {
   const role = session?.role || "teacher";
 
+  async function logout() {
+    await fetch("/api/teacher/logout", { method: "POST" });
+    window.location.href = "/teacher/login";
+  }
+
   return (
-    <div style={{ padding: 20 }}>
-      <h1 style={{ fontSize: 34, fontWeight: 900 }}>Teacher Dashboard</h1>
-      <p style={{ opacity: 0.7 }}>
+    <div style={{ padding: 30 }}>
+      <h1 style={{ fontSize: 40, fontWeight: 900 }}>Teacher Dashboard</h1>
+
+      <p style={{ opacity: 0.75 }}>
         Logged in as <b>{session?.email || "unknown"}</b> ({role})
       </p>
 
-      <div style={{ marginTop: 20, display: "flex", gap: 12, flexWrap: "wrap" }}>
+      <div style={{ marginTop: 18, display: "flex", gap: 12, flexWrap: "wrap" }}>
         <Link href="/teacher/admin/attainment-individual">Individual graphs</Link>
         <span>•</span>
         <Link href="/teacher/admin/attainment-class">Class graphs</Link>
@@ -44,10 +48,20 @@ export default function TeacherDashboard({ session }) {
         )}
       </div>
 
-      <div style={{ marginTop: 24 }}>
-        <a href="/api/teacher/logout" style={{ fontWeight: 800 }}>
+      <div style={{ marginTop: 22 }}>
+        <button
+          onClick={logout}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 12,
+            border: "1px solid rgba(0,0,0,0.15)",
+            background: "#fff",
+            fontWeight: 900,
+            cursor: "pointer",
+          }}
+        >
           Log out
-        </a>
+        </button>
       </div>
     </div>
   );
