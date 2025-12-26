@@ -33,7 +33,6 @@ function slug(s) {
 }
 
 function randomPassword(len = 8) {
-  // Easy-ish for kids/admin to read; no confusing chars like O/0/I/1
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
   let out = "";
   for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
@@ -44,14 +43,10 @@ async function generateUniqueUsername(first_name, surname) {
   const f = slug(first_name);
   const s = slug(surname);
   const initial = s ? s[0] : "x";
-
-  // base like: zacj
   const base = `${f}${initial}` || "pupil";
 
-  // try base + number until free (base1, base2, ...)
   for (let n = 1; n <= 999; n++) {
     const candidate = `${base}${n}`;
-
     const { data, error } = await supabase
       .from("students")
       .select("id")
@@ -62,7 +57,6 @@ async function generateUniqueUsername(first_name, surname) {
     if (!data) return candidate;
   }
 
-  // very unlikely fallback
   return `${base}${Date.now()}`.slice(0, 20);
 }
 
@@ -75,55 +69,43 @@ export default async function handler(req, res) {
     if (session.role !== "admin") return res.status(403).json({ ok: false, error: "Admins only" });
 
     const class_label = String(req.body?.class_label || "").trim();
-    const first_name_raw = req.body?.first_name;
-    const surname_raw = req.body?.surname;
+    const first_name = cleanName(req.body?.first_name);
+    const surname = cleanName(req.body?.surname);
 
-    const first_name = cleanName(first_name_raw);
-    const surname = cleanName(surname_raw);
-
-    if (!class_label) return res.status(400).json({ ok: false, error: "Missing class_label" });
-    if (!first_name) return res.status(400).json({ ok: false, error: "Missing first_name" });
+    if (!class_label) return res.status(400).json({ ok: false, error: "Missing class" });
+    if (!first_name) return res.status(400).json({ ok: false, error: "Missing first name" });
     if (!surname) return res.status(400).json({ ok: false, error: "Missing surname" });
 
-    // Look up class_id (optional, but nice to store if you have it)
-    const { data: cls, error: clsErr } = await supabase
+    const { data: cls } = await supabase
       .from("classes")
-      .select("id, class_label")
+      .select("id")
       .eq("class_label", class_label)
       .maybeSingle();
-
-    if (clsErr) return res.status(500).json({ ok: false, error: "Failed to load class", debug: clsErr.message });
 
     const username = await generateUniqueUsername(first_name, surname);
     const tempPassword = randomPassword(8);
 
-    // Insert pupil
-    const insertRow = {
+    const row = {
       first_name,
-      surname, // ✅ new column
+      surname,
       class_label,
       username,
-      password_hash: tempPassword, // matches your current login approach
+      password_hash: tempPassword,
     };
+    if (cls?.id) row.class_id = cls.id;
 
-    // store class_id too if your table has it
-    if (cls?.id) insertRow.class_id = cls.id;
-
-    const { data: pupil, error: insErr } = await supabase
+    const { data: pupil, error } = await supabase
       .from("students")
-      .insert([insertRow])
+      .insert([row])
       .select("id, first_name, surname, class_label, username")
       .single();
 
-    if (insErr) return res.status(500).json({ ok: false, error: "Failed to create pupil", debug: insErr.message });
+    if (error) return res.status(500).json({ ok: false, error: "Failed to create pupil", debug: error.message });
 
     return res.json({
       ok: true,
       pupil,
-      credentials: {
-        username,
-        tempPassword, // show once so you can copy
-      },
+      credentials: { username, tempPassword },
       note: "Copy the password now (it will not be shown again).",
     });
   } catch (e) {
