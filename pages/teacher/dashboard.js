@@ -32,6 +32,8 @@ export default function TeacherDashboard({ session }) {
       </p>
 
       <div style={{ marginTop: 18, display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <Link href="/teacher/class-overview">Class overview</Link>
+        <span>•</span>
         <Link href="/teacher/admin/attainment-individual">Individual graphs</Link>
         <span>•</span>
         <Link href="/teacher/admin/attainment-class">Class graphs</Link>
