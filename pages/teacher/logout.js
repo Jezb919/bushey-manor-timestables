@@ -8,9 +8,5 @@ export default function TeacherLogoutPage() {
     })();
   }, []);
 
-  return (
-    <div style={{ padding: 30 }}>
-      Logging you out…
-    </div>
-  );
+  return <div style={{ padding: 30 }}>Logging you out…</div>;
 }
