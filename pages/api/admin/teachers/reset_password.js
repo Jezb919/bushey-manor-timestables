@@ -10,13 +10,17 @@ function getSession(req) {
   if (!raw) return null;
   try {
     const p = JSON.parse(raw);
-    return { teacher_id: p.teacherId || p.teacher_id || null, role: p.role || null };
+    return {
+      teacher_id: p.teacherId || p.teacher_id || null,
+      role: p.role || null,
+    };
   } catch {
     return null;
   }
 }
 
 function generateTempPassword() {
+  // easy-to-read characters (no 0/O, no 1/I)
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
   for (let i = 0; i < 8; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
@@ -25,7 +29,9 @@ function generateTempPassword() {
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
+    if (req.method !== "POST") {
+      return res.status(405).json({ ok: false, error: "Use POST" });
+    }
 
     const session = getSession(req);
     if (!session?.teacher_id) return res.status(401).json({ ok: false, error: "Not logged in" });
@@ -35,18 +41,27 @@ export default async function handler(req, res) {
     if (!teacher_id) return res.status(400).json({ ok: false, error: "Missing teacher_id" });
 
     const tempPassword = generateTempPassword();
-    const password_hash = tempPassword;
 
+    // Your login currently matches password_hash as plain text (admin123 style)
     const { data, error } = await supabase
       .from("teachers")
-      .update({ password_hash })
+      .update({ password_hash: tempPassword })
       .eq("id", teacher_id)
       .select("id, email, full_name, role")
       .single();
 
-    if (error) return res.status(500).json({ ok: false, error: "Failed to reset password", debug: error.message });
+    if (error) {
+      return res.status(500).json({ ok: false, error: "Failed to reset password", debug: error.message });
+    }
 
-    return res.json({ ok: true, teacher: data, credentials: { email: data.email, tempPassword } });
+    return res.json({
+      ok: true,
+      teacher: data,
+      credentials: {
+        email: data.email,
+        tempPassword,
+      },
+    });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
