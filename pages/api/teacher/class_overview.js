@@ -19,7 +19,6 @@ function getSession(req) {
   }
 }
 
-// Try lots of common attempt schemas, return % as integer
 function pctFromAttempt(a) {
   const direct =
     a.score ??
@@ -56,14 +55,13 @@ export default async function handler(req, res) {
     const session = getSession(req);
     if (!session?.teacher_id) return res.status(401).json({ ok: false, error: "Not logged in" });
 
-    // 1) Which classes can this user see?
+    // classes allowed
     let classes = [];
     if (session.role === "admin") {
       const { data, error } = await supabase
         .from("classes")
         .select("id, class_label, year_group")
         .order("class_label", { ascending: true });
-
       if (error) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: error.message });
       classes = data || [];
     } else {
@@ -71,9 +69,7 @@ export default async function handler(req, res) {
         .from("teacher_classes")
         .select("class_id, classes:class_id(id, class_label, year_group)")
         .eq("teacher_id", session.teacher_id);
-
       if (error) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: error.message });
-
       classes = (data || [])
         .map((r) => r.classes)
         .filter(Boolean)
@@ -82,11 +78,9 @@ export default async function handler(req, res) {
 
     if (!classes.length) return res.json({ ok: true, classes: [], selected: "", pupils: [] });
 
-    // 2) Pick class
     const selectedLabel = (req.query.class_label || classes[0].class_label || "").toString();
     const selected = classes.find((c) => c.class_label === selectedLabel) || classes[0];
 
-    // 3) Load pupils
     const { data: pupils, error: pErr } = await supabase
       .from("students")
       .select("id, first_name, surname, class_label")
@@ -100,11 +94,8 @@ export default async function handler(req, res) {
       full_name: `${s.first_name || ""} ${s.surname || ""}`.trim(),
     }));
 
-    if (!pupilList.length) {
-      return res.json({ ok: true, classes, selected: selected.class_label, pupils: [] });
-    }
+    if (!pupilList.length) return res.json({ ok: true, classes, selected: selected.class_label, pupils: [] });
 
-    // 4) Load attempts for all pupils in one go
     const ids = pupilList.map((s) => s.id);
 
     const { data: attempts, error: aErr } = await supabase
