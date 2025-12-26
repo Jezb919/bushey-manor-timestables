@@ -1,135 +1,132 @@
 import { createClient } from "@supabase/supabase-js";
-import crypto from "crypto";
 
-const supabaseAdmin = createClient(
+const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-function parseCookies(cookieHeader = "") {
-  if (!cookieHeader) return {};
-  return cookieHeader.split(";").reduce((acc, part) => {
-    const [k, ...v] = part.trim().split("=");
-    if (!k) return acc;
-    acc[k] = decodeURIComponent(v.join("="));
-    return acc;
-  }, {});
-}
-
-function base64UrlDecode(str) {
-  const pad = "=".repeat((4 - (str.length % 4)) % 4);
-  const base64 = (str + pad).replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(base64, "base64").toString("utf8");
-}
-
-async function getTeacherFromSession(req) {
-  const cookies = parseCookies(req.headers.cookie || "");
-  const token = cookies["bmtt_teacher"] || cookies["bmtt_session"];
-  if (!token) return null;
-
+function getSession(req) {
+  const raw = req.cookies?.bmtt_teacher;
+  if (!raw) return null;
   try {
-    let json = token;
-    if (!json.trim().startsWith("{")) json = base64UrlDecode(token);
-    const data = JSON.parse(json);
-
-    const teacher_id = data.teacher_id || data.teacherId;
-    if (!teacher_id) return null;
-
-    return { teacher_id, role: data.role || "teacher" };
+    const p = JSON.parse(raw);
+    return {
+      teacher_id: p.teacherId || p.teacher_id || null,
+      role: p.role || null,
+    };
   } catch {
     return null;
   }
 }
 
-function cleanName(s = "") {
-  return String(s).trim().replace(/\s+/g, " ");
+function cleanName(s) {
+  return String(s || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/[^a-zA-Z \-']/g, "");
 }
 
-function baseUsername(first, last) {
-  const f = cleanName(first).toLowerCase().replace(/[^a-z]/g, "");
-  const l = cleanName(last).toLowerCase().replace(/[^a-z]/g, "");
-  const li = l ? l[0] : "x";
-  return `${f}${li}`; // e.g. zac + j => zacj
+function slug(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
-async function generateUniqueUsername(first, last) {
-  const base = baseUsername(first, last);
-  for (let n = 1; n <= 99; n++) {
+function randomPassword(len = 8) {
+  // Easy-ish for kids/admin to read; no confusing chars like O/0/I/1
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  let out = "";
+  for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+async function generateUniqueUsername(first_name, surname) {
+  const f = slug(first_name);
+  const s = slug(surname);
+  const initial = s ? s[0] : "x";
+
+  // base like: zacj
+  const base = `${f}${initial}` || "pupil";
+
+  // try base + number until free (base1, base2, ...)
+  for (let n = 1; n <= 999; n++) {
     const candidate = `${base}${n}`;
-    const { data, error } = await supabaseAdmin
+
+    const { data, error } = await supabase
       .from("students")
       .select("id")
       .eq("username", candidate)
       .maybeSingle();
 
-    if (error) throw new Error(error.message);
+    if (error) throw error;
     if (!data) return candidate;
   }
-  const rand = Math.floor(100 + Math.random() * 900);
-  return `${base}${rand}`;
-}
 
-function generateTempPassword() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let out = "";
-  for (let i = 0; i < 8; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
-  return out;
-}
-
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(password, salt, 64).toString("hex");
-  return `scrypt$${salt}$${hash}`;
+  // very unlikely fallback
+  return `${base}${Date.now()}`.slice(0, 20);
 }
 
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
 
-    const session = await getTeacherFromSession(req);
-    if (!session) return res.status(401).json({ ok: false, error: "Not logged in" });
+    const session = getSession(req);
+    if (!session?.teacher_id) return res.status(401).json({ ok: false, error: "Not logged in" });
     if (session.role !== "admin") return res.status(403).json({ ok: false, error: "Admins only" });
 
-    const { first_name, last_name, class_id } = req.body || {};
-    if (!first_name || !last_name || !class_id) {
-      return res.status(400).json({ ok: false, error: "Missing first_name, last_name or class_id" });
-    }
+    const class_label = String(req.body?.class_label || "").trim();
+    const first_name_raw = req.body?.first_name;
+    const surname_raw = req.body?.surname;
 
-    const { data: cls, error: clsErr } = await supabaseAdmin
+    const first_name = cleanName(first_name_raw);
+    const surname = cleanName(surname_raw);
+
+    if (!class_label) return res.status(400).json({ ok: false, error: "Missing class_label" });
+    if (!first_name) return res.status(400).json({ ok: false, error: "Missing first_name" });
+    if (!surname) return res.status(400).json({ ok: false, error: "Missing surname" });
+
+    // Look up class_id (optional, but nice to store if you have it)
+    const { data: cls, error: clsErr } = await supabase
       .from("classes")
       .select("id, class_label")
-      .eq("id", class_id)
+      .eq("class_label", class_label)
       .maybeSingle();
 
-    if (clsErr || !cls) return res.status(404).json({ ok: false, error: "Class not found" });
+    if (clsErr) return res.status(500).json({ ok: false, error: "Failed to load class", debug: clsErr.message });
 
-    const username = await generateUniqueUsername(first_name, last_name);
-    const tempPassword = generateTempPassword();
-    const password_hash = hashPassword(tempPassword);
+    const username = await generateUniqueUsername(first_name, surname);
+    const tempPassword = randomPassword(8);
 
-    const { data: created, error: insErr } = await supabaseAdmin
+    // Insert pupil
+    const insertRow = {
+      first_name,
+      surname, // ✅ new column
+      class_label,
+      username,
+      password_hash: tempPassword, // matches your current login approach
+    };
+
+    // store class_id too if your table has it
+    if (cls?.id) insertRow.class_id = cls.id;
+
+    const { data: pupil, error: insErr } = await supabase
       .from("students")
-      .insert({
-        first_name: cleanName(first_name),
-        last_name: cleanName(last_name),
-        username,
-        password_hash,
-        class_id: cls.id,
-        class_label: cls.class_label,
-      })
-      .select("id, first_name, last_name, username, class_id, class_label")
+      .insert([insertRow])
+      .select("id, first_name, surname, class_label, username")
       .single();
 
-    if (insErr) {
-      return res.status(500).json({ ok: false, error: "Failed to create pupil", debug: insErr.message });
-    }
+    if (insErr) return res.status(500).json({ ok: false, error: "Failed to create pupil", debug: insErr.message });
 
     return res.json({
       ok: true,
-      pupil: created,
-      credentials: { username, tempPassword },
+      pupil,
+      credentials: {
+        username,
+        tempPassword, // show once so you can copy
+      },
+      note: "Copy the password now (it will not be shown again).",
     });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e.message || e) });
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
 }
