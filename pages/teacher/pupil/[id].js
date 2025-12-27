@@ -1,161 +1,180 @@
+import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/router";
 
-function colourForPct(pct) {
-  if (pct === null || pct === undefined) return "#e9edf3";
-  if (pct === 100) return "#bff7c7"; // light green
-  if (pct >= 90) return "#2ecc71"; // green
-  if (pct >= 70) return "#ffb020"; // orange
-  return "#ff3b30"; // red
+function colourForPercent(p) {
+  if (p === null || p === undefined) return "#EEF2F7"; // light grey
+  if (p === 100) return "#BFF7C1"; // light green
+  if (p >= 90) return "#2E9E4F"; // dark green
+  if (p >= 70) return "#F6A03A"; // orange
+  return "#FF3B5C"; // red
 }
 
-export default function PupilDetailPage() {
+export default function PupilPage() {
   const router = useRouter();
   const { id } = router.query;
 
+  const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [student, setStudent] = useState(null);
-  const [heatmap, setHeatmap] = useState(null);
+  const [data, setData] = useState(null);
 
   useEffect(() => {
     if (!id) return;
 
+    setLoading(true);
     setErr("");
-    setStudent(null);
-    setHeatmap(null);
 
-    // Heatmap
-    fetch(`/api/teacher/pupil_heatmap?student_id=${encodeURIComponent(id)}`)
+    fetch(`/api/teacher/pupil_detail?student_id=${encodeURIComponent(id)}`)
       .then((r) => r.json())
       .then((j) => {
         if (!j.ok) {
-          setErr(j.error || "Failed to load heatmap");
+          setErr(j.error || "Failed to load pupil");
+          setLoading(false);
           return;
         }
-        setStudent(j.student);
-        setHeatmap(j);
+        setData(j);
+        setLoading(false);
       })
-      .catch(() => setErr("Failed to load"));
+      .catch(() => {
+        setErr("Failed to load pupil");
+        setLoading(false);
+      });
   }, [id]);
 
-  const columns = useMemo(() => {
-    if (!heatmap?.attempts?.length) return [];
-    return heatmap.attempts.map((a) =>
-      new Date(a.date).toLocaleDateString("en-GB")
-    );
-  }, [heatmap]);
+  const pupilName = useMemo(() => {
+    if (!data?.pupil) return "Pupil";
+    const fn = data.pupil.first_name || "";
+    const ln = data.pupil.last_name || data.pupil.surname || "";
+    const full = `${fn} ${ln}`.trim();
+    return full || "Pupil";
+  }, [data]);
+
+  const cols = data?.heatmap?.[0]?.cells?.length ? data.heatmap[0].cells : [];
+  const colLabels = cols.map((c) =>
+    new Date(c.date).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit" })
+  );
 
   return (
     <div style={{ padding: 30 }}>
-      <p style={{ marginBottom: 10 }}>
-        <Link href="/teacher/class-overview">← Back to class overview</Link> •{" "}
-        <Link href="/teacher">Back to dashboard</Link>
-      </p>
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ marginBottom: 8, color: "#444" }}>
+          {data?.me?.email ? <>Logged in as <b>{data.me.email}</b> ({data.me.role})</> : null}
+        </div>
 
-      <h1>Pupil</h1>
+        <div style={{ display: "flex", gap: 12 }}>
+          <Link href="/teacher/class-overview">← Back to class overview</Link>
+          <Link href="/teacher">Back to dashboard</Link>
+        </div>
+      </div>
 
+      <h1 style={{ marginTop: 18 }}>{pupilName}</h1>
+
+      {loading && <p>Loading…</p>}
       {err && (
-        <div
-          style={{
-            background: "#ffe5e5",
-            border: "1px solid #ffb3b3",
-            padding: 12,
-            borderRadius: 10,
-            marginBottom: 15,
-            color: "#b00020",
-          }}
-        >
+        <div style={{ background: "#FDECEC", color: "#B00020", padding: 12, borderRadius: 10, marginTop: 12 }}>
           {err}
         </div>
       )}
 
-      {student && (
-        <h2 style={{ marginTop: 10, marginBottom: 20 }}>
-          {student.name || "(no name)"}
-        </h2>
-      )}
-
-      <div
-        style={{
-          background: "#fff",
-          borderRadius: 18,
-          padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
-          marginBottom: 20,
-        }}
-      >
-        <h2 style={{ marginTop: 0 }}>Times Tables Heatmap</h2>
-        <p style={{ marginTop: 0, opacity: 0.8 }}>
-          Rows = table (1–19) • Columns = most recent attempts • Colours follow your key
-        </p>
-
-        {!heatmap ? (
-          <p>Loading…</p>
-        ) : heatmap.attempts.length === 0 ? (
-          <p>No heatmap data yet (no attempts yet).</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                borderCollapse: "separate",
-                borderSpacing: 8,
-                minWidth: 700,
-              }}
-            >
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", paddingRight: 10 }}>Table</th>
-                  {columns.map((c, idx) => (
-                    <th key={idx} style={{ fontSize: 12, opacity: 0.8 }}>
-                      {c}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {heatmap.grid.map((row) => (
-                  <tr key={row.table}>
-                    <td style={{ fontWeight: 700 }}>{row.table}×</td>
-                    {row.cells.map((cell, idx) => {
-                      const pct = cell ? cell.pct : null;
-                      const bg = colourForPct(pct);
-                      const text =
-                        pct === null ? "" : `${pct}%`;
-                      return (
-                        <td
-                          key={idx}
-                          title={
-                            cell
-                              ? `${pct}% (${cell.correct}/${cell.total})`
-                              : "No questions for this table"
-                          }
-                          style={{
-                            width: 70,
-                            height: 40,
-                            background: bg,
-                            borderRadius: 10,
-                            textAlign: "center",
-                            fontWeight: 800,
-                            color: pct !== null && pct < 70 ? "#fff" : "#111",
-                            boxShadow: "inset 0 0 0 2px rgba(0,0,0,0.06)",
-                          }}
-                        >
-                          {text}
-                        </td>
-                      );
-                    })}
-                  </tr>
+      {!loading && !err && data && (
+        <>
+          {/* Progress over time */}
+          <div
+            style={{
+              marginTop: 18,
+              background: "white",
+              borderRadius: 18,
+              padding: 18,
+              boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
+            }}
+          >
+            <h2 style={{ marginTop: 0 }}>Progress over time</h2>
+            {data.series?.length ? (
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {data.series.slice(-10).map((s, idx) => (
+                  <li key={idx}>
+                    {new Date(s.date).toLocaleString("en-GB")} — <b>{s.score}%</b>
+                  </li>
                 ))}
-              </tbody>
-            </table>
+              </ul>
+            ) : (
+              <p>No attempts yet.</p>
+            )}
           </div>
-        )}
 
-        <div style={{ marginTop: 12, fontSize: 13, opacity: 0.85 }}>
-          Key: 100% light green • 90–99% green • 70–89% orange • &lt;70% red
-        </div>
-      </div>
+          {/* Heatmap */}
+          <div
+            style={{
+              marginTop: 18,
+              background: "white",
+              borderRadius: 18,
+              padding: 18,
+              boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 20, alignItems: "baseline" }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Times Tables Heatmap</h2>
+                <div style={{ color: "#444", marginTop: 6 }}>
+                  Rows = table (1–19) • Columns = most recent attempts • Colours follow your key
+                </div>
+              </div>
+
+              <div style={{ color: "#444", fontSize: 14 }}>
+                Key: 100% light green • 90–99% green • 70–89% orange • &lt;70% red
+              </div>
+            </div>
+
+            {!data.heatmap?.length ? (
+              <p style={{ marginTop: 12 }}>No heatmap data yet (or it failed to load).</p>
+            ) : (
+              <div style={{ marginTop: 14, overflowX: "auto" }}>
+                <table style={{ borderCollapse: "separate", borderSpacing: 8 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: "left", paddingRight: 10 }}>Table</th>
+                      {colLabels.map((lbl, i) => (
+                        <th key={i} style={{ textAlign: "center", minWidth: 90 }}>
+                          {lbl}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.heatmap.map((row) => (
+                      <tr key={row.table}>
+                        <td style={{ fontWeight: 700 }}>{row.table}×</td>
+                        {row.cells.map((c) => {
+                          const bg = colourForPercent(c.percent);
+                          const text = c.percent === null ? "—" : `${c.percent}%`;
+                          const fg = c.percent !== null && c.percent < 70 ? "white" : "#0B1020";
+                          return (
+                            <td
+                              key={c.attempt_id}
+                              style={{
+                                background: bg,
+                                color: fg,
+                                borderRadius: 10,
+                                textAlign: "center",
+                                padding: "10px 12px",
+                                fontWeight: 800,
+                                boxShadow: "inset 0 0 0 2px rgba(0,0,0,0.06)",
+                              }}
+                              title={c.total ? `${c.percent}% (${c.total} questions)` : "No questions for this table"}
+                            >
+                              {text}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
