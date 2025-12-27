@@ -1,117 +1,77 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { Line } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Tooltip,
-  Legend,
-} from "chart.js";
+import dynamic from "next/dynamic";
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
-
-// Grabs the first UUID it can find in a string
-function extractUuid(anyValue) {
-  if (!anyValue) return null;
-  const s = String(anyValue);
-  const m = s.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-  return m ? m[0] : null;
-}
+// Chart.js line chart (same approach you used before)
+const Line = dynamic(() => import("react-chartjs-2").then((m) => m.Line), { ssr: false });
 
 export default function PupilDetailPage() {
   const router = useRouter();
-
-  const pupilId = useMemo(() => {
-    // Most of the time it will be router.query.id
-    // But if anything weird happens (IDs stuck together), we safely extract the first UUID.
-    const fromQuery = extractUuid(router.query?.id);
-    if (fromQuery) return fromQuery;
-
-    // fallback: try extracting from the URL path
-    const fromPath = extractUuid(router.asPath);
-    return fromPath || null;
-  }, [router.query?.id, router.asPath]);
+  const { id } = router.query; // ✅ UUID from URL /teacher/pupil/<uuid>
 
   const [me, setMe] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   const [student, setStudent] = useState(null);
   const [series, setSeries] = useState([]);
   const [heatmap, setHeatmap] = useState(null);
 
-  const [error, setError] = useState("");
+  async function loadMe() {
+    const r = await fetch("/api/teacher/me");
+    const j = await r.json();
+    if (!j.ok) {
+      window.location.href = "/teacher/login";
+      return;
+    }
+    setMe(j.user);
+  }
 
-  async function logout() {
-    await fetch("/api/teacher/logout", { method: "POST" });
-    window.location.href = "/teacher/login";
+  async function loadAll(studentId) {
+    setError("");
+
+    // 1) attainment series
+    const r1 = await fetch(`/api/teacher/attainment/student?student_id=${encodeURIComponent(studentId)}`);
+    const j1 = await r1.json();
+    if (!j1.ok) {
+      setError(j1.error || "Failed to load pupil");
+      setStudent(null);
+      setSeries([]);
+      setHeatmap(null);
+      return;
+    }
+    setStudent(j1.student || null);
+    setSeries(j1.series || []);
+
+    // 2) heatmap
+    const r2 = await fetch(`/api/teacher/pupil_heatmap?student_id=${encodeURIComponent(studentId)}`);
+    const j2 = await r2.json();
+    if (j2.ok) setHeatmap(j2);
+    else setHeatmap(null);
   }
 
   useEffect(() => {
-    // must be logged in
-    fetch("/api/teacher/me")
-      .then((r) => r.json())
-      .then((data) => {
-        if (!data.ok) {
-          window.location.href = "/teacher/login";
-          return;
-        }
-        setMe(data.user);
-      })
-      .catch(() => {
-        window.location.href = "/teacher/login";
-      });
+    loadMe();
   }, []);
 
   useEffect(() => {
-    async function loadAll() {
-      setError("");
-      setLoading(true);
+    if (!id) return;
+    loadAll(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
-      if (!pupilId) {
-        setError("Missing pupil ID in URL.");
-        setLoading(false);
-        return;
-      }
-
-      try {
-        // 1) Attainment graph data (your existing endpoint)
-        const a = await fetch(`/api/teacher/attainment/student?student_id=${encodeURIComponent(pupilId)}`);
-        const aj = await a.json();
-        if (!aj.ok) {
-          setError(aj.error || "Failed to load pupil attainment.");
-          setLoading(false);
-          return;
-        }
-        setStudent(aj.student || null);
-        setSeries(aj.series || []);
-
-        // 2) Heatmap (your endpoint we’ve been working on)
-        const h = await fetch(`/api/teacher/pupil_heatmap?pupil_id=${encodeURIComponent(pupilId)}`);
-        const hj = await h.json();
-        if (!hj.ok) {
-          // Heatmap failing should not block the whole page
-          setHeatmap(null);
-          setError(hj.error || "Heatmap failed to load.");
-        } else {
-          setHeatmap(hj);
-        }
-
-        setLoading(false);
-      } catch (e) {
-        setError(String(e));
-        setLoading(false);
-      }
-    }
-
-    loadAll();
-  }, [pupilId]);
+  const name = useMemo(() => {
+    if (!student) return "Pupil";
+    const fn = student.first_name || "";
+    const sn = student.surname || "";
+    const full = `${fn} ${sn}`.trim();
+    return full || "Pupil";
+  }, [student]);
 
   const chartData = useMemo(() => {
-    const labels = (series || []).map((p) => new Date(p.date).toLocaleDateString("en-GB"));
+    const labels = (series || []).map((p) =>
+      new Date(p.date).toLocaleDateString("en-GB")
+    );
     const data = (series || []).map((p) => p.score);
 
     return {
@@ -126,68 +86,66 @@ export default function PupilDetailPage() {
     };
   }, [series]);
 
-  if (!me) return null; // while redirecting
+  if (!me) return null;
 
   return (
-    <div style={{ padding: 28 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 20, alignItems: "center" }}>
+    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
         <div>
-          <h1 style={{ margin: 0 }}>Pupil Detail</h1>
-          <p style={{ marginTop: 8, opacity: 0.8 }}>
+          <div style={{ opacity: 0.85 }}>
             Logged in as <b>{me.email}</b> ({me.role})
-          </p>
-          <p style={{ marginTop: 4, opacity: 0.8 }}>
+          </div>
+          <div style={{ marginTop: 10 }}>
             <Link href="/teacher/class-overview">← Back to class overview</Link>{" "}
             • <Link href="/teacher">Back to dashboard</Link>
-          </p>
+          </div>
         </div>
 
-        <button onClick={logout} style={{ padding: "10px 14px", borderRadius: 10 }}>
+        <button
+          onClick={async () => {
+            await fetch("/api/teacher/logout", { method: "POST" });
+            window.location.href = "/teacher/login";
+          }}
+          style={{ padding: "8px 12px", borderRadius: 10, cursor: "pointer" }}
+        >
           Log out
         </button>
       </div>
 
       {error && (
-        <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: "#ffe5e5", color: "#9b1c1c" }}>
+        <div style={{ marginTop: 16, background: "#fee2e2", padding: 12, borderRadius: 12, color: "#7f1d1d" }}>
           {error}
         </div>
       )}
 
-      <div style={{ marginTop: 18, padding: 18, borderRadius: 16, background: "white" }}>
-        <h2 style={{ marginTop: 0 }}>
-          {student?.first_name ? `${student.first_name}${student?.last_name ? " " + student.last_name : ""}` : "Pupil"}
-        </h2>
+      <h1 style={{ marginTop: 18 }}>{name}</h1>
 
-        <div style={{ marginTop: 12 }}>
-          {loading ? (
-            <p>Loading…</p>
-          ) : (
-            <div style={{ height: 320 }}>
-              <Line data={chartData} />
-            </div>
-          )}
-        </div>
+      {/* Graph */}
+      <div style={{ marginTop: 14, background: "#fff", borderRadius: 16, padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.08)" }}>
+        <h2 style={{ marginTop: 0 }}>Progress over time</h2>
+
+        {(series || []).length === 0 ? (
+          <div style={{ opacity: 0.8 }}>No attempts yet.</div>
+        ) : (
+          <div style={{ height: 340 }}>
+            <Line data={chartData} />
+          </div>
+        )}
       </div>
 
-      <div style={{ marginTop: 18, padding: 18, borderRadius: 16, background: "white" }}>
+      {/* Heatmap */}
+      <div style={{ marginTop: 18, background: "#fff", borderRadius: 16, padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.08)" }}>
         <h2 style={{ marginTop: 0 }}>Times Tables Heatmap</h2>
+        <div style={{ opacity: 0.8, marginBottom: 12 }}>
+          Rows = table (1–19) • Columns = most recent attempts • Colours follow your key
+        </div>
 
         {!heatmap ? (
-          <p style={{ opacity: 0.75 }}>
-            No heatmap data yet (or it failed to load). Once the pupil has attempts, it will appear here.
-          </p>
+          <div style={{ opacity: 0.8 }}>No heatmap data yet (or it failed to load).</div>
         ) : (
-          <>
-            <p style={{ opacity: 0.75, marginTop: 0 }}>
-              Rows = tables • Columns = recent attempts • Colours: 100% light green • 90–99% green • 70–89% orange • &lt;70% red
-            </p>
-
-            {/* very basic rendering: you already have a nicer UI elsewhere;
-                this is just to prove data is loading correctly */}
-            <pre style={{ fontSize: 12, background: "#f6f6f6", padding: 12, borderRadius: 12, overflow: "auto" }}>
-              {JSON.stringify(heatmap, null, 2)}
-            </pre>
-          </>
+          <pre style={{ whiteSpace: "pre-wrap", background: "#f8fafc", padding: 12, borderRadius: 12 }}>
+            {JSON.stringify(heatmap, null, 2)}
+          </pre>
         )}
       </div>
     </div>
