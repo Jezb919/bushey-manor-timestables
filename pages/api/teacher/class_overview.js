@@ -62,7 +62,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: "Missing class_label" });
     }
 
-    // ✅ Look up class_id from classes table (NO join)
+    // 1) Look up class_id from the classes table
     const { data: cls, error: clsErr } = await supabase
       .from("classes")
       .select("id, class_label")
@@ -81,52 +81,34 @@ export default async function handler(req, res) {
       return res.status(404).json({ ok: false, error: "Class not found" });
     }
 
-    // ✅ Permission: admin sees all. Teacher must be mapped to class.
+    // 2) Permission check:
+    // admin = allowed, teacher must have row in teacher_classes for (teacher_id + class_id)
     if (session.role !== "admin") {
-      // First try direct class_label mapping (if your table has it)
-      const { data: linkByLabel, error: linkErr1 } = await supabase
+      const { data: link, error: linkErr } = await supabase
         .from("teacher_classes")
-        .select("teacher_id, class_label, class_id")
+        .select("teacher_id, class_id")
         .eq("teacher_id", session.teacher_id)
-        .eq("class_label", class_label)
+        .eq("class_id", cls.id)
         .maybeSingle();
 
-      if (linkErr1) {
+      if (linkErr) {
         return res.status(403).json({
           ok: false,
           error: "Permission check failed",
-          debug: linkErr1.message,
+          debug: linkErr.message,
         });
       }
 
-      // If not linked by label, try class_id mapping (your screenshots show class_id exists)
-      if (!linkByLabel) {
-        const { data: linkById, error: linkErr2 } = await supabase
-          .from("teacher_classes")
-          .select("teacher_id, class_id")
-          .eq("teacher_id", session.teacher_id)
-          .eq("class_id", cls.id)
-          .maybeSingle();
-
-        if (linkErr2) {
-          return res.status(403).json({
-            ok: false,
-            error: "Permission check failed",
-            debug: linkErr2.message,
-          });
-        }
-
-        if (!linkById) {
-          return res.status(403).json({
-            ok: false,
-            error: "Not allowed for this class",
-            debug: { teacher_id: session.teacher_id, class_label },
-          });
-        }
+      if (!link) {
+        return res.status(403).json({
+          ok: false,
+          error: "Not allowed for this class",
+          debug: { teacher_id: session.teacher_id, class_label, class_id: cls.id },
+        });
       }
     }
 
-    // ✅ Load pupils for this class
+    // 3) Load pupils (your students table uses class_label)
     const { data: pupils, error: pupilsErr } = await supabase
       .from("students")
       .select("id, first_name, surname, class_label")
@@ -148,7 +130,7 @@ export default async function handler(req, res) {
       return res.json({ ok: true, class_label, pupils: [] });
     }
 
-    // ✅ Load attempts for those pupils
+    // 4) Load attempts for those pupils
     const { data: attempts, error: attemptsErr } = await supabase
       .from("attempts")
       .select("*")
