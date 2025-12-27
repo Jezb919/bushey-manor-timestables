@@ -56,7 +56,7 @@ export default function PupilDetailPage() {
       setData(j);
 
       // 2) heatmap (last 12 attempts, tables 1-12 by default)
-      const hr = await fetch(`/api/teacher/pupil_heatmap?pupil_id=${encodeURIComponent(pupil_id)}&limit=12&max_table=12`);
+      const hr = await fetch(`/api/teacher/pupil_heatmap?pupil_id=${encodeURIComponent(pupil_id)}&limit=12&max_table=19`);
       const hj = await hr.json();
       if (!hj.ok) throw new Error(hj.error || "Failed to load heatmap");
       setHeat(hj);
