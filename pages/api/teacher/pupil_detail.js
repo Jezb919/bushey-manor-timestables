@@ -10,58 +10,37 @@ function getSession(req) {
   if (!raw) return null;
   try {
     const p = JSON.parse(raw);
-    return {
-      teacher_id: p.teacherId || p.teacher_id || null,
-      role: p.role || null,
-    };
+    return { teacher_id: p.teacherId || p.teacher_id || null, role: p.role || null };
   } catch {
     return null;
   }
 }
 
-function pctFromAttempt(a) {
-  const direct =
-    a.score ??
-    a.score_percent ??
-    a.percentage ??
-    a.percent ??
-    a.score_pct ??
-    null;
+// ✅ Extract first UUID from any string
+function firstUuid(str) {
+  const m = String(str || "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return m ? m[0] : null;
+}
 
+function pctFromAttempt(a) {
+  const direct = a.score ?? a.score_percent ?? a.percentage ?? a.percent ?? a.score_pct ?? null;
   if (direct !== null && direct !== undefined) {
     const n = Number(direct);
     return Number.isFinite(n) ? Math.round(n) : null;
   }
-
   const correct = a.correct ?? a.num_correct ?? a.correct_count ?? null;
-  const total =
-    a.total ??
-    a.num_questions ??
-    a.question_count ??
-    a.total_questions ??
-    a.questions_total ??
-    null;
-
+  const total = a.total ?? a.num_questions ?? a.question_count ?? a.total_questions ?? a.questions_total ?? null;
   if (correct !== null && total) {
     const n = Math.round((Number(correct) / Number(total)) * 100);
     return Number.isFinite(n) ? n : null;
   }
-
   return null;
 }
 
 function tablesFromAttempt(a) {
-  // try common patterns
-  const t =
-    a.tables_selected ??
-    a.tables_included ??
-    a.tables ??
-    a.tables_list ??
-    null;
-
+  const t = a.tables_selected ?? a.tables_included ?? a.tables ?? a.tables_list ?? null;
   if (Array.isArray(t)) return t;
   if (typeof t === "string") {
-    // could be "{1,2,3}" or "1,2,3"
     return t
       .replace(/[{}\[\]]/g, "")
       .split(",")
@@ -76,10 +55,10 @@ export default async function handler(req, res) {
     const session = getSession(req);
     if (!session?.teacher_id) return res.status(401).json({ ok: false, error: "Not logged in" });
 
-    const pupil_id = String(req.query.pupil_id || "").trim();
-    if (!pupil_id) return res.status(400).json({ ok: false, error: "Missing pupil_id" });
+    const rawId = req.query.pupil_id;
+    const pupil_id = firstUuid(rawId);
+    if (!pupil_id) return res.status(400).json({ ok: false, error: "Missing/invalid pupil_id", debug: String(rawId) });
 
-    // Load pupil
     const { data: pupil, error: pErr } = await supabase
       .from("students")
       .select("id, first_name, surname, class_label")
@@ -89,26 +68,22 @@ export default async function handler(req, res) {
     if (pErr) return res.status(500).json({ ok: false, error: "Failed to load pupil", debug: pErr.message });
     if (!pupil) return res.status(404).json({ ok: false, error: "Pupil not found" });
 
-    // Permission: admin can see all. teacher can only see pupils in their assigned classes.
+    // Permission: admin can see all. teacher can only see their classes.
     if (session.role !== "admin") {
       const { data: link, error: linkErr } = await supabase
         .from("teacher_classes")
-        .select("teacher_id, class_id, class_label")
+        .select("teacher_id, class_label, class_id")
         .eq("teacher_id", session.teacher_id)
         .eq("class_label", pupil.class_label)
         .maybeSingle();
 
-      // some schemas don't have class_label in teacher_classes; fallback via classes table
       if (linkErr) {
-        // try mapping teacher_classes -> classes by class_id
         const { data: links2, error: linkErr2 } = await supabase
           .from("teacher_classes")
           .select("class_id, classes:class_id(class_label)")
           .eq("teacher_id", session.teacher_id);
 
-        if (linkErr2) {
-          return res.status(403).json({ ok: false, error: "Permission check failed", debug: linkErr2.message });
-        }
+        if (linkErr2) return res.status(403).json({ ok: false, error: "Permission check failed", debug: linkErr2.message });
 
         const allowed = (links2 || []).some((r) => r.classes?.class_label === pupil.class_label);
         if (!allowed) return res.status(403).json({ ok: false, error: "Not allowed" });
@@ -117,7 +92,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Load attempts (all attempts)
     const { data: attempts, error: aErr } = await supabase
       .from("attempts")
       .select("*")
@@ -129,17 +103,12 @@ export default async function handler(req, res) {
 
     const list = attempts || [];
 
-    // series for graph (last 60 points, oldest -> newest)
     const series = list
       .slice(0, 60)
-      .map((a) => ({
-        date: a.created_at || a.completed_at || a.createdAt || null,
-        score: pctFromAttempt(a),
-      }))
+      .map((a) => ({ date: a.created_at || a.completed_at || a.createdAt || null, score: pctFromAttempt(a) }))
       .filter((x) => x.date && x.score !== null)
       .reverse();
 
-    // attempt rows (last 20)
     const rows = list.slice(0, 20).map((a) => ({
       id: a.id,
       date: a.created_at || a.completed_at || a.createdAt || null,
