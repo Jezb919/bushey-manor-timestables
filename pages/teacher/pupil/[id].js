@@ -1,76 +1,77 @@
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/router";
 
-function scoreColor(score) {
-  if (typeof score !== "number") return "#e5e7eb"; // grey
-  if (score === 100) return "#b7f7c2"; // light green
-  if (score >= 90) return "#2ecc71"; // green
+function scoreToColour(score) {
+  if (score === null || score === undefined) return "#f3f4f6"; // grey
+  if (score >= 100) return "#b7f7c7"; // light green
+  if (score >= 90) return "#16a34a"; // green
   if (score >= 70) return "#f59e0b"; // orange
   return "#ef4444"; // red
 }
 
-export default function PupilDetailPage() {
+export default function PupilPage() {
   const router = useRouter();
-  const pupilId = router.query.pupilId;
+  const { student_id } = router.query;
 
   const [me, setMe] = useState(null);
   const [pupil, setPupil] = useState(null);
-  const [attempts, setAttempts] = useState([]);
+  const [progress, setProgress] = useState([]);
   const [heatmap, setHeatmap] = useState(null);
-  const [err, setErr] = useState("");
+  const [error, setError] = useState("");
+
+  async function loadMe() {
+    const r = await fetch("/api/teacher/me");
+    const j = await r.json();
+    if (!j.ok) {
+      window.location.href = "/teacher/login";
+      return;
+    }
+    setMe(j.user);
+  }
+
+  async function loadAll() {
+    if (!student_id) return;
+
+    setError("");
+
+    // Progress (list / later we can convert to chart)
+    const pr = await fetch(`/api/teacher/pupil_progress?student_id=${student_id}`);
+    const pj = await pr.json();
+    if (!pj.ok) {
+      setError(pj.error || "Failed to load progress");
+      return;
+    }
+    setPupil(pj.pupil || null);
+    setProgress(pj.series || []);
+
+    // Heatmap
+    const hr = await fetch(`/api/teacher/pupil_heatmap?student_id=${student_id}`);
+    const hj = await hr.json();
+    if (!hj.ok) {
+      setError(hj.error || "Failed to load heatmap");
+      return;
+    }
+    setHeatmap(hj.heatmap || null);
+  }
 
   useEffect(() => {
-    fetch("/api/teacher/me")
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j.ok) {
-          window.location.href = "/teacher/login";
-          return;
-        }
-        setMe(j.user);
-      })
-      .catch(() => window.location.href = "/teacher/login");
+    loadMe();
   }, []);
 
   useEffect(() => {
-    if (!pupilId) return;
-    setErr("");
-    setPupil(null);
-    setAttempts([]);
-    setHeatmap(null);
+    loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [student_id]);
 
-    // 1) progress list
-    fetch(`/api/teacher/attainment/student?student_id=${encodeURIComponent(pupilId)}`)
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j.ok) throw new Error(j.error || "Failed to load pupil");
-        setPupil(j.student || null);
-        setAttempts(j.series || []);
-      })
-      .catch((e) => setErr(String(e.message || e)));
-
-    // 2) heatmap
-    fetch(`/api/teacher/pupil_heatmap?student_id=${encodeURIComponent(pupilId)}`)
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j.ok) throw new Error(j.error || "Failed to load heatmap");
-        setHeatmap(j);
-      })
-      .catch((e) => setErr((prev) => prev || String(e.message || e)));
-  }, [pupilId]);
-
-  const title = useMemo(() => {
-    const n =
-      (pupil?.first_name || pupil?.name || "") +
-      (pupil?.last_name ? ` ${pupil.last_name}` : "");
-    return n.trim() || "Pupil";
-  }, [pupil]);
+  const displayName = pupil
+    ? `${pupil.first_name || ""} ${pupil.last_name || ""}`.trim() || pupil.username || "Pupil"
+    : "Pupil";
 
   return (
-    <div style={{ padding: 30 }}>
+    <div style={{ padding: 24 }}>
       {me && (
-        <p>
+        <p style={{ opacity: 0.8 }}>
           Logged in as <b>{me.email}</b> ({me.role})
         </p>
       )}
@@ -80,106 +81,83 @@ export default function PupilDetailPage() {
         <Link href="/teacher">Back to dashboard</Link>
       </p>
 
-      {err && (
-        <div style={{ background: "#fee2e2", padding: 12, borderRadius: 10, marginBottom: 16 }}>
-          <b>{err}</b>
+      {error && (
+        <div style={{ background: "#fee2e2", padding: 12, borderRadius: 10, marginTop: 12 }}>
+          <b style={{ color: "#991b1b" }}>{error}</b>
         </div>
       )}
 
-      <h1 style={{ marginTop: 0 }}>{title}</h1>
+      <h1 style={{ marginTop: 12 }}>{displayName}</h1>
 
-      <div
-        style={{
-          background: "white",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
-          marginBottom: 18,
-        }}
-      >
+      {/* Progress */}
+      <div style={{ background: "white", borderRadius: 18, padding: 18, marginTop: 18, boxShadow: "0 6px 20px rgba(0,0,0,0.06)" }}>
         <h2 style={{ marginTop: 0 }}>Progress over time</h2>
-        {attempts.length === 0 ? (
-          <div>No attempts yet.</div>
+
+        {progress.length === 0 ? (
+          <p>No attempts yet.</p>
         ) : (
           <ul>
-            {attempts.map((a, idx) => (
-              <li key={idx}>
-                {new Date(a.date || a.created_at).toLocaleString("en-GB")} —{" "}
-                <b>{typeof a.score === "number" ? `${a.score}%` : "—"}</b>
+            {progress.map((x) => (
+              <li key={x.attempt_id}>
+                {new Date(x.created_at).toLocaleString("en-GB")} — <b>{x.score}%</b>
               </li>
             ))}
           </ul>
         )}
       </div>
 
-      <div
-        style={{
-          background: "white",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
-        }}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <div>
-            <h2 style={{ marginTop: 0 }}>Times Tables Heatmap</h2>
-            <div style={{ color: "#555" }}>
-              Rows = table (1–19) • Columns = most recent attempts • Colours follow your key
-            </div>
-          </div>
-          <div style={{ textAlign: "right", color: "#444" }}>
+      {/* Heatmap */}
+      <div style={{ background: "white", borderRadius: 18, padding: 18, marginTop: 18, boxShadow: "0 6px 20px rgba(0,0,0,0.06)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "baseline" }}>
+          <h2 style={{ marginTop: 0 }}>Times Tables Heatmap</h2>
+          <div style={{ fontSize: 12, opacity: 0.85 }}>
             <b>Key</b>
-            <div style={{ fontSize: 13 }}>
-              100% light green • 90–99% green • 70–89% orange • &lt;70% red
-            </div>
+            <div>100% light green • 90–99% green • 70–89% orange • &lt;70% red</div>
           </div>
         </div>
 
-        {!heatmap || !heatmap.matrix ? (
-          <div style={{ marginTop: 14 }}>No heatmap data yet (or it failed to load).</div>
+        <div style={{ opacity: 0.75, marginBottom: 10 }}>
+          Rows = table (1–19) • Columns = most recent attempts • Colours follow your key
+        </div>
+
+        {!heatmap ? (
+          <p>No heatmap data yet (or it failed to load).</p>
         ) : (
-          <div style={{ overflowX: "auto", marginTop: 14 }}>
+          <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "separate", borderSpacing: 10 }}>
               <thead>
                 <tr>
-                  <th style={{ textAlign: "left" }}>Table</th>
-                  {heatmap.attempts.map((a) => (
-                    <th key={a.attempt_id} style={{ fontSize: 12, color: "#333" }}>
-                      {new Date(a.created_at).toLocaleDateString("en-GB")}
-                    </th>
+                  <th align="left">Table</th>
+                  {heatmap.columns.map((c) => (
+                    <th key={c} align="center">{c}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {heatmap.tables.map((t) => (
-                  <tr key={t}>
-                    <td style={{ fontWeight: 800 }}>{t}×</td>
-                    {heatmap.attempts.map((a) => {
-                      const v = heatmap.matrix?.[t]?.[a.attempt_id] ?? null;
-                      const bg = scoreColor(v);
-                      const fg = typeof v === "number" && v < 70 ? "white" : "black";
-                      return (
-                        <td key={a.attempt_id}>
-                          <div
-                            style={{
-                              width: 120,
-                              height: 54,
-                              borderRadius: 14,
-                              background: bg,
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              fontWeight: 900,
-                              color: fg,
-                              boxShadow: "inset 0 0 0 2px rgba(255,255,255,0.6)",
-                            }}
-                            title={typeof v === "number" ? `${v}%` : "No data"}
-                          >
-                            {typeof v === "number" ? `${v}%` : "—"}
-                          </div>
-                        </td>
-                      );
-                    })}
+                {heatmap.rows.map((row) => (
+                  <tr key={row.table}>
+                    <td style={{ fontWeight: 700 }}>{row.table}×</td>
+                    {row.cells.map((cell, idx) => (
+                      <td key={idx}>
+                        <div
+                          style={{
+                            width: 110,
+                            height: 44,
+                            borderRadius: 12,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontWeight: 800,
+                            background: scoreToColour(cell.score),
+                            color: cell.score !== null && cell.score !== undefined && cell.score < 70 ? "white" : "#111827",
+                            boxShadow: "inset 0 0 0 2px rgba(0,0,0,0.06)",
+                          }}
+                          title={cell.score === null ? "No data" : `${cell.score}%`}
+                        >
+                          {cell.score === null ? "—" : `${cell.score}%`}
+                        </div>
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
