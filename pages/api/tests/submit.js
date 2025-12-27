@@ -1,212 +1,101 @@
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-  auth: { persistSession: false },
-});
-
-function normaliseClassLabel(value) {
-  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
-}
-
-function normaliseName(value) {
-  return String(value || "").trim();
-}
-
-// Try these possible column names for class in the students table
-const CLASS_COLS = ["class_label", "class_name", "class", "last_name"];
-
-async function findStudent(first_name, class_label) {
-  // Try each possible class column until one works
-  for (const col of CLASS_COLS) {
-    const { data, error } = await supabaseAdmin
-      .from("students")
-      .select(`id, first_name, ${col}`)
-      .eq("first_name", first_name)
-      .eq(col, class_label)
-      .maybeSingle();
-
-    if (!error) {
-      return { student: data, classCol: col };
-    }
-
-    // If column doesn't exist, try next one. Otherwise return the real error.
-    const msg = String(error.message || "");
-    if (msg.toLowerCase().includes(`column students.${col} does not exist`)) {
-      continue;
-    }
-    return { student: null, classCol: null, error };
-  }
-
-  return {
-    student: null,
-    classCol: null,
-    error: new Error(
-      `Could not find a class column in students. Tried: ${CLASS_COLS.join(", ")}`
-    ),
-  };
-}
-
-async function createStudent(first_name, class_label, classCol) {
-  // If we know which class column exists, insert into that.
-  // Otherwise default to class_label.
-  const col = classCol || "class_label";
-
-  const payload = { first_name, [col]: class_label };
-
-  const { data, error } = await supabaseAdmin
-    .from("students")
-    .insert([payload])
-    .select("id, first_name")
-    .single();
-
-  return { data, error, usedCol: col };
-}
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ error: "Use POST" });
-
   try {
-    const body = req.body || {};
-
-    const first_name = normaliseName(body.name || body.first_name);
-    const class_label = normaliseClassLabel(
-      body.className || body.class || body.class_label || body.class_name
-    );
-
-    const score = Number.isFinite(Number(body.score)) ? Number(body.score) : 0;
-    const total = Number.isFinite(Number(body.total)) ? Number(body.total) : 0;
-
-    const started_at = body.started_at ?? body.startedAt ?? null;
-    const finished_at = body.finished_at ?? body.finishedAt ?? null;
-
-    const questions = Array.isArray(body.questions) ? body.questions : [];
-    const answers = Array.isArray(body.answers) ? body.answers : [];
-
-    if (!first_name || !class_label) {
-      return res.status(400).json({ error: "Missing name or class" });
+    if (req.method !== "POST") {
+      return res.status(405).json({ ok: false, error: "Use POST" });
     }
 
-    // 1) Find student
-    const found = await findStudent(first_name, class_label);
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    if (found.error) {
-      console.error("Error checking student:", found.error);
-      return res.status(500).json({
-        error: "Error checking student",
-        details: found.error.message || String(found.error),
-      });
+    const student_id = body.student_id || body.studentId;
+    const answers = body.answers || body.results || [];
+    const class_label = body.class_label || body.classLabel || null;
+
+    if (!student_id) {
+      return res.status(400).json({ ok: false, error: "Missing student_id" });
     }
 
-    let student = found.student;
-    let classCol = found.classCol;
-
-    // 2) Create if missing
-    if (!student) {
-      const created = await createStudent(first_name, class_label, classCol);
-
-      if (created.error) {
-        console.error("Could not create student:", created.error);
-        return res.status(500).json({
-          error: "Could not create student",
-          details: created.error.message || String(created.error),
-        });
-      }
-
-      student = created.data;
-      classCol = created.usedCol;
+    if (!Array.isArray(answers) || answers.length === 0) {
+      return res.status(400).json({ ok: false, error: "Missing answers[]" });
     }
 
-    // 3) Save attempt
-    const percent = total > 0 ? Math.round((score / total) * 100) : 0;
-    const nowIso = new Date().toISOString();
+    // answers[] should look like:
+    // { a: 7, b: 4, user_answer: 28, correct_answer: 28, table_number: 7 }
+    const total = answers.length;
+    let correct = 0;
 
+    for (const q of answers) {
+      const ua = Number(q.user_answer ?? q.userAnswer);
+      const ca = Number(q.correct_answer ?? q.correctAnswer);
+      if (!Number.isNaN(ua) && !Number.isNaN(ca) && ua === ca) correct += 1;
+    }
+
+    const score = Math.round((correct / total) * 100);
+
+    // 1) Create attempt
     const { data: attempt, error: attemptErr } = await supabaseAdmin
       .from("attempts")
       .insert([
         {
-          student_id: student.id,
+          student_id,
           class_label,
-          started_at: started_at || nowIso,
-          finished_at: finished_at || nowIso,
-          score,
-          total,
-          percent,
-          completed: true,
+          score, // <- IMPORTANT: your system already uses "score"
         },
       ])
-      .select("*")
+      .select("id, created_at, score")
       .single();
 
     if (attemptErr) {
-      console.error("Could not save attempt:", attemptErr);
+      return res.status(500).json({ ok: false, error: "Failed to create attempt", debug: attemptErr.message });
+    }
+
+    // 2) Create question_records (one row per question)
+    const qrRows = answers.map((q) => {
+      const a = Number(q.a);
+      const b = Number(q.b);
+      const ua = Number(q.user_answer ?? q.userAnswer);
+      const ca = Number(q.correct_answer ?? q.correctAnswer);
+
+      // If table_number not supplied, infer from "a"
+      const table_number = Number(q.table_number ?? q.tableNumber ?? a);
+
+      const is_correct = !Number.isNaN(ua) && !Number.isNaN(ca) && ua === ca;
+
+      return {
+        attempt_id: attempt.id,
+        table_number: Number.isFinite(table_number) ? table_number : null,
+        is_correct,
+      };
+    });
+
+    const { error: qrErr } = await supabaseAdmin
+      .from("question_records")
+      .insert(qrRows);
+
+    if (qrErr) {
+      // attempt exists, but question_records failed — return useful info
       return res.status(500).json({
-        error: "Could not save attempt",
-        details: attemptErr.message,
+        ok: false,
+        error: "Attempt saved but failed to write question records",
+        debug: qrErr.message,
+        attempt,
       });
     }
 
-    // 4) Save per-question records (advanced)
-    if (questions.length && answers.length && questions.length === answers.length) {
-      const rows = questions.map((q, i) => {
-        const a = Number(q.a);
-        const b = Number(q.b);
-        const correct_answer = Number(q.correct);
-
-        const givenAnswer = answers[i]?.givenAnswer;
-        const given_answer =
-          givenAnswer === null || givenAnswer === undefined || givenAnswer === ""
-            ? null
-            : Number(givenAnswer);
-
-        const is_correct = Boolean(answers[i]?.isCorrect);
-        const response_time_ms = Number.isFinite(Number(answers[i]?.responseTimeMs))
-          ? Number(answers[i]?.responseTimeMs)
-          : null;
-
-        return {
-          attempt_id: attempt.id,
-          student_id: student.id,
-          question_index: i + 1,
-          a,
-          b,
-          table_num: b,
-          correct_answer,
-          given_answer,
-          is_correct,
-          response_time_ms,
-        };
-      });
-
-      const { error: qrErr } = await supabaseAdmin
-        .from("question_records")
-        .insert(rows);
-
-      if (qrErr) {
-        console.error("question_records insert failed:", qrErr);
-        return res.status(200).json({
-          ok: true,
-          student,
-          attempt,
-          warning: "Attempt saved but question_records failed",
-          details: qrErr.message,
-        });
-      }
-    }
-
-    return res.status(200).json({
+    return res.json({
       ok: true,
-      student,
       attempt,
-      meta: { usedStudentClassColumn: classCol },
+      score,
+      correct,
+      total,
     });
-  } catch (err) {
-    console.error("Server error:", err);
-    return res.status(500).json({
-      error: "Server error",
-      details: String(err?.message || err),
-    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
 }
