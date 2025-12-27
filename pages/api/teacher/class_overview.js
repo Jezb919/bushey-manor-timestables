@@ -1,90 +1,65 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
+const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-function getSession(req) {
-  const raw = req.cookies?.bmtt_teacher;
-  if (!raw) return null;
+function parseCookie(req, name) {
+  const raw = req.headers.cookie || "";
+  const parts = raw.split(";").map((p) => p.trim());
+  const found = parts.find((p) => p.startsWith(name + "="));
+  if (!found) return null;
+  return decodeURIComponent(found.split("=").slice(1).join("="));
+}
+
+function getTeacherFromCookie(req) {
+  const token = parseCookie(req, "bmtt_teacher");
+  if (!token) return null;
+
+  // Your bmtt_teacher cookie is JSON (not JWT)
   try {
-    const p = JSON.parse(raw);
-    return {
-      teacher_id: p.teacherId || p.teacher_id || null,
-      role: p.role || null,
-      email: p.email || null,
-    };
-  } catch {
+    const obj = JSON.parse(token);
+    const teacher_id = obj.teacher_id || obj.teacherId;
+    const role = obj.role || "teacher";
+    const email = obj.email || "";
+    const full_name = obj.full_name || obj.fullName || "";
+    if (!teacher_id) return null;
+    return { teacher_id, role, email, full_name };
+  } catch (e) {
     return null;
   }
 }
 
-function pctFromAttempt(a) {
-  const direct =
-    a.score ??
-    a.score_percent ??
-    a.percentage ??
-    a.percent ??
-    a.score_pct ??
-    null;
-
-  if (direct !== null && direct !== undefined) {
-    const n = Number(direct);
-    return Number.isFinite(n) ? Math.round(n) : null;
-  }
-
-  const correct = a.correct ?? a.num_correct ?? a.correct_count ?? null;
-  const total =
-    a.total ??
-    a.num_questions ??
-    a.question_count ??
-    a.total_questions ??
-    null;
-
-  if (correct !== null && total) {
-    const n = Math.round((Number(correct) / Number(total)) * 100);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  return null;
-}
-
 export default async function handler(req, res) {
   try {
-    const session = getSession(req);
-    if (!session?.teacher_id) {
-      return res.status(401).json({ ok: false, error: "Not logged in" });
-    }
+    const { class_label, debug } = req.query;
 
-    const class_label = String(req.query.class_label || "").trim();
     if (!class_label) {
       return res.status(400).json({ ok: false, error: "Missing class_label" });
     }
 
-    // 1) Look up class_id from the classes table
-    const { data: cls, error: clsErr } = await supabase
+    const session = getTeacherFromCookie(req);
+    if (!session?.teacher_id) {
+      return res.status(401).json({ ok: false, error: "Not logged in" });
+    }
+
+    // 1) Look up class by label
+    const { data: cls, error: classErr } = await supabaseAdmin
       .from("classes")
-      .select("id, class_label")
+      .select("id, class_label, year_group")
       .eq("class_label", class_label)
-      .maybeSingle();
+      .single();
 
-    if (clsErr) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to load class",
-        debug: clsErr.message,
-      });
+    if (classErr || !cls) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "Class not found", debug: classErr?.message });
     }
 
-    if (!cls?.id) {
-      return res.status(404).json({ ok: false, error: "Class not found" });
-    }
-
-    // 2) Permission check:
-    // admin = allowed, teacher must have row in teacher_classes for (teacher_id + class_id)
+    // 2) Permission: admin sees all; teacher must be linked in teacher_classes
     if (session.role !== "admin") {
-      const { data: link, error: linkErr } = await supabase
+      const { data: link, error: linkErr } = await supabaseAdmin
         .from("teacher_classes")
         .select("teacher_id, class_id")
         .eq("teacher_id", session.teacher_id)
@@ -92,7 +67,7 @@ export default async function handler(req, res) {
         .maybeSingle();
 
       if (linkErr) {
-        return res.status(403).json({
+        return res.status(500).json({
           ok: false,
           error: "Permission check failed",
           debug: linkErr.message,
@@ -103,16 +78,16 @@ export default async function handler(req, res) {
         return res.status(403).json({
           ok: false,
           error: "Not allowed for this class",
-          debug: { teacher_id: session.teacher_id, class_label, class_id: cls.id },
+          debug: { teacher_id: session.teacher_id, class_id: cls.id, class_label },
         });
       }
     }
 
-    // 3) Load pupils (your students table uses class_label)
-    const { data: pupils, error: pupilsErr } = await supabase
+    // 3) Load pupils for class (your students table uses first_name + last_name)
+    const { data: pupils, error: pupilsErr } = await supabaseAdmin
       .from("students")
-      .select("id, first_name, surname, class_label")
-      .eq("class_label", class_label)
+      .select("id, first_name, last_name, class_label, class_id")
+      .eq("class_id", cls.id)
       .order("first_name", { ascending: true });
 
     if (pupilsErr) {
@@ -123,63 +98,86 @@ export default async function handler(req, res) {
       });
     }
 
-    const pupilList = pupils || [];
-    const ids = pupilList.map((p) => p.id).filter(Boolean);
+    // 4) Load attempts for these pupils and compute:
+    // Latest, last 5 avg, last 10 avg, attempts count
+    const pupilIds = (pupils || []).map((p) => p.id);
 
-    if (!ids.length) {
-      return res.json({ ok: true, class_label, pupils: [] });
+    let attemptsByStudent = {};
+    if (pupilIds.length) {
+      const { data: attempts, error: attErr } = await supabaseAdmin
+        .from("attempts")
+        .select("id, student_id, score_percent, created_at")
+        .in("student_id", pupilIds)
+        .order("created_at", { ascending: false });
+
+      if (attErr) {
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to load attempts",
+          debug: attErr.message,
+        });
+      }
+
+      for (const a of attempts || []) {
+        const sid = a.student_id;
+        if (!attemptsByStudent[sid]) attemptsByStudent[sid] = [];
+        attemptsByStudent[sid].push(a);
+      }
     }
 
-    // 4) Load attempts for those pupils
-    const { data: attempts, error: attemptsErr } = await supabase
-      .from("attempts")
-      .select("*")
-      .in("student_id", ids)
-      .order("created_at", { ascending: false })
-      .limit(5000);
-
-    if (attemptsErr) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to load attempts",
-        debug: attemptsErr.message,
-      });
+    function avg(list) {
+      if (!list || !list.length) return null;
+      const sum = list.reduce((acc, x) => acc + (Number(x.score_percent) || 0), 0);
+      return Math.round((sum / list.length) * 10) / 10;
     }
 
-    const byStudent = new Map();
-    for (const a of attempts || []) {
-      const sid = a.student_id;
-      if (!sid) continue;
-      if (!byStudent.has(sid)) byStudent.set(sid, []);
-      byStudent.get(sid).push(a);
-    }
-
-    const out = pupilList.map((p) => {
-      const list = byStudent.get(p.id) || [];
-      const scores = list
-        .map((a) => pctFromAttempt(a))
-        .filter((x) => x !== null && x !== undefined);
-
-      const latest_score = scores.length ? scores[0] : null;
-      const recent_scores = scores.slice(0, 5);
+    const rows = (pupils || []).map((p) => {
+      const list = attemptsByStudent[p.id] || [];
+      const latest = list[0] ? Number(list[0].score_percent) : null;
+      const last5 = avg(list.slice(0, 5));
+      const last10 = avg(list.slice(0, 10));
 
       return {
         id: p.id,
         first_name: p.first_name || "",
-        surname: p.surname || "",
-        class_label: p.class_label,
-        latest_score,
-        recent_scores,
-        attempts_count: list.length,
+        last_name: p.last_name || "",
+        name: `${p.first_name || ""} ${p.last_name || ""}`.trim() || "(no name)",
+        latest,
+        last5,
+        last10,
+        attempts: list.length,
       };
     });
 
-    return res.json({ ok: true, class_label, pupils: out });
-  } catch (e) {
-    return res.status(500).json({
-      ok: false,
-      error: "Server error",
-      debug: String(e),
+    // Concern list: <= 70% (latest)
+    const concerns = rows
+      .filter((r) => r.latest !== null && r.latest <= 70)
+      .sort((a, b) => (a.latest ?? 999) - (b.latest ?? 999));
+
+    return res.json({
+      ok: true,
+      class: cls,
+      teacher: {
+        teacher_id: session.teacher_id,
+        role: session.role,
+        email: session.email,
+        full_name: session.full_name,
+      },
+      concerns,
+      pupils: rows,
+      ...(debug
+        ? {
+            debug: {
+              class_id: cls.id,
+              class_label,
+              pupil_count: rows.length,
+            },
+          }
+        : {}),
     });
+  } catch (e) {
+    return res
+      .status(500)
+      .json({ ok: false, error: "Server error", debug: String(e) });
   }
 }
