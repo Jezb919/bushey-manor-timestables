@@ -21,7 +21,6 @@ function getSession(req) {
 }
 
 function pctFromAttempt(a) {
-  // Try common “already percent” fields
   const direct =
     a.score ??
     a.score_percent ??
@@ -35,7 +34,6 @@ function pctFromAttempt(a) {
     return Number.isFinite(n) ? Math.round(n) : null;
   }
 
-  // Try correct/total pattern
   const correct = a.correct ?? a.num_correct ?? a.correct_count ?? null;
   const total =
     a.total ??
@@ -49,7 +47,6 @@ function pctFromAttempt(a) {
     return Number.isFinite(n) ? n : null;
   }
 
-  // If we can’t calculate, return null (NOT 0)
   return null;
 }
 
@@ -65,12 +62,31 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: "Missing class_label" });
     }
 
-    // Permission: admin sees all. Teacher must be linked to that class.
+    // ✅ Look up class_id from classes table (NO join)
+    const { data: cls, error: clsErr } = await supabase
+      .from("classes")
+      .select("id, class_label")
+      .eq("class_label", class_label)
+      .maybeSingle();
+
+    if (clsErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load class",
+        debug: clsErr.message,
+      });
+    }
+
+    if (!cls?.id) {
+      return res.status(404).json({ ok: false, error: "Class not found" });
+    }
+
+    // ✅ Permission: admin sees all. Teacher must be mapped to class.
     if (session.role !== "admin") {
-      // First try direct class_label column in teacher_classes
-      const { data: link1, error: linkErr1 } = await supabase
+      // First try direct class_label mapping (if your table has it)
+      const { data: linkByLabel, error: linkErr1 } = await supabase
         .from("teacher_classes")
-        .select("teacher_id, class_label")
+        .select("teacher_id, class_label, class_id")
         .eq("teacher_id", session.teacher_id)
         .eq("class_label", class_label)
         .maybeSingle();
@@ -83,12 +99,14 @@ export default async function handler(req, res) {
         });
       }
 
-      if (!link1) {
-        // Fallback: teacher_classes uses class_id instead, join to classes
-        const { data: links2, error: linkErr2 } = await supabase
+      // If not linked by label, try class_id mapping (your screenshots show class_id exists)
+      if (!linkByLabel) {
+        const { data: linkById, error: linkErr2 } = await supabase
           .from("teacher_classes")
-          .select("class_id, classes:class_id(class_label)")
-          .eq("teacher_id", session.teacher_id);
+          .select("teacher_id, class_id")
+          .eq("teacher_id", session.teacher_id)
+          .eq("class_id", cls.id)
+          .maybeSingle();
 
         if (linkErr2) {
           return res.status(403).json({
@@ -98,16 +116,17 @@ export default async function handler(req, res) {
           });
         }
 
-        const allowed = (links2 || []).some(
-          (r) => r.classes?.class_label === class_label
-        );
-        if (!allowed) {
-          return res.status(403).json({ ok: false, error: "Not allowed" });
+        if (!linkById) {
+          return res.status(403).json({
+            ok: false,
+            error: "Not allowed for this class",
+            debug: { teacher_id: session.teacher_id, class_label },
+          });
         }
       }
     }
 
-    // ✅ Load pupils for this class (correct columns!)
+    // ✅ Load pupils for this class
     const { data: pupils, error: pupilsErr } = await supabase
       .from("students")
       .select("id, first_name, surname, class_label")
@@ -125,7 +144,6 @@ export default async function handler(req, res) {
     const pupilList = pupils || [];
     const ids = pupilList.map((p) => p.id).filter(Boolean);
 
-    // No pupils? return empty
     if (!ids.length) {
       return res.json({ ok: true, class_label, pupils: [] });
     }
@@ -154,10 +172,8 @@ export default async function handler(req, res) {
       byStudent.get(sid).push(a);
     }
 
-    // Build response rows
     const out = pupilList.map((p) => {
       const list = byStudent.get(p.id) || [];
-
       const scores = list
         .map((a) => pctFromAttempt(a))
         .filter((x) => x !== null && x !== undefined);
