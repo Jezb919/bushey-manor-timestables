@@ -24,42 +24,72 @@ function safeNum(x) {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * ✅ Robust correctness detection across many possible column names
+ */
 function guessIsCorrect(row) {
-  // common fields
-  if (typeof row.is_correct === "boolean") return row.is_correct;
-  if (typeof row.correct === "boolean") return row.correct;
+  // common boolean forms
+  const boolFields = [
+    "is_correct",
+    "isCorrect",
+    "correct",
+    "was_correct",
+    "wasCorrect",
+    "right",
+    "is_right",
+  ];
 
-  // sometimes 1/0
-  if (row.is_correct === 1 || row.is_correct === 0) return !!row.is_correct;
-  if (row.correct === 1 || row.correct === 0) return !!row.correct;
+  for (const f of boolFields) {
+    if (typeof row[f] === "boolean") return row[f];
+    if (row[f] === 1 || row[f] === 0) return !!row[f];
+    if (row[f] === "true" || row[f] === "false") return row[f] === "true";
+  }
 
-  // sometimes "true"/"false"
-  if (row.is_correct === "true" || row.is_correct === "false") return row.is_correct === "true";
-  if (row.correct === "true" || row.correct === "false") return row.correct === "true";
+  // common numeric score fields (1=correct,0=wrong) at question level
+  const scoreFields = ["score", "question_score", "mark"];
+  for (const f of scoreFields) {
+    const v = safeNum(row[f]);
+    if (v === 1) return true;
+    if (v === 0) return false;
+  }
 
-  // last resort: compare answer vs user_answer
-  const a = safeNum(row.answer ?? row.correct_answer);
-  const u = safeNum(row.user_answer ?? row.given_answer);
+  // last resort: compare correct answer vs given answer
+  const a = safeNum(row.answer ?? row.correct_answer ?? row.expected_answer);
+  const u = safeNum(row.user_answer ?? row.given_answer ?? row.response_answer);
   if (a !== null && u !== null) return a === u;
 
   return null;
 }
 
+/**
+ * ✅ Robust "table number" detection across many possible schemas
+ */
 function guessTable(row) {
-  // If a 'table' column exists, use it
-  const t = safeNum(row.table);
-  if (t !== null) return t;
+  // direct table fields
+  const directFields = [
+    "table",
+    "table_number",
+    "tableNumber",
+    "times_table",
+    "timesTable",
+    "table_base",
+    "base_table",
+  ];
+  for (const f of directFields) {
+    const t = safeNum(row[f]);
+    if (t !== null) return t;
+  }
 
-  // Try multiplicand/multiplier style
-  const a = safeNum(row.multiplicand ?? row.a ?? row.left);
-  const b = safeNum(row.multiplier ?? row.b ?? row.right);
+  // multiplicand style
+  const a = safeNum(row.multiplicand ?? row.a ?? row.left ?? row.first ?? row.num1);
+  const b = safeNum(row.multiplier ?? row.b ?? row.right ?? row.second ?? row.num2);
 
-  // "table" usually means the first number in UK tables (e.g. 7x8 is in 7-table)
+  // If one of those looks like the "table", return it
   if (a !== null) return a;
   if (b !== null) return b;
 
-  // Try parsing question text like "7 x 8" or "7×8"
-  const q = String(row.question ?? row.prompt ?? row.text ?? "").trim();
+  // question text like "7 x 8" or "7×8"
+  const q = String(row.question ?? row.prompt ?? row.text ?? row.expression ?? "").trim();
   const m = q.match(/(\d+)\s*[x×]\s*(\d+)/i);
   if (m) return safeNum(m[1]);
 
@@ -74,10 +104,12 @@ export default async function handler(req, res) {
     const pupil_id = String(req.query.pupil_id || "").trim();
     if (!pupil_id) return res.status(400).json({ ok: false, error: "Missing pupil_id" });
 
-    const limit = Math.min(Math.max(Number(req.query.limit || 12), 6), 30); // columns = attempts
-    const maxTable = Math.min(Math.max(Number(req.query.max_table || 12), 6), 19);
+    const debug = String(req.query.debug || "") === "1";
 
-    // Load pupil (for class_label)
+    const limit = Math.min(Math.max(Number(req.query.limit || 20), 6), 40); // attempts columns
+    const maxTable = Math.min(Math.max(Number(req.query.max_table || 19), 6), 19);
+
+    // Load pupil
     const { data: pupil, error: pErr } = await supabase
       .from("students")
       .select("id, class_label")
@@ -87,9 +119,8 @@ export default async function handler(req, res) {
     if (pErr) return res.status(500).json({ ok: false, error: "Failed to load pupil", debug: pErr.message });
     if (!pupil) return res.status(404).json({ ok: false, error: "Pupil not found" });
 
-    // Permission: admin ok; teacher must have class access
+    // Permission
     if (session.role !== "admin") {
-      // try teacher_classes has class_label
       const { data: link, error: linkErr } = await supabase
         .from("teacher_classes")
         .select("teacher_id, class_label, class_id")
@@ -98,7 +129,6 @@ export default async function handler(req, res) {
         .maybeSingle();
 
       if (linkErr) {
-        // fallback join via classes
         const { data: links2, error: linkErr2 } = await supabase
           .from("teacher_classes")
           .select("class_id, classes:class_id(class_label)")
@@ -113,7 +143,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // Latest attempts (columns)
+    // Latest attempts
     const { data: attempts, error: aErr } = await supabase
       .from("attempts")
       .select("id, created_at")
@@ -129,7 +159,6 @@ export default async function handler(req, res) {
     }));
 
     if (!cols.length) {
-      // no attempts => empty heatmap
       return res.json({
         ok: true,
         columns: [],
@@ -141,7 +170,7 @@ export default async function handler(req, res) {
 
     const attemptIds = cols.map((c) => c.attempt_id);
 
-    // Pull question records for these attempts
+    // Pull question records
     const { data: qrecs, error: qErr } = await supabase
       .from("question_records")
       .select("*")
@@ -152,30 +181,40 @@ export default async function handler(req, res) {
         ok: false,
         error: "Failed to load question records",
         debug: qErr.message,
-        hint: "Your table is called question_records, and needs an attempt_id column for this heatmap.",
+        hint: "Heatmap needs question_records.attempt_id to exist and link to attempts.id",
       });
     }
 
-    // Build stats: stats[table][attempt_id] = { correct, total }
+    // stats[table][attempt_id] = { correct, total }
     const stats = {};
     for (let t = 1; t <= maxTable; t++) stats[t] = {};
 
+    let parsed = { rows: 0, withAttempt: 0, withTable: 0, withCorrect: 0, used: 0 };
+    let sampleKeys = null;
+
     for (const r of qrecs || []) {
+      parsed.rows += 1;
+      if (!sampleKeys) sampleKeys = Object.keys(r || {}).slice(0, 60);
+
       const attempt_id = r.attempt_id;
       if (!attempt_id) continue;
+      parsed.withAttempt += 1;
 
       const table = guessTable(r);
       if (!table || table < 1 || table > maxTable) continue;
+      parsed.withTable += 1;
 
       const isCorrect = guessIsCorrect(r);
       if (isCorrect === null) continue;
+      parsed.withCorrect += 1;
 
       if (!stats[table][attempt_id]) stats[table][attempt_id] = { correct: 0, total: 0 };
       stats[table][attempt_id].total += 1;
       if (isCorrect) stats[table][attempt_id].correct += 1;
+
+      parsed.used += 1;
     }
 
-    // Build grid: rows = tables 1..maxTable, cols = attempts newest->oldest
     const rows = Array.from({ length: maxTable }, (_, i) => i + 1);
 
     const grid = rows.map((t) => {
@@ -183,15 +222,11 @@ export default async function handler(req, res) {
         const cell = stats[t][c.attempt_id];
         if (!cell || !cell.total) return null;
         const pct = Math.round((cell.correct / cell.total) * 100);
-        return {
-          pct,
-          correct: cell.correct,
-          total: cell.total,
-        };
+        return { pct, correct: cell.correct, total: cell.total };
       });
     });
 
-    return res.json({
+    const resp = {
       ok: true,
       columns: cols.map((c) => ({
         attempt_id: c.attempt_id,
@@ -199,7 +234,23 @@ export default async function handler(req, res) {
       })),
       rows,
       grid,
-    });
+    };
+
+    // ✅ If mostly blank, debug tells us why (without you needing SQL)
+    if (debug) {
+      resp.debug = {
+        attempts_returned: cols.length,
+        question_records_returned: (qrecs || []).length,
+        parsed,
+        sample_question_record_keys: sampleKeys,
+        note:
+          parsed.used === 0
+            ? "Heatmap blank because we couldn't detect table number and/or correctness from your question_records schema."
+            : "Heatmap has usable parsed data.",
+      };
+    }
+
+    return res.json(resp);
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
