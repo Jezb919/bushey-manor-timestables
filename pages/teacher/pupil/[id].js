@@ -1,180 +1,191 @@
-import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/router";
 
-function colourForPercent(p) {
-  if (p === null || p === undefined) return "#EEF2F7"; // light grey
-  if (p === 100) return "#BFF7C1"; // light green
-  if (p >= 90) return "#2E9E4F"; // dark green
-  if (p >= 70) return "#F6A03A"; // orange
-  return "#FF3B5C"; // red
+function scoreToColour(score) {
+  if (score === null || score === undefined) return "#e5e7eb"; // grey
+  if (score >= 100) return "#b7f7c7"; // light green
+  if (score >= 90) return "#16a34a"; // green
+  if (score >= 70) return "#f59e0b"; // orange
+  return "#ef4444"; // red
+}
+
+function scoreToVibrantGradient(score) {
+  // brighter, more “heatmap” feel (still following your 4 bands)
+  if (score === null || score === undefined) return "linear-gradient(135deg,#e5e7eb,#f3f4f6)";
+  if (score >= 100) return "linear-gradient(135deg,#86efac,#bbf7d0)";
+  if (score >= 90) return "linear-gradient(135deg,#16a34a,#22c55e)";
+  if (score >= 70) return "linear-gradient(135deg,#f59e0b,#fbbf24)";
+  return "linear-gradient(135deg,#ef4444,#fb7185)";
 }
 
 export default function PupilPage() {
   const router = useRouter();
-  const { id } = router.query;
+  const { id } = router.query; // ✅ this is the pupil UUID from /teacher/pupil/<uuid>
 
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  const [data, setData] = useState(null);
+  const [me, setMe] = useState(null);
+  const [error, setError] = useState("");
+
+  const [attemptsList, setAttemptsList] = useState([]);
+  const [heatmap, setHeatmap] = useState(null);
+
+  async function loadMe() {
+    const r = await fetch("/api/teacher/me");
+    const j = await r.json();
+    if (!j.ok) {
+      window.location.href = "/teacher/login";
+      return;
+    }
+    setMe(j.user);
+  }
+
+  async function loadPupilDetail(studentId) {
+    setError("");
+
+    // Progress list (we’ll use attempts list from heatmap API too, but keep this simple)
+    const r = await fetch(`/api/teacher/pupil_heatmap?student_id=${encodeURIComponent(studentId)}`);
+    const j = await r.json();
+    if (!j.ok) {
+      setError(j.error || "Failed to load pupil");
+      setHeatmap(null);
+      setAttemptsList([]);
+      return;
+    }
+    setHeatmap(j);
+    setAttemptsList(j.attempts || []);
+  }
+
+  useEffect(() => {
+    loadMe();
+  }, []);
 
   useEffect(() => {
     if (!id) return;
-
-    setLoading(true);
-    setErr("");
-
-    fetch(`/api/teacher/pupil_detail?student_id=${encodeURIComponent(id)}`)
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j.ok) {
-          setErr(j.error || "Failed to load pupil");
-          setLoading(false);
-          return;
-        }
-        setData(j);
-        setLoading(false);
-      })
-      .catch(() => {
-        setErr("Failed to load pupil");
-        setLoading(false);
-      });
+    loadPupilDetail(id);
   }, [id]);
 
-  const pupilName = useMemo(() => {
-    if (!data?.pupil) return "Pupil";
-    const fn = data.pupil.first_name || "";
-    const ln = data.pupil.last_name || data.pupil.surname || "";
-    const full = `${fn} ${ln}`.trim();
-    return full || "Pupil";
-  }, [data]);
+  const title = useMemo(() => "Pupil", []);
 
-  const cols = data?.heatmap?.[0]?.cells?.length ? data.heatmap[0].cells : [];
-  const colLabels = cols.map((c) =>
-    new Date(c.date).toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit" })
-  );
+  if (!me) return null;
 
   return (
-    <div style={{ padding: 30 }}>
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ marginBottom: 8, color: "#444" }}>
-          {data?.me?.email ? <>Logged in as <b>{data.me.email}</b> ({data.me.role})</> : null}
-        </div>
-
-        <div style={{ display: "flex", gap: 12 }}>
-          <Link href="/teacher/class-overview">← Back to class overview</Link>
-          <Link href="/teacher">Back to dashboard</Link>
-        </div>
+    <div style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
+      <div style={{ opacity: 0.85, marginBottom: 10 }}>
+        Logged in as <b>{me.email}</b> ({me.role})
       </div>
 
-      <h1 style={{ marginTop: 18 }}>{pupilName}</h1>
+      <div style={{ marginBottom: 18 }}>
+        <Link href="/teacher/class-overview">← Back to class overview</Link>{" "}
+        • <Link href="/teacher">Back to dashboard</Link>
+      </div>
 
-      {loading && <p>Loading…</p>}
-      {err && (
-        <div style={{ background: "#FDECEC", color: "#B00020", padding: 12, borderRadius: 10, marginTop: 12 }}>
-          {err}
+      {error && (
+        <div style={{ marginBottom: 14, background: "#fee2e2", padding: 12, borderRadius: 12, color: "#7f1d1d" }}>
+          {error}
         </div>
       )}
 
-      {!loading && !err && data && (
-        <>
-          {/* Progress over time */}
-          <div
-            style={{
-              marginTop: 18,
-              background: "white",
-              borderRadius: 18,
-              padding: 18,
-              boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
-            }}
-          >
-            <h2 style={{ marginTop: 0 }}>Progress over time</h2>
-            {data.series?.length ? (
-              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                {data.series.slice(-10).map((s, idx) => (
-                  <li key={idx}>
-                    {new Date(s.date).toLocaleString("en-GB")} — <b>{s.score}%</b>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p>No attempts yet.</p>
-            )}
-          </div>
+      <h1 style={{ marginTop: 0 }}>{title}</h1>
 
-          {/* Heatmap */}
-          <div
-            style={{
-              marginTop: 18,
-              background: "white",
-              borderRadius: 18,
-              padding: 18,
-              boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 20, alignItems: "baseline" }}>
-              <div>
-                <h2 style={{ margin: 0 }}>Times Tables Heatmap</h2>
-                <div style={{ color: "#444", marginTop: 6 }}>
-                  Rows = table (1–19) • Columns = most recent attempts • Colours follow your key
-                </div>
-              </div>
+      {/* Progress over time */}
+      <div style={{ background: "#fff", borderRadius: 16, padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.08)" }}>
+        <h2 style={{ marginTop: 0 }}>Progress over time</h2>
+        {attemptsList.length === 0 ? (
+          <div style={{ opacity: 0.8 }}>No attempts yet.</div>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {attemptsList.map((a) => (
+              <li key={a.id}>
+                {new Date(a.date).toLocaleString("en-GB")}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
-              <div style={{ color: "#444", fontSize: 14 }}>
-                Key: 100% light green • 90–99% green • 70–89% orange • &lt;70% red
-              </div>
+      {/* Heatmap */}
+      <div style={{ marginTop: 18, background: "#fff", borderRadius: 16, padding: 16, boxShadow: "0 10px 30px rgba(0,0,0,0.08)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
+          <div>
+            <h2 style={{ marginTop: 0, marginBottom: 6 }}>Times Tables Heatmap</h2>
+            <div style={{ opacity: 0.8 }}>
+              Rows = table (1–19) • Columns = most recent attempts • Colours follow your key
             </div>
-
-            {!data.heatmap?.length ? (
-              <p style={{ marginTop: 12 }}>No heatmap data yet (or it failed to load).</p>
-            ) : (
-              <div style={{ marginTop: 14, overflowX: "auto" }}>
-                <table style={{ borderCollapse: "separate", borderSpacing: 8 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: "left", paddingRight: 10 }}>Table</th>
-                      {colLabels.map((lbl, i) => (
-                        <th key={i} style={{ textAlign: "center", minWidth: 90 }}>
-                          {lbl}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.heatmap.map((row) => (
-                      <tr key={row.table}>
-                        <td style={{ fontWeight: 700 }}>{row.table}×</td>
-                        {row.cells.map((c) => {
-                          const bg = colourForPercent(c.percent);
-                          const text = c.percent === null ? "—" : `${c.percent}%`;
-                          const fg = c.percent !== null && c.percent < 70 ? "white" : "#0B1020";
-                          return (
-                            <td
-                              key={c.attempt_id}
-                              style={{
-                                background: bg,
-                                color: fg,
-                                borderRadius: 10,
-                                textAlign: "center",
-                                padding: "10px 12px",
-                                fontWeight: 800,
-                                boxShadow: "inset 0 0 0 2px rgba(0,0,0,0.06)",
-                              }}
-                              title={c.total ? `${c.percent}% (${c.total} questions)` : "No questions for this table"}
-                            >
-                              {text}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
           </div>
-        </>
-      )}
+
+          <div style={{ textAlign: "right", opacity: 0.9 }}>
+            <div style={{ fontWeight: 700 }}>Key</div>
+            <div style={{ fontSize: 13 }}>
+              100% light green • 90–99% green • 70–89% orange • &lt;70% red
+            </div>
+          </div>
+        </div>
+
+        {!heatmap || !heatmap.attempts || heatmap.attempts.length === 0 ? (
+          <div style={{ marginTop: 14, opacity: 0.8 }}>
+            No heatmap data yet (or it failed to load). Once the pupil has attempts, it will appear here.
+          </div>
+        ) : (
+          <div style={{ marginTop: 14, overflowX: "auto" }}>
+            <div style={{ minWidth: 700 }}>
+              {/* header row */}
+              <div style={{ display: "grid", gridTemplateColumns: `80px repeat(${heatmap.attempts.length}, 110px)`, gap: 10, marginBottom: 10 }}>
+                <div style={{ fontWeight: 800 }}>Table</div>
+                {heatmap.attempts.map((a) => (
+                  <div key={a.id} style={{ fontWeight: 800 }}>
+                    {a.label}
+                  </div>
+                ))}
+              </div>
+
+              {/* rows */}
+              {(heatmap.rows || []).map((r) => (
+                <div
+                  key={r.table}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: `80px repeat(${heatmap.attempts.length}, 110px)`,
+                    gap: 10,
+                    marginBottom: 10,
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ fontWeight: 900 }}>{r.table}×</div>
+
+                  {(r.cells || []).map((score, idx) => {
+                    const bg = scoreToVibrantGradient(score);
+                    const text = score === null ? "—" : `${score}%`;
+                    const textColor = score !== null && score >= 90 ? "#052e16" : "#fff";
+                    const border = score === null ? "1px solid #e5e7eb" : "1px solid rgba(0,0,0,0.08)";
+
+                    return (
+                      <div
+                        key={idx}
+                        title={score === null ? "No questions for this table in that attempt" : `${score}%`}
+                        style={{
+                          height: 44,
+                          borderRadius: 12,
+                          background: bg,
+                          border,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          fontWeight: 900,
+                          color: score === null ? "#111827" : textColor,
+                          boxShadow: score === null ? "none" : "0 10px 20px rgba(0,0,0,0.08)",
+                          letterSpacing: 0.2,
+                        }}
+                      >
+                        {text}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
