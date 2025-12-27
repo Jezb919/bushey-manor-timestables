@@ -5,27 +5,22 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-function parseCookie(req, name) {
-  const raw = req.headers.cookie || "";
-  const parts = raw.split(";").map((p) => p.trim());
-  const found = parts.find((p) => p.startsWith(name + "="));
-  if (!found) return null;
-  return decodeURIComponent(found.split("=").slice(1).join("="));
-}
-
+/**
+ * Reads bmtt_teacher cookie (your app uses JSON in this cookie)
+ * and returns { teacher_id, role, email, full_name }
+ */
 function getTeacherFromCookie(req) {
-  const token = parseCookie(req, "bmtt_teacher");
-  if (!token) return null;
+  const raw = req.cookies?.bmtt_teacher;
+  if (!raw) return null;
 
-  // Your bmtt_teacher cookie is JSON (not JWT)
   try {
-    const obj = JSON.parse(token);
-    const teacher_id = obj.teacher_id || obj.teacherId;
-    const role = obj.role || "teacher";
-    const email = obj.email || "";
-    const full_name = obj.full_name || obj.fullName || "";
-    if (!teacher_id) return null;
-    return { teacher_id, role, email, full_name };
+    const obj = JSON.parse(raw);
+    return {
+      teacher_id: obj.teacher_id || obj.teacherId || obj.id || null,
+      role: obj.role || null,
+      email: obj.email || null,
+      full_name: obj.full_name || obj.fullName || null,
+    };
   } catch (e) {
     return null;
   }
@@ -39,30 +34,29 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: "Missing class_label" });
     }
 
-    const session = getTeacherFromCookie(req);
-    if (!session?.teacher_id) {
+    const me = getTeacherFromCookie(req);
+    if (!me?.teacher_id) {
       return res.status(401).json({ ok: false, error: "Not logged in" });
     }
 
-    // 1) Look up class by label
+    // 1) Find the class row from classes table
     const { data: cls, error: classErr } = await supabaseAdmin
       .from("classes")
-      .select("id, class_label, year_group")
+      .select("id, class_label")
       .eq("class_label", class_label)
       .single();
 
     if (classErr || !cls) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Class not found", debug: classErr?.message });
+      return res.status(404).json({ ok: false, error: "Class not found", debug: classErr?.message });
     }
 
-    // 2) Permission: admin sees all; teacher must be linked in teacher_classes
-    if (session.role !== "admin") {
+    // 2) Permission check:
+    // admin can see everything, teacher must be linked in teacher_classes by class_id
+    if (me.role !== "admin") {
       const { data: link, error: linkErr } = await supabaseAdmin
         .from("teacher_classes")
         .select("teacher_id, class_id")
-        .eq("teacher_id", session.teacher_id)
+        .eq("teacher_id", me.teacher_id)
         .eq("class_id", cls.id)
         .maybeSingle();
 
@@ -78,37 +72,37 @@ export default async function handler(req, res) {
         return res.status(403).json({
           ok: false,
           error: "Not allowed for this class",
-          debug: { teacher_id: session.teacher_id, class_id: cls.id, class_label },
+          debug: { teacher_id: me.teacher_id, role: me.role, class_label },
         });
       }
     }
 
-    // 3) Load pupils for class (your students table uses first_name + last_name)
+    // 3) Load pupils for that class
+    // NOTE: your students table (from your screenshot) has: id, first_name, class_id, class_label, username, password_hash, etc.
+    // No surname column there yet, so we do NOT select it (selecting it would crash).
     const { data: pupils, error: pupilsErr } = await supabaseAdmin
       .from("students")
-      .select("id, first_name, last_name, class_label, class_id")
+      .select("id, first_name, class_id, class_label")
       .eq("class_id", cls.id)
       .order("first_name", { ascending: true });
 
     if (pupilsErr) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to load pupils",
-        debug: pupilsErr.message,
-      });
+      return res.status(500).json({ ok: false, error: "Failed to load pupils", debug: pupilsErr.message });
     }
 
-    // 4) Load attempts for these pupils and compute:
-    // Latest, last 5 avg, last 10 avg, attempts count
     const pupilIds = (pupils || []).map((p) => p.id);
 
-    let attemptsByStudent = {};
+    // 4) Load attempts for these pupils
+    // IMPORTANT FIX: use attempts.score (NOT score_percent)
+    // We keep it very simple and robust: last 10 attempts per pupil will be derived in JS.
+    let attempts = [];
     if (pupilIds.length) {
-      const { data: attempts, error: attErr } = await supabaseAdmin
+      const { data: att, error: attErr } = await supabaseAdmin
         .from("attempts")
-        .select("id, student_id, score_percent, created_at")
+        .select("id, student_id, created_at, score")
         .in("student_id", pupilIds)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .limit(2000);
 
       if (attErr) {
         return res.status(500).json({
@@ -117,67 +111,63 @@ export default async function handler(req, res) {
           debug: attErr.message,
         });
       }
-
-      for (const a of attempts || []) {
-        const sid = a.student_id;
-        if (!attemptsByStudent[sid]) attemptsByStudent[sid] = [];
-        attemptsByStudent[sid].push(a);
-      }
+      attempts = att || [];
     }
 
-    function avg(list) {
-      if (!list || !list.length) return null;
-      const sum = list.reduce((acc, x) => acc + (Number(x.score_percent) || 0), 0);
-      return Math.round((sum / list.length) * 10) / 10;
+    // 5) Build per-pupil summaries
+    const attemptsByStudent = new Map();
+    for (const a of attempts) {
+      if (!attemptsByStudent.has(a.student_id)) attemptsByStudent.set(a.student_id, []);
+      attemptsByStudent.get(a.student_id).push(a);
+    }
+
+    function safeScore(x) {
+      // score should already be a % number (0-100). Keep it safe.
+      const n = Number(x);
+      return Number.isFinite(n) ? Math.round(n) : null;
     }
 
     const rows = (pupils || []).map((p) => {
-      const list = attemptsByStudent[p.id] || [];
-      const latest = list[0] ? Number(list[0].score_percent) : null;
-      const last5 = avg(list.slice(0, 5));
-      const last10 = avg(list.slice(0, 10));
+      const list = attemptsByStudent.get(p.id) || [];
+
+      const latest = list[0] ? safeScore(list[0].score) : null;
+
+      // "Recent" = show last 3 as "80%, 92%, 71%"
+      const recent = list.slice(0, 3).map((x) => safeScore(x.score)).filter((v) => v !== null);
+      const recent_text = recent.length ? recent.map((v) => `${v}%`).join(", ") : "—";
 
       return {
         id: p.id,
-        first_name: p.first_name || "",
-        last_name: p.last_name || "",
-        name: `${p.first_name || ""} ${p.last_name || ""}`.trim() || "(no name)",
-        latest,
-        last5,
-        last10,
-        attempts: list.length,
+        first_name: p.first_name || null,
+        surname: null, // you can add this later once the DB has a surname column
+        class_label: p.class_label || cls.class_label,
+        attempt_count: list.length,
+        latest_score: latest,
+        recent_text,
       };
     });
 
-    // Concern list: <= 70% (latest)
+    // 6) Concerns: ≤ 70%
     const concerns = rows
-      .filter((r) => r.latest !== null && r.latest <= 70)
-      .sort((a, b) => (a.latest ?? 999) - (b.latest ?? 999));
+      .filter((r) => r.latest_score !== null && r.latest_score <= 70)
+      .sort((a, b) => (a.latest_score ?? 999) - (b.latest_score ?? 999));
 
-    return res.json({
-      ok: true,
-      class: cls,
-      teacher: {
-        teacher_id: session.teacher_id,
-        role: session.role,
-        email: session.email,
-        full_name: session.full_name,
-      },
-      concerns,
-      pupils: rows,
-      ...(debug
-        ? {
-            debug: {
-              class_id: cls.id,
-              class_label,
-              pupil_count: rows.length,
-            },
-          }
-        : {}),
-    });
+    if (debug === "1") {
+      return res.json({
+        ok: true,
+        me,
+        class: cls,
+        pupils_count: pupils?.length || 0,
+        attempts_count: attempts.length,
+        sample_attempt: attempts[0] || null,
+        rows: rows.slice(0, 5),
+        concerns: concerns.slice(0, 5),
+        note: "This endpoint uses attempts.score. If you still see errors, open /api/teacher/class_overview?class_label=M4&debug=1 and send me sample_attempt.",
+      });
+    }
+
+    return res.json({ ok: true, class: cls, rows, concerns });
   } catch (e) {
-    return res
-      .status(500)
-      .json({ ok: false, error: "Server error", debug: String(e) });
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
 }
