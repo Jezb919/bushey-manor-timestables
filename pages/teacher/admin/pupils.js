@@ -1,95 +1,69 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-export default function AdminPupilsPage() {
+export default function AdminPupils() {
   const [me, setMe] = useState(null);
   const [classes, setClasses] = useState([]);
-  const [selectedClass, setSelectedClass] = useState("");
-
-  const [firstName, setFirstName] = useState("");
-  const [surname, setSurname] = useState("");
-
+  const [classLabel, setClassLabel] = useState("");
   const [pupils, setPupils] = useState([]);
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
-  const [newCreds, setNewCreds] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  async function safeJson(res) {
-    const text = await res.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      throw new Error(text || `HTTP ${res.status}`);
-    }
-  }
-
-  async function loadPupils(class_label) {
-    setErr("");
-    setMsg("");
-    setNewCreds(null);
-
-    try {
-      const r = await fetch(`/api/admin/pupils/list?class_label=${encodeURIComponent(class_label)}`);
-      const j = await safeJson(r);
-      if (!j.ok) throw new Error(j.error || "Failed to load pupils");
-      setPupils(j.pupils || []);
-      return;
-    } catch {
-      const r2 = await fetch("/api/teacher/students");
-      const j2 = await safeJson(r2);
-      if (!j2.ok) throw new Error(j2.error || "Failed to load pupils");
-      const filtered = (j2.students || []).filter((s) => s.class_label === class_label);
-      setPupils(filtered);
-    }
-  }
+  const selectedClass = useMemo(
+    () => classes.find((c) => c.class_label === classLabel),
+    [classes, classLabel]
+  );
 
   useEffect(() => {
-    (async () => {
-      setErr("");
-      setMsg("");
-      try {
-        const r = await fetch("/api/teacher/me");
-        const j = await safeJson(r);
-
-        if (!j.ok || !j.user) {
+    // Load me (admin check)
+    fetch("/api/teacher/me")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.ok) {
           window.location.href = "/teacher/login";
           return;
         }
-
-        setMe(j.user);
-
-        if (j.user.role !== "admin") {
-          setErr("Admins only");
-          return;
-        }
-
-        const cr = await fetch("/api/teacher/classes");
-        const cj = await safeJson(cr);
-        if (!cj.ok) throw new Error(cj.error || "Failed to load classes");
-
-        const cls = cj.classes || [];
-        setClasses(cls);
-
-        const defaultLabel = cls[0]?.class_label || "M4";
-        setSelectedClass(defaultLabel);
-
-        await loadPupils(defaultLabel);
-      } catch (e) {
-        setErr(String(e.message || e));
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        setMe(d.user);
+      })
+      .catch(() => window.location.href = "/teacher/login");
   }, []);
 
-  async function onChangeClass(e) {
-    const v = e.target.value;
-    setSelectedClass(v);
-    try {
-      await loadPupils(v);
-    } catch (e2) {
-      setErr(String(e2.message || e2));
-    }
-  }
+  useEffect(() => {
+    // Load classes list (for dropdown)
+    fetch("/api/teacher/classes")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.ok) return;
+        setClasses(d.classes || []);
+        if ((d.classes || []).length && !classLabel) {
+          setClassLabel(d.classes[0].class_label);
+        }
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!classLabel) return;
+    setErr("");
+    setMsg("");
+
+    fetch(`/api/admin/pupils/list?class_label=${encodeURIComponent(classLabel)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.ok) {
+          setErr(d.error || "Failed to load pupils");
+          setPupils([]);
+          return;
+        }
+        setPupils(d.pupils || []);
+      })
+      .catch(() => {
+        setErr("Failed to load pupils");
+        setPupils([]);
+      });
+  }, [classLabel]);
 
   async function logout() {
     await fetch("/api/teacher/logout", { method: "POST" });
@@ -99,171 +73,193 @@ export default function AdminPupilsPage() {
   async function addPupil() {
     setErr("");
     setMsg("");
-    setNewCreds(null);
+    setBusy(true);
 
     try {
-      if (!selectedClass) throw new Error("Pick a class first");
-      if (!firstName.trim()) throw new Error("Enter first name");
-      if (!surname.trim()) throw new Error("Enter surname");
-
-      const body = { class_label: selectedClass, first_name: firstName, surname };
-
       const r = await fetch("/api/admin/pupils/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          class_label: classLabel,
+          first_name: firstName,
+          last_name: lastName,
+        }),
       });
 
-      const j = await safeJson(r);
-      if (!j.ok) throw new Error(j.error || "Failed to create pupil");
+      const d = await r.json();
+      if (!d.ok) {
+        setErr(d.error || "Failed to add pupil");
+        setBusy(false);
+        return;
+      }
 
-      setMsg(`Added ${j.pupil?.first_name} ${j.pupil?.surname} to ${j.pupil?.class_label} ✅`);
-      setNewCreds(j.credentials || null);
+      const p = d.pupil;
+      setMsg(
+        `Created: ${p.first_name} ${p.last_name} (${p.class_label}) — Username: ${p.username} — PIN: ${p.pin}`
+      );
 
       setFirstName("");
-      setSurname("");
+      setLastName("");
 
-      await loadPupils(selectedClass);
+      // refresh list
+      const rr = await fetch(
+        `/api/admin/pupils/list?class_label=${encodeURIComponent(classLabel)}`
+      );
+      const dd = await rr.json();
+      if (dd.ok) setPupils(dd.pupils || []);
     } catch (e) {
-      setErr(String(e.message || e));
+      setErr("Failed to add pupil");
     }
+
+    setBusy(false);
   }
 
-  async function deletePupil(pupil) {
+  async function deletePupil(id) {
+    if (!confirm("Delete this pupil?")) return;
     setErr("");
     setMsg("");
-    setNewCreds(null);
 
-    const name = `${pupil.first_name || ""} ${pupil.surname || ""}`.trim() || "this pupil";
-    const ok = confirm(`Delete ${name}?\n\nThis will also delete their attempts.`);
-    if (!ok) return;
-
-    try {
-      const r = await fetch("/api/admin/pupils/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pupil_id: pupil.id }),
-      });
-
-      const j = await safeJson(r);
-      if (!j.ok) throw new Error(j.error || "Failed to delete pupil");
-
-      setMsg(`Deleted ${name} ✅`);
-      await loadPupils(selectedClass);
-    } catch (e) {
-      setErr(String(e.message || e));
+    const r = await fetch("/api/admin/pupils/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      setErr(d.error || "Failed to delete pupil");
+      return;
     }
+    setMsg("Pupil deleted ✅");
+
+    setPupils((prev) => prev.filter((p) => p.id !== id));
   }
 
-  const classOptions = useMemo(() => classes.map((c) => c.class_label), [classes]);
+  if (!me) return null;
+
+  if (me.role !== "admin") {
+    return (
+      <div style={{ padding: 30 }}>
+        <h1>Pupils</h1>
+        <p style={{ color: "red" }}>Admins only</p>
+        <button onClick={logout}>Log out</button>
+      </div>
+    );
+  }
 
   return (
-    <div style={page}>
-      <div style={topRow}>
+    <div style={{ padding: 30 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div>
-          <h1 style={{ margin: 0 }}>Pupils</h1>
-          <div style={{ opacity: 0.7 }}>Admin area</div>
-          <div style={{ marginTop: 8 }}>
-            <Link href="/teacher/dashboard">← Back to dashboard</Link>
-          </div>
+          <h1>Pupils</h1>
+          <p>Admin area</p>
+          <p>
+            <Link href="/teacher">← Back to dashboard</Link>
+          </p>
         </div>
-        <button onClick={logout} style={btn}>
-          Log out
-        </button>
+        <button onClick={logout} style={{ padding: "10px 14px" }}>Log out</button>
       </div>
 
-      {err && <div style={errorBox}>{err}</div>}
-      {msg && <div style={okBox}>{msg}</div>}
+      {err && (
+        <div style={{ background: "#ffe5e5", padding: 12, borderRadius: 10, marginBottom: 14 }}>
+          <b style={{ color: "#b00020" }}>{err}</b>
+        </div>
+      )}
 
-      <div style={card}>
-        <h2 style={{ marginTop: 0 }}>Add pupil to {selectedClass || "…"}</h2>
+      {msg && (
+        <div style={{ background: "#e8fff1", padding: 12, borderRadius: 10, marginBottom: 14 }}>
+          <b style={{ color: "#0a7a2f" }}>{msg}</b>
+        </div>
+      )}
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <select value={selectedClass} onChange={onChangeClass} style={input}>
-            {classOptions.map((c) => (
-              <option key={c} value={c}>
-                {c}
+      <div style={{ background: "#fff", borderRadius: 18, padding: 18, marginBottom: 18 }}>
+        <h2 style={{ marginTop: 0 }}>Add pupil to {classLabel || "(choose class)"}</h2>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={classLabel} onChange={(e) => setClassLabel(e.target.value)}>
+            {classes.map((c) => (
+              <option key={c.id} value={c.class_label}>
+                {c.class_label}
               </option>
             ))}
           </select>
 
-          <input style={input} placeholder="First name" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
-          <input style={input} placeholder="Surname" value={surname} onChange={(e) => setSurname(e.target.value)} />
+          <input
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            placeholder="First name"
+            style={{ padding: 10, minWidth: 220 }}
+          />
 
-          <button onClick={addPupil} style={btnPrimary}>Add pupil</button>
+          <input
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            placeholder="Surname"
+            style={{ padding: 10, minWidth: 220 }}
+          />
+
+          <button disabled={busy} onClick={addPupil} style={{ padding: "10px 14px" }}>
+            {busy ? "Adding..." : "Add pupil"}
+          </button>
         </div>
 
-        {newCreds && (
-          <div style={credsBox}>
-            <div style={{ fontWeight: 900, marginBottom: 6 }}>New pupil login</div>
-            <div><b>Username:</b> {newCreds.username}</div>
-            <div><b>Temp password:</b> {newCreds.tempPassword}</div>
-          </div>
-        )}
+        <p style={{ marginTop: 10, opacity: 0.8 }}>
+          After creating a pupil, you’ll see their <b>username</b> and <b>PIN</b> (copy it straight away).
+        </p>
       </div>
 
-      <div style={card}>
-        <h2 style={{ marginTop: 0 }}>Pupils in {selectedClass || "…"}</h2>
+      <div style={{ background: "#fff", borderRadius: 18, padding: 18 }}>
+        <h2 style={{ marginTop: 0 }}>Pupils in {classLabel}</h2>
 
-        <table style={table}>
-          <thead>
-            <tr>
-              <th style={th}>Name</th>
-              <th style={th}>Username</th>
-              <th style={th}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pupils.map((p) => {
-              const name = `${p.first_name || ""} ${p.surname || ""}`.trim() || "(no name)";
-              return (
-                <tr key={p.id}>
-                  <td style={td}>{name}</td>
-                  <td style={td}>{p.username || "—"}</td>
-                  <td style={td}>
-                    <button style={btnSmall} onClick={() => (window.location.href = `/teacher/admin/pupil/${p.id}`)}>
-                      Manage
-                    </button>{" "}
-                    <button style={btnDanger} onClick={() => deletePupil(p)}>
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-
-            {!pupils.length && (
-              <tr>
-                <td style={td} colSpan={3}>No pupils found.</td>
+        {!pupils.length ? (
+          <p>No pupils found.</p>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
+                <th style={{ padding: "10px 6px" }}>Name</th>
+                <th style={{ padding: "10px 6px" }}>Username</th>
+                <th style={{ padding: "10px 6px" }}>Actions</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {pupils.map((p) => {
+                const fullName = `${p.first_name || ""} ${p.last_name || ""}`.trim() || "(no name)";
+                return (
+                  <tr key={p.id} style={{ borderBottom: "1px solid #f2f2f2" }}>
+                    <td style={{ padding: "12px 6px" }}>{fullName}</td>
+                    <td style={{ padding: "12px 6px" }}>{p.username || "—"}</td>
+                    <td style={{ padding: "12px 6px", display: "flex", gap: 10 }}>
+                      <button
+                        onClick={() => (window.location.href = `/teacher/pupil/${p.id}`)}
+                        style={{ padding: "8px 12px" }}
+                      >
+                        Manage
+                      </button>
+
+                      <button
+                        onClick={() => deletePupil(p.id)}
+                        style={{
+                          padding: "8px 12px",
+                          border: "1px solid #c40000",
+                          color: "#c40000",
+                          borderRadius: 10,
+                          background: "white",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+
+        <p style={{ marginTop: 12, opacity: 0.7 }}>
+          Note: older pupils may show blank surname until you add it.
+        </p>
       </div>
     </div>
   );
 }
-
-/* styles */
-const page = { padding: 24, background: "#f3f4f6", minHeight: "100vh" };
-const topRow = { display: "flex", justifyContent: "space-between", alignItems: "flex-start" };
-const card = {
-  background: "white",
-  borderRadius: 14,
-  padding: 18,
-  marginTop: 16,
-  boxShadow: "0 8px 22px rgba(0,0,0,0.08)",
-  border: "1px solid rgba(0,0,0,0.06)",
-};
-const input = { padding: 10, borderRadius: 10, border: "1px solid rgba(0,0,0,0.2)" };
-const btn = { padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(0,0,0,0.2)", background: "white", fontWeight: 900 };
-const btnPrimary = { ...btn, background: "#0f172a", color: "white", border: "1px solid #0f172a" };
-const btnSmall = { padding: "8px 10px", borderRadius: 10, border: "1px solid rgba(0,0,0,0.2)", background: "white", fontWeight: 900 };
-const btnDanger = { padding: "8px 10px", borderRadius: 10, border: "1px solid #991b1b", background: "#fee2e2", color: "#991b1b", fontWeight: 900, cursor: "pointer" };
-const errorBox = { marginTop: 14, padding: 10, borderRadius: 10, background: "#fee2e2", color: "#991b1b", fontWeight: 900 };
-const okBox = { marginTop: 14, padding: 10, borderRadius: 10, background: "#dcfce7", color: "#166534", fontWeight: 900 };
-const credsBox = { marginTop: 12, padding: 12, borderRadius: 12, background: "#fff7ed", border: "1px solid #fed7aa" };
-
-const table = { width: "100%", borderCollapse: "collapse", marginTop: 10 };
-const th = { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid rgba(0,0,0,0.1)", opacity: 0.7, fontSize: 12 };
-const td = { padding: "10px 8px", borderBottom: "1px solid rgba(0,0,0,0.06)" };
