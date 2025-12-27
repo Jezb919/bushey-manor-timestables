@@ -1,147 +1,189 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
+const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+function parseCookies(req) {
+  const raw = req.headers.cookie || "";
+  const out = {};
+  raw.split(";").forEach((part) => {
+    const [k, ...v] = part.trim().split("=");
+    if (!k) return;
+    out[k] = decodeURIComponent(v.join("=") || "");
+  });
+  return out;
+}
+
 function getTeacherFromCookie(req) {
-  const raw = req.cookies?.bmtt_teacher;
-  if (!raw) return { ok: false, error: "Not logged in" };
+  const cookies = parseCookies(req);
+  const token = cookies.bmtt_teacher || "";
+  if (!token) return null;
+
   try {
-    const parsed = JSON.parse(raw);
-    const role = parsed.role;
-    const teacherId = parsed.teacher_id || parsed.teacherId;
-    if (!teacherId) return { ok: false, error: "Invalid session (missing teacherId)" };
-    return { ok: true, teacherId, role };
-  } catch (e) {
-    return { ok: false, error: "Invalid session cookie" };
+    const obj = JSON.parse(token);
+    const teacher_id = obj.teacher_id || obj.teacherId;
+    const role = obj.role || "teacher";
+    return teacher_id ? { teacher_id, role } : null;
+  } catch {
+    return null;
   }
 }
 
-async function teacherCanAccessStudent(teacherId, role, studentId) {
-  if (role === "admin") return { ok: true };
-
-  // find student's class_label
-  const { data: student, error: sErr } = await supabase
-    .from("students")
-    .select("id, class_label")
-    .eq("id", studentId)
-    .single();
-
-  if (sErr) return { ok: false, error: "Failed to load pupil", debug: sErr.message };
-  const classLabel = student?.class_label;
-
-  // map teacher_classes -> classes(class_label)
-  const { data, error } = await supabase
-    .from("teacher_classes")
-    .select("class_id, classes:class_id ( class_label )")
-    .eq("teacher_id", teacherId);
-
-  if (error) return { ok: false, error: "Permission check failed", debug: error.message };
-
-  const labels = (data || []).map((r) => r.classes?.class_label).filter(Boolean);
-  if (!labels.includes(classLabel)) return { ok: false, error: "Not allowed for this pupil" };
-
-  return { ok: true, class_label: classLabel };
-}
-
-function pickField(obj, keys) {
+// pull a value from a row using several possible key names
+function pick(row, keys) {
   for (const k of keys) {
-    if (obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
+    if (row && Object.prototype.hasOwnProperty.call(row, k)) return row[k];
   }
-  return null;
+  return undefined;
 }
 
 export default async function handler(req, res) {
   try {
-    const { ok, teacherId, role, error } = getTeacherFromCookie(req);
-    if (!ok) return res.status(401).json({ ok: false, error });
+    if (req.method !== "GET") {
+      return res.status(405).json({ ok: false, error: "Use GET" });
+    }
 
-    const studentId = String(req.query.student_id || "").trim();
-    if (!studentId) return res.status(400).json({ ok: false, error: "Missing student_id" });
+    const { student_id } = req.query;
+    if (!student_id) {
+      return res.status(400).json({ ok: false, error: "Missing student_id" });
+    }
 
-    // permission
-    const perm = await teacherCanAccessStudent(teacherId, role, studentId);
-    if (!perm.ok) return res.status(403).json({ ok: false, error: perm.error, debug: perm.debug });
+    const session = getTeacherFromCookie(req);
+    if (!session?.teacher_id) {
+      return res.status(401).json({ ok: false, error: "Not logged in" });
+    }
 
-    // attempts (most recent first)
-    const { data: attempts, error: aErr } = await supabase
+    // get student (for class_label + permissions)
+    const { data: student, error: stuErr } = await supabaseAdmin
+      .from("students")
+      .select("id, class_label")
+      .eq("id", student_id)
+      .single();
+
+    if (stuErr || !student) {
+      return res.status(404).json({ ok: false, error: "Pupil not found", debug: stuErr?.message });
+    }
+
+    // class lookup
+    const { data: cls, error: clsErr } = await supabaseAdmin
+      .from("classes")
+      .select("id, class_label")
+      .eq("class_label", student.class_label)
+      .single();
+
+    if (clsErr || !cls) {
+      return res.status(404).json({ ok: false, error: "Class not found" });
+    }
+
+    // permission check for teacher (admin sees all)
+    if (session.role !== "admin") {
+      const { data: link, error: linkErr } = await supabaseAdmin
+        .from("teacher_classes")
+        .select("teacher_id, class_id")
+        .eq("teacher_id", session.teacher_id)
+        .eq("class_id", cls.id)
+        .maybeSingle();
+
+      if (linkErr) {
+        return res.status(500).json({ ok: false, error: "Permission check failed", debug: linkErr.message });
+      }
+      if (!link) {
+        return res.status(403).json({ ok: false, error: "Not allowed for this pupil" });
+      }
+    }
+
+    // load most recent attempts for pupil
+    const { data: attempts, error: attErr } = await supabaseAdmin
       .from("attempts")
-      .select("id, created_at, student_id")
-      .eq("student_id", studentId)
+      .select("id, created_at")
+      .eq("student_id", student_id)
       .order("created_at", { ascending: false })
       .limit(8);
 
-    if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
-
-    const attemptIds = (attempts || []).map((a) => a.id);
-    if (attemptIds.length === 0) {
-      return res.json({ ok: true, student_id: studentId, attempts: [], rows: [] });
+    if (attErr) {
+      return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: attErr.message });
     }
 
-    // question records for these attempts
-    // (your table name might be question_records — if yours differs, tell me the exact table name and I’ll adjust)
-    const { data: qrs, error: qErr } = await supabase
+    const attemptIds = (attempts || []).map((a) => a.id);
+    if (!attemptIds.length) {
+      return res.json({
+        ok: true,
+        attempts: [],
+        tables: Array.from({ length: 19 }, (_, i) => i + 1),
+        matrix: {},
+      });
+    }
+
+    // pull ALL columns from question_records so we don’t crash on “missing column”
+    const { data: qrecs, error: qrErr } = await supabaseAdmin
       .from("question_records")
       .select("*")
       .in("attempt_id", attemptIds);
 
-    if (qErr) {
-      return res.status(500).json({ ok: false, error: "Failed to load question records", debug: qErr.message });
+    if (qrErr) {
+      return res.status(500).json({ ok: false, error: "Failed to load question records", debug: qrErr.message });
     }
 
-    // Build map: attempt_id -> tableNumber -> {correct,total}
-    const agg = {};
-    for (const qr of qrs || []) {
-      const attemptId = qr.attempt_id;
+    const tableKeys = ["table", "table_number", "times_table", "timesTable", "table_no", "table_num"];
+    const correctKeys = ["is_correct", "correct", "was_correct", "isCorrect"];
 
-      // flexible table field names
-      const tableVal = pickField(qr, ["table", "table_number", "times_table", "mult_table", "tt"]);
-      const t = Number(tableVal);
+    // matrix[table][attempt_id] = percent
+    const matrix = {};
+    for (let t = 1; t <= 19; t++) matrix[t] = {};
 
-      if (!t || Number.isNaN(t)) continue;
+    // counts per (attempt, table)
+    const counts = {}; // `${attemptId}:${table}` -> { total, correct }
 
-      // flexible correctness field names
-      const isCorrectRaw = pickField(qr, ["is_correct", "correct", "was_correct", "isCorrect"]);
-      const isCorrect =
-        isCorrectRaw === true ||
-        isCorrectRaw === 1 ||
-        isCorrectRaw === "true" ||
-        isCorrectRaw === "t";
+    (qrecs || []).forEach((r) => {
+      const attemptId = r.attempt_id;
 
-      if (!agg[attemptId]) agg[attemptId] = {};
-      if (!agg[attemptId][t]) agg[attemptId][t] = { correct: 0, total: 0 };
+      // try to derive table number
+      let table = pick(r, tableKeys);
 
-      agg[attemptId][t].total += 1;
-      if (isCorrect) agg[attemptId][t].correct += 1;
-    }
+      // some schemas store factors instead (fallback)
+      if (typeof table !== "number") {
+        const b = pick(r, ["b", "multiplier", "times", "table_value"]);
+        if (typeof b === "number") table = b;
+      }
 
-    // Output grid rows for tables 1..19
-    const attemptMeta = (attempts || []).map((a) => ({
-      id: a.id,
-      date: a.created_at,
-      label: new Date(a.created_at).toLocaleDateString("en-GB"),
-    }));
+      table = Number(table);
+      if (!Number.isFinite(table) || table < 1 || table > 19) return;
 
-    const rows = [];
-    for (let table = 1; table <= 19; table++) {
-      const cells = attemptMeta.map((a) => {
-        const bucket = agg[a.id]?.[table];
-        if (!bucket || bucket.total === 0) return null;
-        return Math.round((bucket.correct / bucket.total) * 100);
-      });
+      // try to derive correctness
+      let isCorrect = pick(r, correctKeys);
 
-      rows.push({ table, cells });
-    }
+      if (typeof isCorrect !== "boolean") {
+        // sometimes stores 0/1
+        if (isCorrect === 1) isCorrect = true;
+        else if (isCorrect === 0) isCorrect = false;
+      }
+
+      const key = `${attemptId}:${table}`;
+      if (!counts[key]) counts[key] = { total: 0, correct: 0 };
+      counts[key].total += 1;
+      if (isCorrect === true) counts[key].correct += 1;
+    });
+
+    // build %s
+    attemptIds.forEach((aid) => {
+      for (let t = 1; t <= 19; t++) {
+        const key = `${aid}:${t}`;
+        const c = counts[key];
+        if (!c || !c.total) continue;
+        const pct = Math.round((c.correct / c.total) * 100);
+        matrix[t][aid] = pct;
+      }
+    });
 
     return res.json({
       ok: true,
-      student_id: studentId,
-      attempts: attemptMeta,
-      rows,
+      attempts: (attempts || []).map((a) => ({ attempt_id: a.id, created_at: a.created_at })),
+      tables: Array.from({ length: 19 }, (_, i) => i + 1),
+      matrix,
     });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
 }
