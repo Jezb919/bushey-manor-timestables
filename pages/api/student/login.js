@@ -1,59 +1,49 @@
-import { createClient } from "@supabase/supabase-js";
-
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
-function makeCookie(name, value) {
-  // 30 days
-  const maxAge = 60 * 60 * 24 * 30;
-  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; SameSite=Lax`;
-}
+import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 
 export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ ok: false, error: "Use POST" });
+  }
+
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ ok: false, error: "Use POST" });
-    }
-
-    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-
-    const username = (body.username || "").trim();
-    const pin = (body.pin || "").trim();
-
+    const { username, pin } = req.body || {};
     if (!username || !pin) {
-      return res.status(400).json({ ok: false, error: "Missing username or pin" });
+      return res.status(400).json({ ok: false, error: "Missing username or PIN" });
     }
 
-    const { data: student, error } = await supabaseAdmin
+    // pin column in your table exists and may be stored as text or int
+    const pinValue = String(pin).trim();
+
+    const { data: pupil, error } = await supabaseAdmin
       .from("students")
-      .select("id, first_name, last_name, class_label, username, pin")
+      .select("id, first_name, last_name, username, pin, class_id, class_label")
       .eq("username", username)
-      .single();
+      .maybeSingle();
 
-    if (error || !student) {
+    if (error) {
+      return res.status(500).json({ ok: false, error: "DB error", debug: error.message });
+    }
+    if (!pupil) {
       return res.status(401).json({ ok: false, error: "Invalid login" });
     }
 
-    // PIN compare (stored as text or number)
-    const storedPin = String(student.pin ?? "");
-    if (storedPin !== String(pin)) {
+    const storedPin = pupil.pin === null || pupil.pin === undefined ? "" : String(pupil.pin);
+    if (storedPin !== pinValue) {
       return res.status(401).json({ ok: false, error: "Invalid login" });
     }
 
-    // Set cookie with student_id
-    const payload = JSON.stringify({
-      student_id: student.id,
-      username: student.username,
-      class_label: student.class_label,
-      first_name: student.first_name,
-      last_name: student.last_name,
-    });
+    const cookiePayload = {
+      studentId: pupil.id,
+      class_id: pupil.class_id,
+      class_label: pupil.class_label,
+      username: pupil.username,
+    };
 
-    res.setHeader("Set-Cookie", makeCookie("bmtt_student", payload));
+    res.setHeader("Set-Cookie", [
+      `bmtt_student=${encodeURIComponent(JSON.stringify(cookiePayload))}; Path=/; SameSite=Lax`,
+    ]);
 
-    return res.json({ ok: true, student: { ...student, pin: undefined } });
+    return res.json({ ok: true, pupil: { id: pupil.id, username: pupil.username } });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
   }
