@@ -5,12 +5,12 @@ export default function StudentLogin() {
   const [username, setUsername] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   async function onSubmit(e) {
     e.preventDefault();
     setError("");
-    setLoading(true);
+    setBusy(true);
 
     try {
       const r = await fetch("/api/student/login", {
@@ -22,51 +22,64 @@ export default function StudentLogin() {
       const data = await r.json();
       if (!data.ok) {
         setError(data.error || "Invalid login");
-        setLoading(false);
+        setBusy(false);
         return;
       }
 
-      // go to student start page (or tests page)
+      // Send them to student home (or tests page if you prefer)
       window.location.href = "/student";
-    } catch (e2) {
+    } catch (err) {
       setError("Login failed");
-      setLoading(false);
+      setBusy(false);
     }
   }
 
   return (
-    <div style={{ padding: 30, maxWidth: 520 }}>
+    <div style={{ padding: 30, maxWidth: 760 }}>
       <h1>Pupil login</h1>
 
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
-        <label>
-          Username
+      {error && <p style={{ color: "red" }}>{error}</p>}
+
+      <form onSubmit={onSubmit}>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: "block", marginBottom: 6 }}>Username</label>
           <input
             value={username}
             onChange={(e) => setUsername(e.target.value)}
-            style={{ width: "100%", padding: 10, fontSize: 16 }}
             placeholder="e.g. zacjx1"
+            style={{ width: "100%", padding: 12, fontSize: 16 }}
+            autoComplete="username"
           />
-        </label>
+        </div>
 
-        <label>
-          PIN
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: "block", marginBottom: 6 }}>PIN</label>
           <input
             value={pin}
-            onChange={(e) => setPin(e.target.value)}
-            style={{ width: "100%", padding: 10, fontSize: 16 }}
+            onChange={(e) =>
+              setPin(e.target.value.replace(/\D/g, "").slice(0, 4))
+            }
             placeholder="4 digits"
+            style={{ width: "100%", padding: 12, fontSize: 16 }}
+            inputMode="numeric"
+            autoComplete="one-time-code"
           />
-        </label>
+        </div>
 
-        <button disabled={loading} style={{ padding: 12, fontSize: 16 }}>
-          {loading ? "Logging in..." : "Log in"}
+        <button
+          disabled={busy}
+          style={{
+            width: "100%",
+            padding: 14,
+            fontSize: 18,
+            cursor: busy ? "not-allowed" : "pointer",
+          }}
+        >
+          {busy ? "Logging in..." : "Log in"}
         </button>
-
-        {error && <p style={{ color: "red" }}>{error}</p>}
       </form>
 
-      <p style={{ marginTop: 12 }}>
+      <p style={{ marginTop: 18 }}>
         <Link href="/">Back</Link>
       </p>
     </div>
