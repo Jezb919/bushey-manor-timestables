@@ -97,7 +97,8 @@ export default function ClassOverviewPage() {
               <tbody>
                 {pupils.map((p) => {
                   const rowBg = colourFor(p.latest);
-                  const link = `/teacher/admin/attainment-individual?student_id=${encodeURIComponent(p.id)}`;
+                  const link = `/teacher/pupil/${encodeURIComponent(p.id)}`;
+
 
                   return (
                     <tr
