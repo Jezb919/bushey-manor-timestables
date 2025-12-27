@@ -14,7 +14,6 @@ export default function AdminPupilsPage() {
   const [err, setErr] = useState("");
   const [newCreds, setNewCreds] = useState(null);
 
-  // --------- helpers ----------
   async function safeJson(res) {
     const text = await res.text();
     try {
@@ -29,7 +28,6 @@ export default function AdminPupilsPage() {
     setMsg("");
     setNewCreds(null);
 
-    // 1) Prefer admin list endpoint if you have it
     try {
       const r = await fetch(`/api/admin/pupils/list?class_label=${encodeURIComponent(class_label)}`);
       const j = await safeJson(r);
@@ -37,7 +35,6 @@ export default function AdminPupilsPage() {
       setPupils(j.pupils || []);
       return;
     } catch {
-      // 2) Fallback: teacher students endpoint
       const r2 = await fetch("/api/teacher/students");
       const j2 = await safeJson(r2);
       if (!j2.ok) throw new Error(j2.error || "Failed to load pupils");
@@ -46,7 +43,6 @@ export default function AdminPupilsPage() {
     }
   }
 
-  // --------- load me + classes ----------
   useEffect(() => {
     (async () => {
       setErr("");
@@ -55,7 +51,6 @@ export default function AdminPupilsPage() {
         const r = await fetch("/api/teacher/me");
         const j = await safeJson(r);
 
-        // ✅ If not logged in OR user missing, go login
         if (!j.ok || !j.user) {
           window.location.href = "/teacher/login";
           return;
@@ -78,7 +73,6 @@ export default function AdminPupilsPage() {
         const defaultLabel = cls[0]?.class_label || "M4";
         setSelectedClass(defaultLabel);
 
-        // load pupils list
         await loadPupils(defaultLabel);
       } catch (e) {
         setErr(String(e.message || e));
@@ -87,7 +81,6 @@ export default function AdminPupilsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --------- change class ----------
   async function onChangeClass(e) {
     const v = e.target.value;
     setSelectedClass(v);
@@ -98,13 +91,11 @@ export default function AdminPupilsPage() {
     }
   }
 
-  // --------- logout ----------
   async function logout() {
     await fetch("/api/teacher/logout", { method: "POST" });
     window.location.href = "/teacher/login";
   }
 
-  // --------- add pupil ----------
   async function addPupil() {
     setErr("");
     setMsg("");
@@ -115,11 +106,7 @@ export default function AdminPupilsPage() {
       if (!firstName.trim()) throw new Error("Enter first name");
       if (!surname.trim()) throw new Error("Enter surname");
 
-      const body = {
-        class_label: selectedClass, // ✅ IMPORTANT
-        first_name: firstName,
-        surname: surname,
-      };
+      const body = { class_label: selectedClass, first_name: firstName, surname };
 
       const r = await fetch("/api/admin/pupils/create", {
         method: "POST",
@@ -136,6 +123,32 @@ export default function AdminPupilsPage() {
       setFirstName("");
       setSurname("");
 
+      await loadPupils(selectedClass);
+    } catch (e) {
+      setErr(String(e.message || e));
+    }
+  }
+
+  async function deletePupil(pupil) {
+    setErr("");
+    setMsg("");
+    setNewCreds(null);
+
+    const name = `${pupil.first_name || ""} ${pupil.surname || ""}`.trim() || "this pupil";
+    const ok = confirm(`Delete ${name}?\n\nThis will also delete their attempts.`);
+    if (!ok) return;
+
+    try {
+      const r = await fetch("/api/admin/pupils/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pupil_id: pupil.id }),
+      });
+
+      const j = await safeJson(r);
+      if (!j.ok) throw new Error(j.error || "Failed to delete pupil");
+
+      setMsg(`Deleted ${name} ✅`);
       await loadPupils(selectedClass);
     } catch (e) {
       setErr(String(e.message || e));
@@ -174,38 +187,17 @@ export default function AdminPupilsPage() {
             ))}
           </select>
 
-          <input
-            style={input}
-            placeholder="First name"
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
-          />
+          <input style={input} placeholder="First name" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
+          <input style={input} placeholder="Surname" value={surname} onChange={(e) => setSurname(e.target.value)} />
 
-          <input
-            style={input}
-            placeholder="Surname"
-            value={surname}
-            onChange={(e) => setSurname(e.target.value)}
-          />
-
-          <button onClick={addPupil} style={btnPrimary}>
-            Add pupil
-          </button>
-        </div>
-
-        <div style={{ marginTop: 10, opacity: 0.7, fontSize: 13 }}>
-          After creating a pupil, you’ll see their username + temporary password (copy it straight away).
+          <button onClick={addPupil} style={btnPrimary}>Add pupil</button>
         </div>
 
         {newCreds && (
           <div style={credsBox}>
             <div style={{ fontWeight: 900, marginBottom: 6 }}>New pupil login</div>
-            <div>
-              <b>Username:</b> {newCreds.username}
-            </div>
-            <div>
-              <b>Temp password:</b> {newCreds.tempPassword}
-            </div>
+            <div><b>Username:</b> {newCreds.username}</div>
+            <div><b>Temp password:</b> {newCreds.tempPassword}</div>
           </div>
         )}
       </div>
@@ -229,11 +221,11 @@ export default function AdminPupilsPage() {
                   <td style={td}>{name}</td>
                   <td style={td}>{p.username || "—"}</td>
                   <td style={td}>
-                    <button
-                      style={btnSmall}
-                      onClick={() => (window.location.href = `/teacher/admin/pupil/${p.id}`)}
-                    >
+                    <button style={btnSmall} onClick={() => (window.location.href = `/teacher/admin/pupil/${p.id}`)}>
                       Manage
+                    </button>{" "}
+                    <button style={btnDanger} onClick={() => deletePupil(p)}>
+                      Delete
                     </button>
                   </td>
                 </tr>
@@ -242,17 +234,11 @@ export default function AdminPupilsPage() {
 
             {!pupils.length && (
               <tr>
-                <td style={td} colSpan={3}>
-                  No pupils found.
-                </td>
+                <td style={td} colSpan={3}>No pupils found.</td>
               </tr>
             )}
           </tbody>
         </table>
-
-        <div style={{ marginTop: 10, opacity: 0.7, fontSize: 13 }}>
-          Note: older pupils show “null” surname until you add surnames to their records.
-        </div>
       </div>
     </div>
   );
@@ -273,6 +259,7 @@ const input = { padding: 10, borderRadius: 10, border: "1px solid rgba(0,0,0,0.2
 const btn = { padding: "10px 14px", borderRadius: 12, border: "1px solid rgba(0,0,0,0.2)", background: "white", fontWeight: 900 };
 const btnPrimary = { ...btn, background: "#0f172a", color: "white", border: "1px solid #0f172a" };
 const btnSmall = { padding: "8px 10px", borderRadius: 10, border: "1px solid rgba(0,0,0,0.2)", background: "white", fontWeight: 900 };
+const btnDanger = { padding: "8px 10px", borderRadius: 10, border: "1px solid #991b1b", background: "#fee2e2", color: "#991b1b", fontWeight: 900, cursor: "pointer" };
 const errorBox = { marginTop: 14, padding: 10, borderRadius: 10, background: "#fee2e2", color: "#991b1b", fontWeight: 900 };
 const okBox = { marginTop: 14, padding: 10, borderRadius: 10, background: "#dcfce7", color: "#166534", fontWeight: 900 };
 const credsBox = { marginTop: 12, padding: 12, borderRadius: 12, background: "#fff7ed", border: "1px solid #fed7aa" };
