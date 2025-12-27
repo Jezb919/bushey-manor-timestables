@@ -5,183 +5,163 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-function parseCookies(req) {
+function parseTeacherCookie(req) {
   const raw = req.headers.cookie || "";
-  const out = {};
-  raw.split(";").forEach((part) => {
-    const [k, ...v] = part.trim().split("=");
-    if (!k) return;
-    out[k] = decodeURIComponent(v.join("=") || "");
-  });
-  return out;
-}
+  const match = raw.split(";").map(s => s.trim()).find(s => s.startsWith("bmtt_teacher="));
+  if (!match) return null;
 
-function getTeacherFromCookie(req) {
-  const cookies = parseCookies(req);
-  const token = cookies.bmtt_teacher || "";
-  if (!token) return null;
-
+  const val = decodeURIComponent(match.split("=").slice(1).join("="));
   try {
-    const obj = JSON.parse(token);
-    const teacher_id = obj.teacher_id || obj.teacherId;
-    const role = obj.role || "teacher";
-    return teacher_id ? { teacher_id, role } : null;
+    const obj = JSON.parse(val);
+    return {
+      teacher_id: obj.teacher_id || obj.teacherId,
+      role: obj.role
+    };
   } catch {
     return null;
   }
 }
 
-// pull a value from a row using several possible key names
-function pick(row, keys) {
-  for (const k of keys) {
-    if (row && Object.prototype.hasOwnProperty.call(row, k)) return row[k];
-  }
-  return undefined;
+function guessTableNumber(r) {
+  return (
+    r.table ??
+    r.table_number ??
+    r.times_table ??
+    r.timestable ??
+    r.multiplier ??
+    r.tableValue ??
+    null
+  );
+}
+
+function guessCorrect(r) {
+  const v = r.is_correct ?? r.correct ?? r.was_correct ?? r.isCorrect ?? null;
+  if (v === null || v === undefined) return null;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1;
+  if (typeof v === "string") return v.toLowerCase() === "true" || v === "1" || v.toLowerCase() === "yes";
+  return null;
 }
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== "GET") {
-      return res.status(405).json({ ok: false, error: "Use GET" });
-    }
-
-    const { student_id } = req.query;
-    if (!student_id) {
-      return res.status(400).json({ ok: false, error: "Missing student_id" });
-    }
-
-    const session = getTeacherFromCookie(req);
+    const session = parseTeacherCookie(req);
     if (!session?.teacher_id) {
       return res.status(401).json({ ok: false, error: "Not logged in" });
     }
 
-    // get student (for class_label + permissions)
-    const { data: student, error: stuErr } = await supabaseAdmin
+    const { student_id, debug } = req.query;
+    if (!student_id) {
+      return res.status(400).json({ ok: false, error: "Missing student_id" });
+    }
+
+    // Load pupil
+    const { data: pupil, error: pupilErr } = await supabaseAdmin
       .from("students")
-      .select("id, class_label")
+      .select("id, first_name, last_name, username, class_id, class_label")
       .eq("id", student_id)
       .single();
 
-    if (stuErr || !student) {
-      return res.status(404).json({ ok: false, error: "Pupil not found", debug: stuErr?.message });
+    if (pupilErr || !pupil) {
+      return res.status(404).json({ ok: false, error: "Pupil not found", debug: pupilErr?.message });
     }
 
-    // class lookup
-    const { data: cls, error: clsErr } = await supabaseAdmin
-      .from("classes")
-      .select("id, class_label")
-      .eq("class_label", student.class_label)
-      .single();
-
-    if (clsErr || !cls) {
-      return res.status(404).json({ ok: false, error: "Class not found" });
-    }
-
-    // permission check for teacher (admin sees all)
+    // Permission check
     if (session.role !== "admin") {
+      let classId = pupil.class_id;
+
+      if (!classId && pupil.class_label) {
+        const { data: cls } = await supabaseAdmin
+          .from("classes")
+          .select("id")
+          .eq("class_label", pupil.class_label)
+          .maybeSingle();
+        classId = cls?.id || null;
+      }
+
       const { data: link, error: linkErr } = await supabaseAdmin
         .from("teacher_classes")
         .select("teacher_id, class_id")
         .eq("teacher_id", session.teacher_id)
-        .eq("class_id", cls.id)
+        .eq("class_id", classId)
         .maybeSingle();
 
       if (linkErr) {
         return res.status(500).json({ ok: false, error: "Permission check failed", debug: linkErr.message });
       }
       if (!link) {
-        return res.status(403).json({ ok: false, error: "Not allowed for this pupil" });
+        return res.status(403).json({ ok: false, error: "Not allowed for this class" });
       }
     }
 
-    // load most recent attempts for pupil
+    // Get recent attempts
     const { data: attempts, error: attErr } = await supabaseAdmin
       .from("attempts")
-      .select("id, created_at")
+      .select("*")
       .eq("student_id", student_id)
       .order("created_at", { ascending: false })
-      .limit(8);
+      .limit(6);
 
     if (attErr) {
       return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: attErr.message });
     }
 
-    const attemptIds = (attempts || []).map((a) => a.id);
-    if (!attemptIds.length) {
-      return res.json({
-        ok: true,
-        attempts: [],
-        tables: Array.from({ length: 19 }, (_, i) => i + 1),
-        matrix: {},
-      });
+    if (!attempts || attempts.length === 0) {
+      return res.json({ ok: true, heatmap: null, note: "No attempts yet" });
     }
 
-    // pull ALL columns from question_records so we don’t crash on “missing column”
-    const { data: qrecs, error: qrErr } = await supabaseAdmin
+    const attemptIds = attempts.map(a => a.id);
+
+    // Pull question records (we select * to avoid “missing column” issues)
+    const { data: records, error: recErr } = await supabaseAdmin
       .from("question_records")
       .select("*")
       .in("attempt_id", attemptIds);
 
-    if (qrErr) {
-      return res.status(500).json({ ok: false, error: "Failed to load question records", debug: qrErr.message });
+    if (recErr) {
+      return res.status(500).json({ ok: false, error: "Failed to load question records", debug: recErr.message });
     }
 
-    const tableKeys = ["table", "table_number", "times_table", "timesTable", "table_no", "table_num"];
-    const correctKeys = ["is_correct", "correct", "was_correct", "isCorrect"];
+    // Build heatmap: rows 1–19, columns by attempt date
+    const cols = attempts.map(a => new Date(a.created_at).toLocaleDateString("en-GB"));
 
-    // matrix[table][attempt_id] = percent
-    const matrix = {};
-    for (let t = 1; t <= 19; t++) matrix[t] = {};
+    // stats[table][colIndex] = { correct, total }
+    const stats = {};
+    for (let t = 1; t <= 19; t++) stats[t] = cols.map(() => ({ correct: 0, total: 0 }));
 
-    // counts per (attempt, table)
-    const counts = {}; // `${attemptId}:${table}` -> { total, correct }
+    // Map attempt_id -> column index
+    const colIndexByAttempt = new Map();
+    attempts.forEach((a, idx) => colIndexByAttempt.set(a.id, idx));
 
-    (qrecs || []).forEach((r) => {
-      const attemptId = r.attempt_id;
+    for (const r of records || []) {
+      const idx = colIndexByAttempt.get(r.attempt_id);
+      if (idx === undefined) continue;
 
-      // try to derive table number
-      let table = pick(r, tableKeys);
+      const t = Number(guessTableNumber(r));
+      if (!t || t < 1 || t > 19) continue;
 
-      // some schemas store factors instead (fallback)
-      if (typeof table !== "number") {
-        const b = pick(r, ["b", "multiplier", "times", "table_value"]);
-        if (typeof b === "number") table = b;
-      }
+      const c = guessCorrect(r);
+      if (c === null) continue;
 
-      table = Number(table);
-      if (!Number.isFinite(table) || table < 1 || table > 19) return;
+      stats[t][idx].total += 1;
+      if (c) stats[t][idx].correct += 1;
+    }
 
-      // try to derive correctness
-      let isCorrect = pick(r, correctKeys);
+    const rows = [];
+    for (let t = 1; t <= 19; t++) {
+      const cells = stats[t].map(s => {
+        if (!s.total) return { score: null };
+        return { score: Math.round((s.correct / s.total) * 100) };
+      });
+      rows.push({ table: t, cells });
+    }
 
-      if (typeof isCorrect !== "boolean") {
-        // sometimes stores 0/1
-        if (isCorrect === 1) isCorrect = true;
-        else if (isCorrect === 0) isCorrect = false;
-      }
-
-      const key = `${attemptId}:${table}`;
-      if (!counts[key]) counts[key] = { total: 0, correct: 0 };
-      counts[key].total += 1;
-      if (isCorrect === true) counts[key].correct += 1;
-    });
-
-    // build %s
-    attemptIds.forEach((aid) => {
-      for (let t = 1; t <= 19; t++) {
-        const key = `${aid}:${t}`;
-        const c = counts[key];
-        if (!c || !c.total) continue;
-        const pct = Math.round((c.correct / c.total) * 100);
-        matrix[t][aid] = pct;
-      }
-    });
+    const heatmap = { columns: cols, rows };
 
     return res.json({
       ok: true,
-      attempts: (attempts || []).map((a) => ({ attempt_id: a.id, created_at: a.created_at })),
-      tables: Array.from({ length: 19 }, (_, i) => i + 1),
-      matrix,
+      heatmap,
+      ...(debug ? { debug: { attemptIds, recordCount: (records || []).length } } : {})
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
