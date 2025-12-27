@@ -1,249 +1,271 @@
-// pages/api/teacher/pupil_heatmap.js
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
+const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-function getSession(req) {
-  const raw = req.cookies?.bmtt_teacher;
-  if (!raw) return null;
+// Reads bmtt_teacher cookie and returns { teacher_id, role }
+function getTeacherFromCookie(req) {
+  const cookie = req.headers.cookie || "";
+  const match = cookie.match(/bmtt_teacher=([^;]+)/);
+  if (!match) return null;
+
   try {
-    const p = JSON.parse(raw);
-    return {
-      teacher_id: p.teacherId || p.teacher_id || null,
-      role: p.role || null,
-    };
+    const raw = decodeURIComponent(match[1]);
+    const parsed = JSON.parse(raw);
+
+    // Your cookie sometimes has teacherId and sometimes teacher_id
+    const teacher_id = parsed.teacher_id || parsed.teacherId;
+    const role = parsed.role;
+
+    if (!teacher_id || !role) return null;
+    return { teacher_id, role };
   } catch {
     return null;
   }
 }
 
-function safeNum(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : null;
-}
-
-function guessIsCorrect(row) {
-  const boolFields = [
-    "is_correct",
-    "isCorrect",
-    "correct",
-    "was_correct",
-    "wasCorrect",
-    "right",
-    "is_right",
-  ];
-
-  for (const f of boolFields) {
-    if (typeof row[f] === "boolean") return row[f];
-    if (row[f] === 1 || row[f] === 0) return !!row[f];
-    if (row[f] === "true" || row[f] === "false") return row[f] === "true";
-  }
-
-  const scoreFields = ["score", "question_score", "mark"];
-  for (const f of scoreFields) {
-    const v = safeNum(row[f]);
-    if (v === 1) return true;
-    if (v === 0) return false;
-  }
-
-  const a = safeNum(row.answer ?? row.correct_answer ?? row.expected_answer);
-  const u = safeNum(row.user_answer ?? row.given_answer ?? row.response_answer);
-  if (a !== null && u !== null) return a === u;
-
-  return null;
-}
-
-function guessTable(row) {
-  const directFields = [
-    "table",
-    "table_number",
-    "tableNumber",
-    "times_table",
-    "timesTable",
-    "table_base",
-    "base_table",
-  ];
-  for (const f of directFields) {
-    const t = safeNum(row[f]);
-    if (t !== null) return t;
-  }
-
-  const a = safeNum(row.multiplicand ?? row.a ?? row.left ?? row.first ?? row.num1);
-  const b = safeNum(row.multiplier ?? row.b ?? row.right ?? row.second ?? row.num2);
-
-  if (a !== null) return a;
-  if (b !== null) return b;
-
-  const q = String(row.question ?? row.prompt ?? row.text ?? row.expression ?? "").trim();
-  const m = q.match(/(\d+)\s*[x×]\s*(\d+)/i);
-  if (m) return safeNum(m[1]);
-
-  return null;
+function isUuid(v) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    String(v || "")
+  );
 }
 
 export default async function handler(req, res) {
   try {
-    const session = getSession(req);
+    if (req.method !== "GET") {
+      return res.status(405).json({ ok: false, error: "Use GET" });
+    }
+
+    const { student_id, debug } = req.query;
+
+    if (!student_id) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing student_id",
+        example: "/api/teacher/pupil_heatmap?student_id=PASTE_UUID_HERE",
+      });
+    }
+
+    if (!isUuid(student_id)) {
+      return res.status(400).json({
+        ok: false,
+        error: "student_id must be a UUID (it looks wrong / stuck together)",
+        received: String(student_id),
+        tip: "If you see two UUIDs joined together, your page is building the URL incorrectly (needs fixing).",
+      });
+    }
+
+    const session = getTeacherFromCookie(req);
     if (!session?.teacher_id) {
       return res.status(401).json({ ok: false, error: "Not logged in" });
     }
 
-    const pupil_id = String(req.query.pupil_id || "").trim();
-    if (!pupil_id) {
-      return res.status(400).json({ ok: false, error: "Missing pupil_id" });
-    }
-
-    const debug = String(req.query.debug || "") === "1";
-    const limit = Math.min(Math.max(Number(req.query.limit || 20), 6), 40);
-    const maxTable = Math.min(Math.max(Number(req.query.max_table || 19), 6), 19);
-
-    // Load pupil
-    const { data: pupil, error: pErr } = await supabase
+    // 1) Load the student (so we know their class_label)
+    const { data: pupil, error: pupilErr } = await supabaseAdmin
       .from("students")
-      .select("id, class_label")
-      .eq("id", pupil_id)
-      .maybeSingle();
+      .select("id, first_name, surname, class_label, class_id")
+      .eq("id", student_id)
+      .single();
 
-    if (pErr) {
-      return res.status(500).json({ ok: false, error: "Failed to load pupil", debug: pErr.message });
+    if (pupilErr || !pupil) {
+      return res.status(404).json({
+        ok: false,
+        error: "Failed to load pupil",
+        debug: pupilErr?.message || "Not found",
+      });
     }
-    if (!pupil) return res.status(404).json({ ok: false, error: "Pupil not found" });
 
-    // Permission: admin sees all, teacher only their class
+    // 2) Permission:
+    // - admin can see all
+    // - teacher must be mapped to this class_id in teacher_classes
     if (session.role !== "admin") {
-      const { data: link, error: linkErr } = await supabase
+      // We support both styles:
+      // A) teacher_classes uses class_id
+      // B) if your data is still label-based, you can change to class_label (but your earlier error suggests class_id is correct)
+      const classId = pupil.class_id;
+
+      if (!classId || !isUuid(classId)) {
+        return res.status(500).json({
+          ok: false,
+          error: "Pupil class_id missing (students.class_id not set)",
+          debug: { student_id, class_id: classId, class_label: pupil.class_label },
+        });
+      }
+
+      const { data: link, error: linkErr } = await supabaseAdmin
         .from("teacher_classes")
-        .select("teacher_id, class_label")
+        .select("teacher_id, class_id")
         .eq("teacher_id", session.teacher_id)
-        .eq("class_label", pupil.class_label)
+        .eq("class_id", classId)
         .maybeSingle();
 
       if (linkErr) {
-        // Fallback join
-        const { data: links2, error: linkErr2 } = await supabase
-          .from("teacher_classes")
-          .select("class_id, classes:class_id(class_label)")
-          .eq("teacher_id", session.teacher_id);
+        return res.status(500).json({
+          ok: false,
+          error: "Permission check failed",
+          debug: linkErr.message,
+        });
+      }
 
-        if (linkErr2) {
-          return res.status(403).json({ ok: false, error: "Permission check failed", debug: linkErr2.message });
-        }
-        const allowed = (links2 || []).some((r) => r.classes?.class_label === pupil.class_label);
-        if (!allowed) return res.status(403).json({ ok: false, error: "Not allowed" });
-      } else {
-        if (!link) return res.status(403).json({ ok: false, error: "Not allowed" });
+      if (!link) {
+        return res.status(403).json({
+          ok: false,
+          error: "Not allowed for this pupil",
+          debug: {
+            teacher_id: session.teacher_id,
+            role: session.role,
+            pupil_class_id: classId,
+          },
+        });
       }
     }
 
-    // Latest attempts
-    const { data: attempts, error: aErr } = await supabase
+    // 3) Get the most recent attempts for this student (latest first)
+    // NOTE: your attempts table name is "attempts"
+    // We assume it has: student_id, created_at, score (or percent)
+    const { data: attempts, error: attErr } = await supabaseAdmin
       .from("attempts")
-      .select("id, created_at")
-      .eq("student_id", pupil_id)
+      .select("id, created_at, score, percent, percentage")
+      .eq("student_id", student_id)
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .limit(8);
 
-    if (aErr) {
-      return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
-    }
-
-    const cols = (attempts || []).map((a) => ({ attempt_id: a.id, date: a.created_at }));
-
-    if (!cols.length) {
-      return res.json({
-        ok: true,
-        columns: [],
-        rows: Array.from({ length: maxTable }, (_, i) => i + 1),
-        grid: [],
-        note: "No attempts yet",
+    if (attErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load attempts",
+        debug: attErr.message,
       });
     }
 
-    const attemptIds = cols.map((c) => c.attempt_id);
+    // No attempts yet? Return an empty heatmap but still ok=true
+    if (!attempts || attempts.length === 0) {
+      return res.json({
+        ok: true,
+        pupil: {
+          id: pupil.id,
+          first_name: pupil.first_name,
+          surname: pupil.surname,
+          class_label: pupil.class_label,
+        },
+        columns: [],
+        rows: Array.from({ length: 19 }, (_, i) => ({
+          table: i + 1,
+          cells: [],
+        })),
+        note: "No attempts yet for this pupil",
+      });
+    }
 
-    // Question records
-    const { data: qrecs, error: qErr } = await supabase
+    // 4) Load question_records for those attempts
+    // We assume question_records has: attempt_id, table_number (or table), is_correct (or correct)
+    const attemptIds = attempts.map((a) => a.id);
+
+    const { data: qr, error: qrErr } = await supabaseAdmin
       .from("question_records")
-      .select("*")
+      .select("attempt_id, table_number, table, is_correct, correct")
       .in("attempt_id", attemptIds);
 
-    if (qErr) {
+    if (qrErr) {
       return res.status(500).json({
         ok: false,
         error: "Failed to load question records",
-        debug: qErr.message,
+        debug: qrErr.message,
       });
     }
 
-    // stats[table][attempt_id] = { correct, total }
-    const stats = {};
-    for (let t = 1; t <= maxTable; t++) stats[t] = {};
+    // 5) Build columns (attempts) oldest->newest for left-to-right display
+    const columns = [...attempts]
+      .reverse()
+      .map((a) => ({
+        attempt_id: a.id,
+        date: a.created_at,
+      }));
 
-    let parsed = { rows: 0, withAttempt: 0, withTable: 0, withCorrect: 0, used: 0 };
-    let sampleKeys = null;
-
-    for (const r of qrecs || []) {
-      parsed.rows += 1;
-      if (!sampleKeys) sampleKeys = Object.keys(r || {}).slice(0, 60);
-
-      const attempt_id = r.attempt_id;
-      if (!attempt_id) continue;
-      parsed.withAttempt += 1;
-
-      const table = guessTable(r);
-      if (!table || table < 1 || table > maxTable) continue;
-      parsed.withTable += 1;
-
-      const isCorrect = guessIsCorrect(r);
-      if (isCorrect === null) continue;
-      parsed.withCorrect += 1;
-
-      if (!stats[table][attempt_id]) stats[table][attempt_id] = { correct: 0, total: 0 };
-      stats[table][attempt_id].total += 1;
-      if (isCorrect) stats[table][attempt_id].correct += 1;
-
-      parsed.used += 1;
+    // Helper to read score value if present
+    function getAttemptScore(a) {
+      const v =
+        a.percent ??
+        a.percentage ??
+        a.score ??
+        null;
+      if (v === null || v === undefined) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
     }
 
-    const rows = Array.from({ length: maxTable }, (_, i) => i + 1);
+    // 6) For each attempt + each table (1..19), compute success %
+    // We compute from question_records (count correct / total for that table)
+    const byAttempt = new Map(); // attempt_id -> rows
+    for (const a of columns) byAttempt.set(a.attempt_id, []);
 
-    const grid = rows.map((t) =>
-      cols.map((c) => {
-        const cell = stats[t][c.attempt_id];
-        if (!cell || !cell.total) return null;
-        const pct = Math.round((cell.correct / cell.total) * 100);
-        return { pct, correct: cell.correct, total: cell.total };
-      })
-    );
+    for (const rec of qr || []) {
+      const attempt_id = rec.attempt_id;
+      const t = Number(rec.table_number ?? rec.table);
+      if (!attempt_id || !Number.isFinite(t)) continue;
 
-    // ✅ SAFEST output shape: columns is ONLY {attempt_id,label}
-    // ✅ label includes time so multiple attempts on same day are unique
-    const columns = cols.map((c) => {
-      const d = new Date(c.date);
-      const date = d.toLocaleDateString("en-GB");
-      const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-      return {
-        attempt_id: c.attempt_id,
-        label: `${date} ${time}`,
-      };
+      const isCorrect =
+        rec.is_correct === true ||
+        rec.correct === true ||
+        rec.is_correct === "true" ||
+        rec.correct === "true";
+
+      byAttempt.get(attempt_id)?.push({
+        table: t,
+        correct: isCorrect,
+      });
+    }
+
+    const rows = [];
+    for (let table = 1; table <= 19; table++) {
+      const cells = [];
+
+      for (const col of columns) {
+        const list = byAttempt.get(col.attempt_id) || [];
+        const forTable = list.filter((x) => x.table === table);
+        if (forTable.length === 0) {
+          cells.push(null); // no questions of that table in that attempt
+          continue;
+        }
+        const total = forTable.length;
+        const correct = forTable.filter((x) => x.correct).length;
+        const pct = Math.round((correct / total) * 100);
+        cells.push(pct);
+      }
+
+      rows.push({ table, cells });
+    }
+
+    return res.json({
+      ok: true,
+      pupil: {
+        id: pupil.id,
+        first_name: pupil.first_name,
+        surname: pupil.surname,
+        class_label: pupil.class_label,
+      },
+      columns,
+      rows,
+      debug: debug
+        ? {
+            teacher: session,
+            attempt_scores: attempts.map((a) => ({
+              id: a.id,
+              created_at: a.created_at,
+              score_guess: getAttemptScore(a),
+            })),
+            attempts_count: attempts.length,
+            question_records_count: (qr || []).length,
+          }
+        : undefined,
     });
-
-    const resp = { ok: true, columns, rows, grid };
-
-    if (debug) {
-      resp.debug = {
-        attempts_returned: cols.length,
-        question_records_returned: (qrecs || []).length,
-        parsed,
-        sample_question_record_keys: sampleKeys,
-      };
-    }
-
-    return res.json(resp);
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
+    return res.status(500).json({
+      ok: false,
+      error: "Server error",
+      debug: String(e),
+    });
   }
 }
