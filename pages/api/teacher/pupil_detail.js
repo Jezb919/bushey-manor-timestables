@@ -1,133 +1,222 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
+const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-function getSession(req) {
+function getTeacherFromCookie(req) {
   const raw = req.cookies?.bmtt_teacher;
   if (!raw) return null;
   try {
-    const p = JSON.parse(raw);
-    return { teacher_id: p.teacherId || p.teacher_id || null, role: p.role || null };
+    const obj = JSON.parse(raw);
+    return {
+      teacher_id: obj.teacher_id || obj.teacherId || obj.id || null,
+      role: obj.role || null,
+      email: obj.email || null,
+      full_name: obj.full_name || obj.fullName || null,
+    };
   } catch {
     return null;
   }
 }
 
-// ✅ Extract first UUID from any string
-function firstUuid(str) {
-  const m = String(str || "").match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
-  return m ? m[0] : null;
-}
+function extractTableNumber(record) {
+  // Try common column names first
+  const candidates = [
+    record.table_number,
+    record.table,
+    record.table_times,
+    record.times_table,
+    record.tableValue,
+  ];
+  for (const c of candidates) {
+    const n = Number(c);
+    if (Number.isFinite(n) && n >= 1 && n <= 19) return n;
+  }
 
-function pctFromAttempt(a) {
-  const direct = a.score ?? a.score_percent ?? a.percentage ?? a.percent ?? a.score_pct ?? null;
-  if (direct !== null && direct !== undefined) {
-    const n = Number(direct);
-    return Number.isFinite(n) ? Math.round(n) : null;
+  // Try parsing a question string like "7 x 8" or "7×8"
+  const q = record.question || record.prompt || record.q || "";
+  if (typeof q === "string" && q.length) {
+    const m = q.match(/(\d+)\s*[x×]\s*(\d+)/i);
+    if (m) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      // Usually the "table" is the first number (7x8 is 7-times table)
+      if (Number.isFinite(a) && a >= 1 && a <= 19) return a;
+      if (Number.isFinite(b) && b >= 1 && b <= 19) return b;
+    }
   }
-  const correct = a.correct ?? a.num_correct ?? a.correct_count ?? null;
-  const total = a.total ?? a.num_questions ?? a.question_count ?? a.total_questions ?? a.questions_total ?? null;
-  if (correct !== null && total) {
-    const n = Math.round((Number(correct) / Number(total)) * 100);
-    return Number.isFinite(n) ? n : null;
-  }
+
   return null;
 }
 
-function tablesFromAttempt(a) {
-  const t = a.tables_selected ?? a.tables_included ?? a.tables ?? a.tables_list ?? null;
-  if (Array.isArray(t)) return t;
-  if (typeof t === "string") {
-    return t
-      .replace(/[{}\[\]]/g, "")
-      .split(",")
-      .map((x) => Number(x.trim()))
-      .filter((n) => Number.isFinite(n));
-  }
-  return [];
+function isCorrect(record) {
+  // Common booleans
+  if (typeof record.is_correct === "boolean") return record.is_correct;
+  if (typeof record.correct === "boolean") return record.correct;
+
+  // Sometimes stored as 0/1 or "true"/"false"
+  if (record.is_correct === 1 || record.correct === 1) return true;
+  if (record.is_correct === 0 || record.correct === 0) return false;
+
+  if (record.is_correct === "true" || record.correct === "true") return true;
+  if (record.is_correct === "false" || record.correct === "false") return false;
+
+  // Try comparing answers if present
+  const ua = record.user_answer ?? record.answer ?? record.given_answer;
+  const ca = record.correct_answer ?? record.expected_answer;
+  if (ua != null && ca != null) return String(ua).trim() === String(ca).trim();
+
+  return null;
 }
 
 export default async function handler(req, res) {
   try {
-    const session = getSession(req);
-    if (!session?.teacher_id) return res.status(401).json({ ok: false, error: "Not logged in" });
+    const { student_id, debug } = req.query;
 
-    const rawId = req.query.pupil_id;
-    const pupil_id = firstUuid(rawId);
-    if (!pupil_id) return res.status(400).json({ ok: false, error: "Missing/invalid pupil_id", debug: String(rawId) });
+    if (!student_id) {
+      return res.status(400).json({ ok: false, error: "Missing student_id" });
+    }
 
-    const { data: pupil, error: pErr } = await supabase
+    const me = getTeacherFromCookie(req);
+    if (!me?.teacher_id) {
+      return res.status(401).json({ ok: false, error: "Not logged in" });
+    }
+
+    // 1) Load the pupil
+    const { data: pupil, error: pupilErr } = await supabaseAdmin
       .from("students")
-      .select("id, first_name, surname, class_label")
-      .eq("id", pupil_id)
-      .maybeSingle();
+      .select("*")
+      .eq("id", student_id)
+      .single();
 
-    if (pErr) return res.status(500).json({ ok: false, error: "Failed to load pupil", debug: pErr.message });
-    if (!pupil) return res.status(404).json({ ok: false, error: "Pupil not found" });
+    if (pupilErr || !pupil) {
+      return res.status(404).json({ ok: false, error: "Pupil not found", debug: pupilErr?.message });
+    }
 
-    // Permission: admin can see all. teacher can only see their classes.
-    if (session.role !== "admin") {
-      const { data: link, error: linkErr } = await supabase
+    // 2) Permission check (teacher must be linked to pupil’s class_id)
+    if (me.role !== "admin") {
+      const classId = pupil.class_id;
+      if (!classId) {
+        return res.status(403).json({ ok: false, error: "Pupil has no class_id (cannot permission-check)" });
+      }
+
+      const { data: link, error: linkErr } = await supabaseAdmin
         .from("teacher_classes")
-        .select("teacher_id, class_label, class_id")
-        .eq("teacher_id", session.teacher_id)
-        .eq("class_label", pupil.class_label)
+        .select("teacher_id, class_id")
+        .eq("teacher_id", me.teacher_id)
+        .eq("class_id", classId)
         .maybeSingle();
 
       if (linkErr) {
-        const { data: links2, error: linkErr2 } = await supabase
-          .from("teacher_classes")
-          .select("class_id, classes:class_id(class_label)")
-          .eq("teacher_id", session.teacher_id);
-
-        if (linkErr2) return res.status(403).json({ ok: false, error: "Permission check failed", debug: linkErr2.message });
-
-        const allowed = (links2 || []).some((r) => r.classes?.class_label === pupil.class_label);
-        if (!allowed) return res.status(403).json({ ok: false, error: "Not allowed" });
-      } else {
-        if (!link) return res.status(403).json({ ok: false, error: "Not allowed" });
+        return res.status(500).json({ ok: false, error: "Permission check failed", debug: linkErr.message });
+      }
+      if (!link) {
+        return res.status(403).json({ ok: false, error: "Not allowed for this pupil" });
       }
     }
 
-    const { data: attempts, error: aErr } = await supabase
+    // 3) Load attempts (last 20)
+    const { data: attempts, error: attErr } = await supabaseAdmin
       .from("attempts")
-      .select("*")
-      .eq("student_id", pupil_id)
+      .select("id, student_id, created_at, score")
+      .eq("student_id", student_id)
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(20);
 
-    if (aErr) return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
+    if (attErr) {
+      return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: attErr.message });
+    }
 
-    const list = attempts || [];
+    const attemptIds = (attempts || []).map((a) => a.id);
 
-    const series = list
-      .slice(0, 60)
-      .map((a) => ({ date: a.created_at || a.completed_at || a.createdAt || null, score: pctFromAttempt(a) }))
-      .filter((x) => x.date && x.score !== null)
-      .reverse();
+    // 4) Load question records for recent attempts (for heatmap)
+    // Use select("*") to avoid “column does not exist” crashes.
+    let qrecs = [];
+    if (attemptIds.length) {
+      const { data: qr, error: qrErr } = await supabaseAdmin
+        .from("question_records")
+        .select("*")
+        .in("attempt_id", attemptIds)
+        .order("created_at", { ascending: false })
+        .limit(2000);
 
-    const rows = list.slice(0, 20).map((a) => ({
-      id: a.id,
-      date: a.created_at || a.completed_at || a.createdAt || null,
-      score: pctFromAttempt(a),
-      tables: tablesFromAttempt(a),
-      num_questions: a.num_questions ?? a.question_count ?? a.total ?? null,
-      seconds_per_question: a.time_per_question ?? a.seconds_per_question ?? null,
-    }));
+      if (qrErr) {
+        // Instead of hard failing the whole page, return empty heatmap and show a message
+        if (debug === "1") {
+          return res.status(500).json({
+            ok: false,
+            error: "Failed to load question records",
+            debug: qrErr.message,
+            note: "question_records query failed — send this debug to me.",
+          });
+        }
+        qrecs = [];
+      } else {
+        qrecs = qr || [];
+      }
+    }
+
+    // 5) Build chart series (oldest -> newest)
+    const series = (attempts || [])
+      .slice()
+      .reverse()
+      .map((a) => ({
+        date: a.created_at,
+        score: Number.isFinite(Number(a.score)) ? Math.round(Number(a.score)) : null,
+      }))
+      .filter((x) => x.score !== null);
+
+    // 6) Heatmap: rows 1..19, cols = most recent attempts (max 8 to keep it readable)
+    const cols = (attempts || []).slice(0, 8); // most recent first
+    const colIds = cols.map((a) => a.id);
+
+    // Map: attempt_id -> array of qrecs
+    const qByAttempt = new Map();
+    for (const r of qrecs) {
+      const aid = r.attempt_id;
+      if (!colIds.includes(aid)) continue;
+      if (!qByAttempt.has(aid)) qByAttempt.set(aid, []);
+      qByAttempt.get(aid).push(r);
+    }
+
+    const heatmap = [];
+    for (let table = 1; table <= 19; table++) {
+      const row = [];
+      for (const a of cols) {
+        const list = qByAttempt.get(a.id) || [];
+        let total = 0;
+        let correct = 0;
+
+        for (const rec of list) {
+          const t = extractTableNumber(rec);
+          if (t !== table) continue;
+
+          const ok = isCorrect(rec);
+          if (ok === null) continue;
+
+          total += 1;
+          if (ok) correct += 1;
+        }
+
+        const percent = total ? Math.round((correct / total) * 100) : null;
+        row.push({ attempt_id: a.id, date: a.created_at, percent, total });
+      }
+      heatmap.push({ table, cells: row });
+    }
+
+    // 7) Recent question records (last 50) — safe preview
+    const recentQuestionRecords = qrecs.slice(0, 50);
 
     return res.json({
       ok: true,
-      pupil: {
-        id: pupil.id,
-        name: `${pupil.first_name || ""} ${pupil.surname || ""}`.trim(),
-        class_label: pupil.class_label,
-      },
+      me,
+      pupil,
+      attempts: attempts || [],
       series,
-      rows,
-      target: 90,
+      heatmap,
+      recentQuestionRecords,
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
