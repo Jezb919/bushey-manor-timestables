@@ -1,7 +1,6 @@
 import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 import { requireAdmin } from "../../../../lib/requireAdmin";
 
-// Simple CSV parser for "paste into textbox" CSV (no quoted commas support needed for names)
 function parseCsv(text) {
   const lines = String(text || "")
     .replace(/\r\n/g, "\n")
@@ -14,7 +13,6 @@ function parseCsv(text) {
 
   const headers = lines[0].split(",").map((h) => h.trim());
   const rows = lines.slice(1).map((line) => line.split(",").map((c) => (c ?? "").trim()));
-
   return { headers, rows };
 }
 
@@ -26,7 +24,6 @@ function makeBaseUsername(first, last) {
 }
 
 function randomPin() {
-  // 4 digits, leading zeros allowed
   return String(Math.floor(Math.random() * 10000)).padStart(4, "0");
 }
 
@@ -34,30 +31,23 @@ async function findClassIdByLabel(classLabel) {
   const label = String(classLabel || "").trim();
   if (!label) return null;
 
-  // Try classes.label first
+  // Try classes.label
   {
-    const { data, error } = await supabaseAdmin
+    const { data } = await supabaseAdmin
       .from("classes")
       .select("id,label")
       .eq("label", label)
       .maybeSingle();
-
-    if (error) {
-      // ignore and try alternative column
-    } else if (data?.id) {
-      return data.id;
-    }
+    if (data?.id) return data.id;
   }
 
-  // Try classes.class_label (some schemas use this)
+  // Try classes.class_label
   {
-    const { data, error } = await supabaseAdmin
+    const { data } = await supabaseAdmin
       .from("classes")
       .select("id,class_label")
       .eq("class_label", label)
       .maybeSingle();
-
-    if (error) return null;
     if (data?.id) return data.id;
   }
 
@@ -65,36 +55,37 @@ async function findClassIdByLabel(classLabel) {
 }
 
 async function usernameExists(username) {
-  const { data, error } = await supabaseAdmin
+  const { data } = await supabaseAdmin
     .from("students")
-    .select("id,username")
+    .select("id")
     .eq("username", username)
     .limit(1);
-
-  if (error) return false; // if schema mismatch we'll handle later when insert fails
   return (data || []).length > 0;
 }
 
 async function makeUniqueUsername(first, last) {
   const base = makeBaseUsername(first, last);
-  // Try base + 1..999
   for (let i = 1; i <= 999; i++) {
-    const candidate = `${base}${i}`;
     // eslint-disable-next-line no-await-in-loop
-    const exists = await usernameExists(candidate);
-    if (!exists) return candidate;
+    const exists = await usernameExists(`${base}${i}`);
+    if (!exists) return `${base}${i}`;
   }
-  // fallback
   return `${base}${Date.now().toString().slice(-6)}`;
 }
 
 export default async function handler(req, res) {
-  const debugOn = req.query?.debug === "1";
-
   try {
-    // Always return JSON, even on errors
+    // Helpful GET response (so visiting in browser isn't confusing)
+    if (req.method === "GET") {
+      await requireAdmin(req, res);
+      return res.status(200).json({
+        ok: true,
+        info: "This endpoint expects POST from the Manage Pupils page (Bulk import). If import fails, refresh the page and try again — errors will now show the real reason.",
+      });
+    }
+
     if (req.method !== "POST") {
-      return res.status(405).json({ ok: false, error: "Method not allowed (POST only)" });
+      return res.status(405).json({ ok: false, error: "Method not allowed" });
     }
 
     await requireAdmin(req, res);
@@ -110,11 +101,10 @@ export default async function handler(req, res) {
       return res.status(400).json({
         ok: false,
         error: `CSV must have headers exactly: ${expected.join(",")}`,
-        debug: debugOn ? { headers } : undefined,
+        headers,
       });
     }
 
-    // Map indices
     const idx = {
       class_label: headerKey.indexOf("class_label"),
       first_name: headerKey.indexOf("first_name"),
@@ -160,10 +150,8 @@ export default async function handler(req, res) {
       const username = await makeUniqueUsername(first_name, last_name);
       const pin = randomPin();
 
-      // Insert into students table
-      // NOTE: This assumes your schema includes:
-      // students: id, class_id, first_name, last_name, username, pin
-      // If your column is named differently (e.g. pin_code), the error message will show clearly.
+      // IMPORTANT: This assumes column name is students.pin
+      // If your DB uses pin_code / passcode, the error will now show clearly.
       // eslint-disable-next-line no-await-in-loop
       const { data: inserted, error: insErr } = await supabaseAdmin
         .from("students")
@@ -173,7 +161,7 @@ export default async function handler(req, res) {
             first_name,
             last_name,
             username,
-            pin, // if your column is different, this will error and we'll report it
+            pin,
           },
         ])
         .select("id,first_name,last_name,username,class_id,pin")
@@ -194,7 +182,7 @@ export default async function handler(req, res) {
         first_name: inserted.first_name,
         last_name: inserted.last_name,
         username: inserted.username,
-        pin: inserted.pin ?? pin, // depends on whether select returns it
+        pin: inserted.pin ?? pin,
         class_label,
       });
     }
@@ -208,15 +196,14 @@ export default async function handler(req, res) {
         created: created.length,
         skipped: skipped.length,
       },
-      debug: debugOn ? { headers, idx, classCacheSize: classIdCache.size } : undefined,
     });
   } catch (e) {
-    // ALWAYS JSON (prevents "Unexpected end of JSON input")
+    // ✅ Critical change: ALWAYS return the real crash reason (admin-only route)
     const msg = e?.message || String(e);
     return res.status(500).json({
       ok: false,
       error: "Server error (bulk import crashed)",
-      debug: debugOn ? msg : undefined,
+      debug: msg,
     });
   }
 }
