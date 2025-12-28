@@ -1,84 +1,109 @@
-// pages/api/admin/pupils/reset_pin.js
-import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
-import { requireAdmin } from "../../../../lib/requireAdmin";
+import cookie from "cookie";
 
-function makePin() {
-  // 4-digit PIN, first digit not 0
-  const first = Math.floor(Math.random() * 9) + 1;
-  const rest = String(Math.floor(Math.random() * 1000)).padStart(3, "0");
-  return `${first}${rest}`;
+function readTeacherCookie(req) {
+  const cookies = cookie.parse(req.headers.cookie || "");
+  const raw = cookies.bmtt_teacher || cookies.bmtt_session;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function genPin() {
+  return String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+}
+
+function supabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !serviceKey) {
+    throw new Error(
+      "Missing env vars: NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY"
+    );
+  }
+
+  const { createClient } = require("@supabase/supabase-js");
+  return createClient(url, serviceKey, { auth: { persistSession: false } });
+}
+
+async function tryUpdatePin(supabase, student_id, newPin, columnName) {
+  const payload = { [columnName]: newPin };
+
+  const { error } = await supabase.from("students").update(payload).eq("id", student_id);
+
+  if (!error) return { ok: true, column: columnName };
+
+  // If column doesn't exist, try next
+  const msg = String(error.message || "");
+  if (msg.includes("does not exist") && msg.includes(columnName)) {
+    return { ok: false, reason: "missing_column", message: msg };
+  }
+
+  // Any other error = real failure
+  return { ok: false, reason: "other", message: msg };
 }
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
 
-  const adminCheck = await requireAdmin(req, res);
-  if (!adminCheck.ok) return; // requireAdmin already responded
+  const session = readTeacherCookie(req);
+  if (!session || session.role !== "admin") {
+    return res.status(403).json({ ok: false, error: "Admins only", debug: session || null });
+  }
+
+  const { student_id } = req.body || {};
+  if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
 
   try {
-    const { student_id } = req.body || {};
-    if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
+    const supabase = supabaseAdmin();
 
-    // Get student (so we can show username on success)
-    const { data: student, error: sErr } = await supabaseAdmin
+    // Check pupil exists
+    const { data: pupil, error: pupilErr } = await supabase
       .from("students")
-      .select("id, username, first_name, last_name")
+      .select("id")
       .eq("id", student_id)
-      .single();
+      .maybeSingle();
 
-    if (sErr || !student) {
-      return res.status(404).json({ ok: false, error: "Student not found", debug: sErr?.message });
-    }
+    if (pupilErr) throw new Error(pupilErr.message);
+    if (!pupil) return res.status(404).json({ ok: false, error: "Pupil not found" });
 
-    const newPin = makePin();
+    const newPin = genPin();
 
-    // Your project previously used plain compare in places. We'll store plain in a column.
-    // Try common column names in order: pin, pin_code, pin_hash
-    // (Supabase will error if column doesn't exist, so we attempt carefully.)
-    const attempts = [
-      { col: "pin", value: newPin },
-      { col: "pin_code", value: newPin },
-      { col: "pin_hash", value: newPin }, // if you kept the name pin_hash but you're doing plain compare
-    ];
+    // Try common schema variants (your project has shifted a few times)
+    const candidates = ["pin", "pin_hash", "passcode", "password"];
+    const attempts = [];
 
-    let updated = null;
-    let lastErr = null;
+    for (const col of candidates) {
+      const result = await tryUpdatePin(supabase, student_id, newPin, col);
+      attempts.push({ col, ...result });
 
-    for (const a of attempts) {
-      const { data, error } = await supabaseAdmin
-        .from("students")
-        .update({ [a.col]: a.value })
-        .eq("id", student_id)
-        .select("id")
-        .single();
-
-      if (!error) {
-        updated = data;
-        lastErr = null;
-        break;
+      if (result.ok) {
+        return res.json({ ok: true, pin: newPin, stored_in: col });
       }
-      lastErr = error;
+
+      if (result.reason === "other") {
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to reset PIN",
+          debug: { col, message: result.message, attempts },
+        });
+      }
     }
 
-    if (!updated) {
-      return res.status(500).json({
-        ok: false,
-        error: "Could not save PIN (no compatible column found)",
-        debug: lastErr?.message || "Unknown error",
-      });
-    }
-
-    return res.json({
-      ok: true,
-      student: {
-        id: student.id,
-        username: student.username,
-        first_name: student.first_name,
-        last_name: student.last_name,
-      },
-      pin: newPin, // IMPORTANT: show once so you can copy it
+    // If we got here: none of the columns exist
+    return res.status(500).json({
+      ok: false,
+      error: "No usable PIN column found on students table",
+      debug: { tried: candidates, attempts },
     });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to reset PIN",
+      debug: String(e.message || e),
+    });
   }
 }
