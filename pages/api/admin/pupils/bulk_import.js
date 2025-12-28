@@ -155,6 +155,107 @@ function safeBody(req) {
   return {};
 }
 
+async function runImport(csvText) {
+  const { headers, rows } = parseCsv(csvText);
+
+  const expected = ["class_label", "first_name", "last_name"];
+  const headerKey = headers.map((h) => h.toLowerCase());
+  const okHeaders = expected.every((h) => headerKey.includes(h));
+  if (!okHeaders) {
+    return {
+      ok: false,
+      status: 400,
+      error: `CSV must have headers exactly: ${expected.join(",")}`,
+      headers,
+      example: "class_label,first_name,last_name\nB4,Sam,Allen\nB4,Emma,Azim",
+    };
+  }
+
+  const idx = {
+    class_label: headerKey.indexOf("class_label"),
+    first_name: headerKey.indexOf("first_name"),
+    last_name: headerKey.indexOf("last_name"),
+  };
+
+  const created = [];
+  const skipped = [];
+  const classIdCache = new Map();
+
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+
+    const class_label = (row[idx.class_label] || "").trim();
+    const first_name = (row[idx.first_name] || "").trim();
+    const last_name = (row[idx.last_name] || "").trim();
+
+    if (!class_label || !first_name || !last_name) {
+      skipped.push({
+        row: r + 2,
+        reason: "Missing class_label / first_name / last_name",
+        values: { class_label, first_name, last_name },
+      });
+      continue;
+    }
+
+    let class_id = classIdCache.get(class_label);
+    if (!class_id) {
+      // eslint-disable-next-line no-await-in-loop
+      class_id = await findClassIdByLabel(class_label);
+      if (!class_id) {
+        skipped.push({
+          row: r + 2,
+          reason: `Class not found: ${class_label}`,
+          values: { class_label, first_name, last_name },
+        });
+        continue;
+      }
+      classIdCache.set(class_label, class_id);
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    const username = await makeUniqueUsername(first_name, last_name);
+    const pin = randomPin();
+
+    // eslint-disable-next-line no-await-in-loop
+    const { data: inserted, error: insErr } = await supabaseAdmin
+      .from("students")
+      .insert([{ class_id, first_name, last_name, username, pin }])
+      .select("id,first_name,last_name,username,class_id,pin")
+      .maybeSingle();
+
+    if (insErr) {
+      skipped.push({
+        row: r + 2,
+        reason: "Insert failed",
+        values: { class_label, first_name, last_name },
+        error: insErr.message,
+      });
+      continue;
+    }
+
+    created.push({
+      id: inserted.id,
+      first_name: inserted.first_name,
+      last_name: inserted.last_name,
+      username: inserted.username,
+      pin: inserted.pin ?? pin,
+      class_label,
+    });
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    created,
+    skipped,
+    summary: {
+      totalRows: rows.length,
+      created: created.length,
+      skipped: skipped.length,
+    },
+  };
+}
+
 export default async function handler(req, res) {
   const debugMode = String(req.query?.debug || "") === "1";
 
@@ -163,9 +264,26 @@ export default async function handler(req, res) {
     if (req.method === "GET") {
       ensureAdmin(req, res);
       if (res.writableEnded) return;
+
+      // ✅ Debug GET import mode (so you can test without POST)
+      // Usage:
+      // /api/admin/pupils/bulk_import?debug=1&csv=class_label,first_name,last_name%0AB4,Sam,Allen
+      if (debugMode && req.query?.csv) {
+        const csvText = String(req.query.csv || "");
+        const result = await runImport(csvText);
+        return res.status(result.status || 200).json({
+          ...result,
+          debug: {
+            mode: "GET_IMPORT",
+            note: "This is debug-only. Your normal page should POST.",
+          },
+        });
+      }
+
       return res.status(200).json({
         ok: true,
-        info: "POST only. Send JSON: { csvText: 'class_label,first_name,last_name\\nB4,Sam,Allen' }",
+        info:
+          "POST only (normal use). Debug GET import: add &csv=... when debug=1. Example: ?debug=1&csv=class_label,first_name,last_name%0AB4,Sam,Allen",
       });
     }
 
@@ -183,106 +301,18 @@ export default async function handler(req, res) {
       return res.status(400).json({
         ok: false,
         error: "No CSV provided. Paste CSV including the header row.",
+        debug: debugMode
+          ? {
+              contentType: req.headers["content-type"] || null,
+              bodyType: typeof req.body,
+              bodyPresent: req.body != null,
+            }
+          : undefined,
       });
     }
 
-    const { headers, rows } = parseCsv(csvText);
-
-    const expected = ["class_label", "first_name", "last_name"];
-    const headerKey = headers.map((h) => h.toLowerCase());
-
-    const okHeaders = expected.every((h) => headerKey.includes(h));
-    if (!okHeaders) {
-      return res.status(400).json({
-        ok: false,
-        error: `CSV must have headers exactly: ${expected.join(",")}`,
-        headers,
-        example: "class_label,first_name,last_name\nB4,Sam,Allen\nB4,Emma,Azim",
-      });
-    }
-
-    const idx = {
-      class_label: headerKey.indexOf("class_label"),
-      first_name: headerKey.indexOf("first_name"),
-      last_name: headerKey.indexOf("last_name"),
-    };
-
-    const created = [];
-    const skipped = [];
-    const classIdCache = new Map();
-
-    for (let r = 0; r < rows.length; r++) {
-      const row = rows[r];
-
-      const class_label = (row[idx.class_label] || "").trim();
-      const first_name = (row[idx.first_name] || "").trim();
-      const last_name = (row[idx.last_name] || "").trim();
-
-      if (!class_label || !first_name || !last_name) {
-        skipped.push({
-          row: r + 2,
-          reason: "Missing class_label / first_name / last_name",
-          values: { class_label, first_name, last_name },
-        });
-        continue;
-      }
-
-      let class_id = classIdCache.get(class_label);
-      if (!class_id) {
-        // eslint-disable-next-line no-await-in-loop
-        class_id = await findClassIdByLabel(class_label);
-        if (!class_id) {
-          skipped.push({
-            row: r + 2,
-            reason: `Class not found: ${class_label}`,
-            values: { class_label, first_name, last_name },
-          });
-          continue;
-        }
-        classIdCache.set(class_label, class_id);
-      }
-
-      // eslint-disable-next-line no-await-in-loop
-      const username = await makeUniqueUsername(first_name, last_name);
-      const pin = randomPin();
-
-      // eslint-disable-next-line no-await-in-loop
-      const { data: inserted, error: insErr } = await supabaseAdmin
-        .from("students")
-        .insert([{ class_id, first_name, last_name, username, pin }])
-        .select("id,first_name,last_name,username,class_id,pin")
-        .maybeSingle();
-
-      if (insErr) {
-        skipped.push({
-          row: r + 2,
-          reason: "Insert failed",
-          values: { class_label, first_name, last_name },
-          error: insErr.message,
-        });
-        continue;
-      }
-
-      created.push({
-        id: inserted.id,
-        first_name: inserted.first_name,
-        last_name: inserted.last_name,
-        username: inserted.username,
-        pin: inserted.pin ?? pin,
-        class_label,
-      });
-    }
-
-    return res.status(200).json({
-      ok: true,
-      created,
-      skipped,
-      summary: {
-        totalRows: rows.length,
-        created: created.length,
-        skipped: skipped.length,
-      },
-    });
+    const result = await runImport(csvText);
+    return res.status(result.status || 200).json(result);
   } catch (e) {
     return res.status(500).json({
       ok: false,
