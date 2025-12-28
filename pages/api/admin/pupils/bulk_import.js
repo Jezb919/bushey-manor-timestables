@@ -70,19 +70,15 @@ async function makeUniqueUsername(first, last) {
 }
 
 function safeBody(req) {
-  // Next.js sometimes gives req.body as a string if the client didn't send JSON headers
   if (req.body == null) return {};
   if (typeof req.body === "object") return req.body;
 
   if (typeof req.body === "string") {
-    // try JSON parse, otherwise treat as raw csv
     try {
       const parsed = JSON.parse(req.body);
       if (parsed && typeof parsed === "object") return parsed;
-    } catch (_) {
-      // not JSON
-    }
-    return { csvText: req.body };
+    } catch (_) {}
+    return { csvText: req.body }; // treat raw as CSV
   }
 
   return {};
@@ -91,19 +87,22 @@ function safeBody(req) {
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
+      // Handy "is this deployed" check
       await requireAdmin(req, res);
+      if (res.writableEnded) return;
       return res.status(200).json({
         ok: true,
         info:
-          "POST only. Your Manage Pupils page should POST JSON: { csvText: '...' }. If you paste CSV without headers, it will be rejected.",
+          "POST only. Send JSON { csvText: 'class_label,first_name,last_name\\nB4,Sam,Allen' }",
       });
     }
 
     if (req.method !== "POST") {
-      return res.status(405).json({ ok: false, error: "Method not allowed" });
+      return res.status(405).json({ ok: false, error: "Method not allowed (POST only)" });
     }
 
     await requireAdmin(req, res);
+    if (res.writableEnded) return; // ✅ CRITICAL: stop if requireAdmin already responded
 
     const body = safeBody(req);
     const csvText = body.csvText;
@@ -126,8 +125,7 @@ export default async function handler(req, res) {
         ok: false,
         error: `CSV must have headers exactly: ${expected.join(",")}`,
         headers,
-        example:
-          "class_label,first_name,last_name\nB4,Sam,Allen\nB4,Emma,Azim",
+        example: "class_label,first_name,last_name\nB4,Sam,Allen\nB4,Emma,Azim",
       });
     }
 
