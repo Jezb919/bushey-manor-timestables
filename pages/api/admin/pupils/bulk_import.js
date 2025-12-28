@@ -55,11 +55,7 @@ async function findClassIdByLabel(classLabel) {
 }
 
 async function usernameExists(username) {
-  const { data } = await supabaseAdmin
-    .from("students")
-    .select("id")
-    .eq("username", username)
-    .limit(1);
+  const { data } = await supabaseAdmin.from("students").select("id").eq("username", username).limit(1);
   return (data || []).length > 0;
 }
 
@@ -73,14 +69,33 @@ async function makeUniqueUsername(first, last) {
   return `${base}${Date.now().toString().slice(-6)}`;
 }
 
+function safeBody(req) {
+  // Next.js sometimes gives req.body as a string if the client didn't send JSON headers
+  if (req.body == null) return {};
+  if (typeof req.body === "object") return req.body;
+
+  if (typeof req.body === "string") {
+    // try JSON parse, otherwise treat as raw csv
+    try {
+      const parsed = JSON.parse(req.body);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch (_) {
+      // not JSON
+    }
+    return { csvText: req.body };
+  }
+
+  return {};
+}
+
 export default async function handler(req, res) {
   try {
-    // Helpful GET response (so visiting in browser isn't confusing)
     if (req.method === "GET") {
       await requireAdmin(req, res);
       return res.status(200).json({
         ok: true,
-        info: "This endpoint expects POST from the Manage Pupils page (Bulk import). If import fails, refresh the page and try again — errors will now show the real reason.",
+        info:
+          "POST only. Your Manage Pupils page should POST JSON: { csvText: '...' }. If you paste CSV without headers, it will be rejected.",
       });
     }
 
@@ -90,7 +105,16 @@ export default async function handler(req, res) {
 
     await requireAdmin(req, res);
 
-    const { csvText } = req.body || {};
+    const body = safeBody(req);
+    const csvText = body.csvText;
+
+    if (!csvText || String(csvText).trim().length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "No CSV provided. Paste CSV including the header row.",
+      });
+    }
+
     const { headers, rows } = parseCsv(csvText);
 
     const expected = ["class_label", "first_name", "last_name"];
@@ -102,6 +126,8 @@ export default async function handler(req, res) {
         ok: false,
         error: `CSV must have headers exactly: ${expected.join(",")}`,
         headers,
+        example:
+          "class_label,first_name,last_name\nB4,Sam,Allen\nB4,Emma,Azim",
       });
     }
 
@@ -150,20 +176,10 @@ export default async function handler(req, res) {
       const username = await makeUniqueUsername(first_name, last_name);
       const pin = randomPin();
 
-      // IMPORTANT: This assumes column name is students.pin
-      // If your DB uses pin_code / passcode, the error will now show clearly.
       // eslint-disable-next-line no-await-in-loop
       const { data: inserted, error: insErr } = await supabaseAdmin
         .from("students")
-        .insert([
-          {
-            class_id,
-            first_name,
-            last_name,
-            username,
-            pin,
-          },
-        ])
+        .insert([{ class_id, first_name, last_name, username, pin }])
         .select("id,first_name,last_name,username,class_id,pin")
         .maybeSingle();
 
@@ -198,12 +214,10 @@ export default async function handler(req, res) {
       },
     });
   } catch (e) {
-    // ✅ Critical change: ALWAYS return the real crash reason (admin-only route)
-    const msg = e?.message || String(e);
     return res.status(500).json({
       ok: false,
       error: "Server error (bulk import crashed)",
-      debug: msg,
+      debug: e?.message || String(e),
     });
   }
 }
