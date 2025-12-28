@@ -4,8 +4,8 @@ import Link from "next/link";
 export default function ManagePupilsPage() {
   const [me, setMe] = useState(null);
 
-  const [classes, setClasses] = useState([]);
-  const [classLabel, setClassLabel] = useState("M4");
+  const [classes, setClasses] = useState([]); // array of { label }
+  const [classLabel, setClassLabel] = useState(""); // start blank until loaded
 
   const [pupils, setPupils] = useState([]);
   const [search, setSearch] = useState("");
@@ -17,6 +17,35 @@ export default function ManagePupilsPage() {
   const [message, setMessage] = useState("");
 
   const [busy, setBusy] = useState(false);
+
+  const FALLBACK_CLASSES = ["M4", "B4", "M3", "B3", "4M", "4B", "3M", "3B"];
+
+  function normaliseClasses(rawClasses) {
+    // Convert any shape into [{label:"M4"}, ...] and remove blanks
+    const mapped = (rawClasses || [])
+      .map((c) => {
+        const label =
+          c?.label ??
+          c?.class_label ??
+          c?.classLabel ??
+          c?.name ??
+          c?.class ??
+          "";
+        return { label: String(label || "").trim() };
+      })
+      .filter((c) => c.label.length > 0);
+
+    // De-dupe while preserving order
+    const seen = new Set();
+    const deduped = [];
+    for (const c of mapped) {
+      if (!seen.has(c.label)) {
+        seen.add(c.label);
+        deduped.push(c);
+      }
+    }
+    return deduped;
+  }
 
   // --- load teacher session
   useEffect(() => {
@@ -32,27 +61,35 @@ export default function ManagePupilsPage() {
       .catch(() => (window.location.href = "/teacher/login"));
   }, []);
 
-  // --- load classes (dropdown)
+  // --- load classes for dropdown
   useEffect(() => {
-    fetch("/api/teacher/classes")
-      .then((r) => r.json())
-      .then((data) => {
-        if (!data.ok) return;
+    (async () => {
+      try {
+        const r = await fetch("/api/teacher/classes");
+        const data = await r.json();
 
-        const list = data.classes || [];
-        setClasses(list);
-
-        // If current classLabel isn't in returned classes, set it to first available
+        const list = normaliseClasses(data?.classes || data?.data || []);
         if (list.length > 0) {
-          const labels = new Set(list.map((c) => c.label));
-          if (!labels.has(classLabel)) setClassLabel(list[0].label);
+          setClasses(list);
+          setClassLabel((prev) => prev || list[0].label); // pick first if blank
+          return;
         }
-      })
-      .catch(() => {});
+
+        // If API returns nothing, use fallback list so dropdown is never empty
+        const fallback = FALLBACK_CLASSES.map((x) => ({ label: x }));
+        setClasses(fallback);
+        setClassLabel((prev) => prev || fallback[0].label);
+      } catch {
+        const fallback = FALLBACK_CLASSES.map((x) => ({ label: x }));
+        setClasses(fallback);
+        setClassLabel((prev) => prev || fallback[0].label);
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadPupils() {
+    if (!classLabel) return; // don't run if still blank
     setMessage("");
     try {
       const r = await fetch(
@@ -71,9 +108,11 @@ export default function ManagePupilsPage() {
     }
   }
 
+  // Load pupils when class changes
   useEffect(() => {
     if (!me) return;
     if (me.role !== "admin") return;
+    if (!classLabel) return;
     loadPupils();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, classLabel]);
@@ -90,6 +129,10 @@ export default function ManagePupilsPage() {
 
   async function addPupil() {
     setMessage("");
+    if (!classLabel) {
+      setMessage("Please choose a class first.");
+      return;
+    }
     if (!firstName.trim() || !lastName.trim()) {
       setMessage("Please enter first name and surname.");
       return;
@@ -110,13 +153,12 @@ export default function ManagePupilsPage() {
         setMessage(data.error || "Failed to add pupil");
         return;
       }
-      // show the new credentials clearly
       if (data.pupil?.username && data.pupil?.pin) {
         alert(
           `Pupil created:\n\nUsername: ${data.pupil.username}\nPIN: ${data.pupil.pin}\n\nCopy these now.`
         );
       } else {
-        alert("Pupil created. (No username/PIN returned from server.)");
+        alert("Pupil created (no username/PIN returned).");
       }
       setFirstName("");
       setLastName("");
@@ -130,6 +172,10 @@ export default function ManagePupilsPage() {
 
   async function bulkImport() {
     setMessage("");
+    if (!csvText.includes("class_label")) {
+      setMessage("CSV must start with: class_label,first_name,last_name");
+      return;
+    }
     setBusy(true);
     try {
       const r = await fetch("/api/admin/pupils/bulk_import", {
@@ -148,7 +194,6 @@ export default function ManagePupilsPage() {
       const createdCount = data.created?.length || 0;
       const skippedCount = data.skipped?.length || 0;
       setMessage(`Imported ${createdCount}. Skipped ${skippedCount}.`);
-
       await loadPupils();
     } catch {
       setMessage("Bulk import failed");
@@ -158,11 +203,10 @@ export default function ManagePupilsPage() {
   }
 
   function downloadUsernamesPins() {
-    // downloads a CSV file from the API
-    const url = `/api/admin/pupils/export_csv?class_label=${encodeURIComponent(
+    if (!classLabel) return;
+    window.location.href = `/api/admin/pupils/export_csv?class_label=${encodeURIComponent(
       classLabel
     )}`;
-    window.location.href = url;
   }
 
   async function resetPin(studentId, pupilName) {
@@ -184,9 +228,7 @@ export default function ManagePupilsPage() {
         setMessage(data.error || "Failed to reset PIN");
         return;
       }
-      alert(
-        `New PIN for ${pupilName}:\n\n${data.pin}\n\nCopy it now.`
-      );
+      alert(`New PIN for ${pupilName}:\n\n${data.pin}\n\nCopy it now.`);
       await loadPupils();
     } catch {
       setMessage("Failed to reset PIN");
@@ -222,8 +264,10 @@ export default function ManagePupilsPage() {
 
   async function deleteAllInClass() {
     setMessage("");
+    if (!classLabel) return;
+
     const ok = window.confirm(
-      `Delete ALL pupils in class ${classLabel}?\n\nThis is for clearing test data / placeholders.\n\nIf some pupils have attempts, deletion may be blocked unless your DB allows cascade.`
+      `Delete ALL pupils in class ${classLabel}?\n\nIf some pupils have attempts, deletion may be blocked unless your DB allows cascade.`
     );
     if (!ok) return;
 
@@ -249,36 +293,18 @@ export default function ManagePupilsPage() {
   }
 
   if (!me) return null;
-  if (me.role !== "admin") {
-    return <div style={{ padding: 30 }}>Admins only.</div>;
-  }
+  if (me.role !== "admin") return <div style={{ padding: 30 }}>Admins only.</div>;
 
   const styles = {
     page: { padding: 30, maxWidth: 1100, margin: "0 auto" },
-    topRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 },
     badge: { display: "inline-block", padding: "2px 10px", borderRadius: 999, background: "#e8f0ff", fontSize: 12, marginLeft: 8 },
-    alert: {
-      background: "#fff1f2",
-      border: "1px solid #fecdd3",
-      padding: 12,
-      borderRadius: 14,
-      margin: "14px 0",
-      color: "#9f1239",
-      fontWeight: 600,
-    },
-    card: {
-      background: "#fff",
-      border: "1px solid #eee",
-      borderRadius: 18,
-      padding: 18,
-      boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
-      marginTop: 16,
-    },
+    alert: { background: "#fff1f2", border: "1px solid #fecdd3", padding: 12, borderRadius: 14, margin: "14px 0", color: "#9f1239", fontWeight: 700 },
+    card: { background: "#fff", border: "1px solid #eee", borderRadius: 18, padding: 18, boxShadow: "0 10px 30px rgba(0,0,0,0.06)", marginTop: 16 },
     row: { display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" },
-    input: { padding: 10, borderRadius: 12, border: "1px solid #ddd", width: 260 },
-    select: { padding: 10, borderRadius: 12, border: "1px solid #ddd" },
-    btn: { padding: "10px 14px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontWeight: 700 },
-    btnPrimary: { padding: "10px 14px", borderRadius: 12, border: "1px solid #0b1220", background: "#0b1220", color: "#fff", cursor: "pointer", fontWeight: 800 },
+    input: { padding: 10, borderRadius: 12, border: "1px solid #ddd", width: 280 },
+    select: { padding: 10, borderRadius: 12, border: "1px solid #ddd", minWidth: 90 },
+    btn: { padding: "10px 14px", borderRadius: 12, border: "1px solid #ddd", background: "#fff", cursor: "pointer", fontWeight: 800 },
+    btnPrimary: { padding: "10px 14px", borderRadius: 12, border: "1px solid #0b1220", background: "#0b1220", color: "#fff", cursor: "pointer", fontWeight: 900 },
     btnDanger: { padding: "10px 14px", borderRadius: 12, border: "1px solid #ef4444", background: "#fff", color: "#b91c1c", cursor: "pointer", fontWeight: 900 },
     table: { width: "100%", borderCollapse: "collapse", marginTop: 10 },
     th: { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid #eee", fontSize: 13, color: "#334155" },
@@ -290,25 +316,20 @@ export default function ManagePupilsPage() {
 
   return (
     <div style={styles.page}>
-      <div style={styles.topRow}>
-        <div>
-          <h1 style={{ marginBottom: 6 }}>Manage Pupils</h1>
-          <div style={{ color: "#334155" }}>
-            Logged in as <b>{me.email}</b>
-            <span style={styles.badge}>{me.role}</span>
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <Link href="/teacher">← Back to dashboard</Link>
-          </div>
-        </div>
+      <h1 style={{ marginBottom: 6 }}>Manage Pupils</h1>
+      <div style={{ color: "#334155" }}>
+        Logged in as <b>{me.email}</b>
+        <span style={styles.badge}>{me.role}</span>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <Link href="/teacher">← Back to dashboard</Link>
       </div>
 
       {message && <div style={styles.alert}>{message}</div>}
 
-      {/* Controls */}
       <div style={styles.card}>
         <div style={styles.row}>
-          <label style={{ fontWeight: 800 }}>Class</label>
+          <label style={{ fontWeight: 900 }}>Class</label>
           <select
             value={classLabel}
             onChange={(e) => setClassLabel(e.target.value)}
@@ -319,13 +340,6 @@ export default function ManagePupilsPage() {
                 {c.label}
               </option>
             ))}
-            {classes.length === 0 && (
-              <>
-                <option value="M4">M4</option>
-                <option value="B4">B4</option>
-                <option value="B3">B3</option>
-              </>
-            )}
           </select>
 
           <input
@@ -339,56 +353,40 @@ export default function ManagePupilsPage() {
             Refresh
           </button>
 
-          <button style={styles.btnPrimary} onClick={downloadUsernamesPins} disabled={busy}>
+          <button style={styles.btnPrimary} onClick={downloadUsernamesPins} disabled={busy || !classLabel}>
             Download usernames + PINs
           </button>
 
-          <button style={styles.btnDanger} onClick={deleteAllInClass} disabled={busy}>
+          <button style={styles.btnDanger} onClick={deleteAllInClass} disabled={busy || !classLabel}>
             Delete ALL pupils in this class
           </button>
         </div>
 
         <div style={{ ...styles.small, marginTop: 10 }}>
-          Tip: Download works any time (not just after import).
+          Tip: If the dropdown ever looks wrong, click <b>Refresh</b>. Download works any time.
         </div>
       </div>
 
-      {/* Add pupil */}
       <div style={styles.card}>
         <h2 style={{ marginTop: 0 }}>Add pupil</h2>
         <div style={styles.row}>
-          <input
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
-            placeholder="First name"
-            style={styles.input}
-          />
-          <input
-            value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
-            placeholder="Surname"
-            style={styles.input}
-          />
-          <button style={styles.btnPrimary} onClick={addPupil} disabled={busy}>
+          <input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="First name" style={styles.input} />
+          <input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Surname" style={styles.input} />
+          <button style={styles.btnPrimary} onClick={addPupil} disabled={busy || !classLabel}>
             Add pupil
           </button>
         </div>
         <div style={{ ...styles.small, marginTop: 10 }}>
-          After adding, you’ll see their <b>username + PIN</b> so you can copy it straight away.
+          After adding, you’ll see their <b>username + PIN</b>.
         </div>
       </div>
 
-      {/* Bulk import */}
       <div style={styles.card}>
         <h2 style={{ marginTop: 0 }}>Bulk import pupils</h2>
         <div style={{ ...styles.small, marginBottom: 10 }}>
           Paste CSV with headers exactly: <b>class_label,first_name,last_name</b>
         </div>
-        <textarea
-          value={csvText}
-          onChange={(e) => setCsvText(e.target.value)}
-          style={styles.textarea}
-        />
+        <textarea value={csvText} onChange={(e) => setCsvText(e.target.value)} style={styles.textarea} />
         <div style={{ marginTop: 10 }}>
           <button style={styles.btnPrimary} onClick={bulkImport} disabled={busy}>
             Import CSV
@@ -396,9 +394,8 @@ export default function ManagePupilsPage() {
         </div>
       </div>
 
-      {/* List */}
       <div style={styles.card}>
-        <h2 style={{ marginTop: 0 }}>Pupils in {classLabel}</h2>
+        <h2 style={{ marginTop: 0 }}>Pupils in {classLabel || "(choose a class)"}</h2>
 
         {filtered.length === 0 ? (
           <div style={styles.small}>No pupils found.</div>
@@ -422,18 +419,10 @@ export default function ManagePupilsPage() {
                     <td style={{ ...styles.td, ...styles.mono }}>{p.pin || "—"}</td>
                     <td style={styles.td}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button
-                          style={styles.btn}
-                          onClick={() => resetPin(p.id, name)}
-                          disabled={busy}
-                        >
+                        <button style={styles.btn} onClick={() => resetPin(p.id, name)} disabled={busy}>
                           Reset PIN
                         </button>
-                        <button
-                          style={styles.btnDanger}
-                          onClick={() => deletePupil(p.id, name)}
-                          disabled={busy}
-                        >
+                        <button style={styles.btnDanger} onClick={() => deletePupil(p.id, name)} disabled={busy}>
                           Delete
                         </button>
                       </div>
