@@ -1,52 +1,56 @@
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
-function getSession(req) {
-  const raw = req.cookies?.bmtt_teacher;
-  if (!raw) return null;
-  try {
-    const p = JSON.parse(raw);
-    return {
-      teacher_id: p.teacherId || p.teacher_id || null,
-      role: p.role || null,
-    };
-  } catch {
-    return null;
-  }
-}
+// pages/api/admin/pupils/delete.js
+import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
+import { requireAdmin } from "../../../../lib/requireAdmin";
 
 export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
+
+  const adminCheck = await requireAdmin(req, res);
+  if (!adminCheck.ok) return;
+
   try {
-    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
+    const { student_id } = req.body || {};
+    if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
 
-    const session = getSession(req);
-    if (!session?.teacher_id) return res.status(401).json({ ok: false, error: "Not logged in" });
-    if (session.role !== "admin") return res.status(403).json({ ok: false, error: "Admins only" });
+    // 1) Find attempts for this student (so we can delete related question_records first if they exist)
+    const { data: attempts, error: aErr } = await supabaseAdmin
+      .from("attempts")
+      .select("id")
+      .eq("student_id", student_id);
 
-    const { pupil_id } = req.body || {};
-    if (!pupil_id) return res.status(400).json({ ok: false, error: "Missing pupil_id" });
-
-    // Optional safety: delete attempts first (only if you want clean removal)
-    // If your attempts table has a FK with cascade, you can remove this.
-    const { error: aErr } = await supabase.from("attempts").delete().eq("student_id", pupil_id);
     if (aErr) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to delete pupil attempts",
-        debug: aErr.message,
-        note: "If you want to keep attempts history, tell me and we’ll change this.",
-      });
+      return res.status(500).json({ ok: false, error: "Failed to load attempts", debug: aErr.message });
     }
 
-    const { error: sErr } = await supabase.from("students").delete().eq("id", pupil_id);
-    if (sErr) return res.status(500).json({ ok: false, error: "Failed to delete pupil", debug: sErr.message });
+    const attemptIds = (attempts || []).map((a) => a.id);
+
+    // 2) Delete question_records for those attempts (table name varies in projects; try a couple)
+    if (attemptIds.length > 0) {
+      // try "question_records"
+      await supabaseAdmin.from("question_records").delete().in("attempt_id", attemptIds);
+      // if you also have "attempt_question_records" or similar, add more deletes here later
+    }
+
+    // 3) Delete attempts (this fixes the FK constraint you hit)
+    if (attemptIds.length > 0) {
+      const { error: delAttemptsErr } = await supabaseAdmin.from("attempts").delete().eq("student_id", student_id);
+      if (delAttemptsErr) {
+        return res
+          .status(500)
+          .json({ ok: false, error: "Failed to delete attempts", debug: delAttemptsErr.message });
+      }
+    }
+
+    // 4) Finally delete the student
+    const { error: delStudentErr } = await supabaseAdmin.from("students").delete().eq("id", student_id);
+    if (delStudentErr) {
+      return res
+        .status(500)
+        .json({ ok: false, error: "Failed to delete pupil", debug: delStudentErr.message });
+    }
 
     return res.json({ ok: true });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
   }
 }
