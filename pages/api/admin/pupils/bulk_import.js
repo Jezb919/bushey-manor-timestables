@@ -4,7 +4,6 @@ import supabaseAdminDefault, {
   supabaseAdmin as supabaseAdminNamed,
 } from "../../../../lib/supabaseAdmin";
 
-// ✅ Works whether lib/supabaseAdmin exports named or default
 const supabaseAdmin = supabaseAdminNamed || supabaseAdminDefault;
 
 /**
@@ -34,13 +33,11 @@ function tryParseSession(raw) {
   candidates.push(raw);
 
   for (const c of candidates) {
-    // plain JSON
     try {
       const j = JSON.parse(c);
       if (j && typeof j === "object") return j;
     } catch (_) {}
 
-    // base64 JSON
     try {
       const decoded = Buffer.from(c, "base64").toString("utf8");
       const j = JSON.parse(decoded);
@@ -93,7 +90,6 @@ function safeBody(req) {
   if (typeof req.body === "object") return req.body;
 
   if (typeof req.body === "string") {
-    // try JSON parse, else treat as raw csv
     try {
       const parsed = JSON.parse(req.body);
       if (parsed && typeof parsed === "object") return parsed;
@@ -136,33 +132,19 @@ async function makeUniqueUsername(first, last) {
   return `${base}${Date.now().toString().slice(-6)}`;
 }
 
+// ✅ Your DB uses classes.class_label (NOT classes.label)
 async function findClassIdByLabel(classLabel) {
   const label = String(classLabel || "").trim();
   if (!label) return null;
 
-  // Try classes.label
-  {
-    const { data, error } = await supabaseAdmin
-      .from("classes")
-      .select("id,label")
-      .eq("label", label)
-      .maybeSingle();
-    if (error) throw error;
-    if (data?.id) return data.id;
-  }
+  const { data, error } = await supabaseAdmin
+    .from("classes")
+    .select("id,class_label")
+    .eq("class_label", label)
+    .maybeSingle();
 
-  // Try classes.class_label
-  {
-    const { data, error } = await supabaseAdmin
-      .from("classes")
-      .select("id,class_label")
-      .eq("class_label", label)
-      .maybeSingle();
-    if (error) throw error;
-    if (data?.id) return data.id;
-  }
-
-  return null;
+  if (error) throw error;
+  return data?.id || null;
 }
 
 async function runImport(csvText) {
@@ -271,13 +253,10 @@ export default async function handler(req, res) {
   const debugMode = String(req.query?.debug || "") === "1";
 
   try {
-    // GET = info + optional debug import
     if (req.method === "GET") {
       ensureAdmin(req, res);
       if (res.writableEnded) return;
 
-      // Debug GET import:
-      // /api/admin/pupils/bulk_import?debug=1&csv=class_label,first_name,last_name%0AB4,Sam,Allen
       if (debugMode && req.query?.csv) {
         const csvText = String(req.query.csv || "");
         const result = await runImport(csvText);
@@ -301,20 +280,6 @@ export default async function handler(req, res) {
     ensureAdmin(req, res);
     if (res.writableEnded) return;
 
-    if (!supabaseAdmin || typeof supabaseAdmin.from !== "function") {
-      return res.status(500).json({
-        ok: false,
-        error: "Supabase admin client not available",
-        debug: debugMode
-          ? {
-              hasDefault: !!supabaseAdminDefault,
-              hasNamed: !!supabaseAdminNamed,
-              type: typeof supabaseAdmin,
-            }
-          : undefined,
-      });
-    }
-
     const body = safeBody(req);
     const csvText = body.csvText;
 
@@ -322,13 +287,6 @@ export default async function handler(req, res) {
       return res.status(400).json({
         ok: false,
         error: "No CSV provided. Paste CSV including the header row.",
-        debug: debugMode
-          ? {
-              contentType: req.headers["content-type"] || null,
-              bodyType: typeof req.body,
-              bodyPresent: req.body != null,
-            }
-          : undefined,
       });
     }
 
