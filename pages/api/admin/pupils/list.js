@@ -1,22 +1,85 @@
-import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
-import { requireAdmin } from "../../../../lib/requireAdmin";
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const out = {};
+  header.split(";").forEach((part) => {
+    const [k, ...v] = part.trim().split("=");
+    if (!k) return;
+    out[k] = decodeURIComponent(v.join("=") || "");
+  });
+  return out;
+}
+
+function safeJsonParse(str) {
+  try {
+    return JSON.parse(str);
+  } catch {
+    return null;
+  }
+}
+
+function getAuthFromCookies(req) {
+  const cookies = parseCookies(req);
+  const raw = cookies.bmtt_teacher || cookies.bmtt_session || "";
+  const parsed = safeJsonParse(raw);
+  const role = parsed?.role || null;
+  const teacherId = parsed?.teacherId || parsed?.teacher_id || null;
+  return { role, teacherId };
+}
+
+async function supabaseAdmin() {
+  const { createClient } = await import("@supabase/supabase-js");
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Missing SUPABASE env vars");
+  return createClient(url, key, { auth: { persistSession: false } });
+}
 
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Use GET" });
 
-  const adminCheck = await requireAdmin(req, res);
-  if (!adminCheck?.ok) return;
+  const auth = getAuthFromCookies(req);
+  if (auth.role !== "admin") {
+    return res.status(403).json({ ok: false, error: "Admins only", debug: auth });
+  }
 
-  const { class_label } = req.query || {};
-  if (!class_label) return res.status(400).json({ ok: false, error: "Missing class_label" });
+  const class_label = String(req.query.class_label || "").trim();
 
-  const { data, error } = await supabaseAdmin
-    .from("students")
-    .select("id, first_name, last_name, username, class_label")
-    .eq("class_label", class_label)
-    .order("first_name", { ascending: true });
+  try {
+    const supabase = await supabaseAdmin();
 
-  if (error) return res.status(500).json({ ok: false, error: "Failed to load pupils", debug: error.message });
+    let classRow = null;
+    if (class_label) {
+      const { data: cls, error: clsErr } = await supabase
+        .from("classes")
+        .select("id,class_label")
+        .eq("class_label", class_label)
+        .single();
+      if (clsErr || !cls) {
+        return res.status(400).json({ ok: false, error: "Class not found", debug: clsErr?.message || clsErr });
+      }
+      classRow = cls;
+    }
 
-  return res.json({ ok: true, pupils: data || [] });
+    let q = supabase
+      .from("pupils")
+      .select("id,first_name,last_name,username,class_id")
+      .order("first_name", { ascending: true })
+      .order("last_name", { ascending: true });
+
+    if (classRow?.id) q = q.eq("class_id", classRow.id);
+
+    const { data: pupils, error } = await q;
+
+    if (error) {
+      return res.status(500).json({ ok: false, error: "Failed to load pupils", debug: error.message });
+    }
+
+    return res.json({
+      ok: true,
+      class: classRow ? { id: classRow.id, class_label: classRow.class_label } : null,
+      pupils: pupils || [],
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
+  }
 }
