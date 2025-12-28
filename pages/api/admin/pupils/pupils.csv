@@ -1,0 +1,153 @@
+import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
+import { requireAdmin } from "../../../../lib/requireAdmin";
+
+// Simple CSV parser (no extra libraries needed)
+function parseCsv(text) {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) return { headers: [], rows: [] };
+
+  const headers = lines[0].split(",").map((h) => h.trim());
+  const rows = lines.slice(1).map((line) => {
+    // naive CSV split (works fine if names don’t contain commas)
+    const cols = line.split(",").map((c) => c.trim());
+    const obj = {};
+    headers.forEach((h, i) => (obj[h] = cols[i] ?? ""));
+    return obj;
+  });
+
+  return { headers, rows };
+}
+
+function slug(s) {
+  return (s || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function randomPin() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+export default async function handler(req, res) {
+  try {
+    if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
+
+    // ✅ Admin only
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
+
+    const { csv_text } = req.body || {};
+    if (!csv_text || typeof csv_text !== "string") {
+      return res.status(400).json({ ok: false, error: "Missing csv_text" });
+    }
+
+    const { headers, rows } = parseCsv(csv_text);
+
+    const need = ["class_label", "first_name", "last_name"];
+    for (const h of need) {
+      if (!headers.includes(h)) {
+        return res.status(400).json({
+          ok: false,
+          error: `CSV must include headers: ${need.join(", ")}`,
+          got: headers,
+        });
+      }
+    }
+
+    // Load classes into a map: label -> id
+    const { data: classes, error: classErr } = await supabaseAdmin
+      .from("classes")
+      .select("id,class_label");
+
+    if (classErr) return res.status(500).json({ ok: false, error: "Failed to load classes", debug: classErr.message });
+
+    const classMap = new Map((classes || []).map((c) => [c.class_label, c.id]));
+
+    // Load existing usernames to avoid collisions
+    const { data: existingPupils, error: pupErr } = await supabaseAdmin
+      .from("pupils")
+      .select("username");
+
+    if (pupErr) return res.status(500).json({ ok: false, error: "Failed to load pupils", debug: pupErr.message });
+
+    const usernameSet = new Set((existingPupils || []).map((p) => p.username).filter(Boolean));
+
+    const created = [];
+    const skipped = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const class_label = (r.class_label || "").trim();
+      const first_name = (r.first_name || "").trim();
+      const last_name = (r.last_name || "").trim();
+
+      if (!class_label || !first_name) {
+        skipped.push({ row: i + 2, reason: "Missing class_label or first_name", data: r });
+        continue;
+      }
+
+      const class_id = classMap.get(class_label);
+      if (!class_id) {
+        skipped.push({ row: i + 2, reason: `Unknown class_label: ${class_label}`, data: r });
+        continue;
+      }
+
+      // Username: firstname + first initial surname + number
+      const base = slug(first_name) + (slug(last_name).slice(0, 1) || "");
+      let username = base || `pupil${Date.now()}`;
+      let n = 1;
+      while (usernameSet.has(username)) {
+        n++;
+        username = `${base}${n}`;
+      }
+      usernameSet.add(username);
+
+      // PIN: 4 digits
+      const pin = randomPin();
+
+      const { data: inserted, error: insErr } = await supabaseAdmin
+        .from("pupils")
+        .insert([
+          {
+            class_id,
+            first_name,
+            last_name: last_name || null,
+            username,
+            pin, // <- assumes you have pupils.pin column (you do, since student login uses it)
+          },
+        ])
+        .select("id,first_name,last_name,username,class_id")
+        .single();
+
+      if (insErr) {
+        skipped.push({ row: i + 2, reason: insErr.message, data: r });
+        continue;
+      }
+
+      created.push({
+        id: inserted.id,
+        class_label,
+        first_name: inserted.first_name,
+        last_name: inserted.last_name,
+        username: inserted.username,
+        pin, // show once
+      });
+    }
+
+    return res.json({
+      ok: true,
+      created_count: created.length,
+      skipped_count: skipped.length,
+      created,
+      skipped,
+      note: "PINs shown once here. Copy/download immediately.",
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
+  }
+}
