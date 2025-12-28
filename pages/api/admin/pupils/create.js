@@ -1,13 +1,5 @@
 import crypto from "crypto";
 
-/**
- * Self-contained Admin API (no lib imports).
- * Requires env:
- * - NEXT_PUBLIC_SUPABASE_URL
- * - SUPABASE_SERVICE_ROLE_KEY   (server-only)
- * - PUPIL_PIN_SECRET           (any random string)
- */
-
 function parseCookies(req) {
   const header = req.headers.cookie || "";
   const out = {};
@@ -31,7 +23,6 @@ function getAuthFromCookies(req) {
   const cookies = parseCookies(req);
   const raw = cookies.bmtt_teacher || cookies.bmtt_session || "";
   const parsed = safeJsonParse(raw);
-  // Accept both teacherId and teacher_id keys
   const role = parsed?.role || null;
   const teacherId = parsed?.teacherId || parsed?.teacher_id || null;
   return { role, teacherId };
@@ -66,6 +57,19 @@ function hashPin(pin) {
   return crypto.createHash("sha256").update(`${pin}:${secret}`).digest("hex");
 }
 
+// Try to use the real table name in YOUR database.
+// Many versions use "students" not "pupils".
+async function detectStudentTable(supabase) {
+  // Prefer students first
+  const tryTables = ["students", "pupils"];
+  for (const t of tryTables) {
+    const { error } = await supabase.from(t).select("id").limit(1);
+    if (!error) return t;
+  }
+  // If both error, return first so we show a helpful error later
+  return "students";
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
 
@@ -75,9 +79,10 @@ export default async function handler(req, res) {
   }
 
   let body = req.body;
-  // Next sometimes sends string JSON
   if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch {}
+    try {
+      body = JSON.parse(body);
+    } catch {}
   }
 
   const class_label = normaliseName(body?.class_label || body?.classLabel);
@@ -90,8 +95,9 @@ export default async function handler(req, res) {
 
   try {
     const supabase = await supabaseAdmin();
+    const table = await detectStudentTable(supabase);
 
-    // 1) Find class by label
+    // Find class by label
     const { data: cls, error: clsErr } = await supabase
       .from("classes")
       .select("id,class_label")
@@ -102,13 +108,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: "Class not found", debug: clsErr?.message || clsErr });
     }
 
-    // 2) Generate unique username
+    // Generate unique username
     const base = baseUsername(first_name, last_name);
     let username = "";
     for (let i = 1; i <= 999; i++) {
       const candidate = `${base}${i}`;
       const { data: existing, error: exErr } = await supabase
-        .from("pupils")
+        .from(table)
         .select("id")
         .eq("username", candidate)
         .limit(1);
@@ -121,83 +127,71 @@ export default async function handler(req, res) {
         break;
       }
     }
-    if (!username) {
-      return res.status(500).json({ ok: false, error: "Could not generate unique username" });
-    }
+    if (!username) return res.status(500).json({ ok: false, error: "Could not generate unique username" });
 
-    // 3) Create PIN
+    // Create PIN
     const pin = randomPin4();
     const pin_hash = hashPin(pin);
 
-    // 4) Insert pupil
-    // Some databases have pin_hash column, some have pin.
-    // We'll try pin_hash first, then fallback to pin if that fails.
-    let insertErr = null;
+    // Insert pupil/student
+    // Some DBs use pin_hash, others use pin, others use passcode etc.
+    // We'll try pin_hash, then pin.
     let inserted = null;
 
-    // try pin_hash
+    // Attempt 1: pin_hash
     {
       const { data, error } = await supabase
-        .from("pupils")
+        .from(table)
         .insert([
           {
             class_id: cls.id,
             first_name,
             last_name,
             username,
-            pin_hash, // preferred
+            pin_hash,
           },
         ])
         .select("id,first_name,last_name,username,class_id")
         .single();
 
-      if (!error) {
-        inserted = data;
-      } else {
-        insertErr = error;
+      if (!error) inserted = data;
+      else {
+        // If pin_hash column doesn't exist, try pin
+        const msg = error.message || "";
+        const missingPinHash =
+          msg.includes("column") && (msg.includes("pin_hash") || msg.includes("does not exist"));
+
+        if (!missingPinHash) {
+          return res.status(500).json({ ok: false, error: "Failed to add pupil", debug: msg, table });
+        }
       }
     }
 
-    // fallback to pin column if pin_hash doesn't exist
+    // Attempt 2: pin
     if (!inserted) {
-      const msg = insertErr?.message || "";
-      const looksLikeMissingColumn =
-        msg.includes("column") && (msg.includes("pin_hash") || msg.includes("does not exist"));
+      const { data, error } = await supabase
+        .from(table)
+        .insert([
+          {
+            class_id: cls.id,
+            first_name,
+            last_name,
+            username,
+            pin,
+          },
+        ])
+        .select("id,first_name,last_name,username,class_id")
+        .single();
 
-      if (looksLikeMissingColumn) {
-        const { data, error } = await supabase
-          .from("pupils")
-          .insert([
-            {
-              class_id: cls.id,
-              first_name,
-              last_name,
-              username,
-              pin, // fallback
-            },
-          ])
-          .select("id,first_name,last_name,username,class_id")
-          .single();
-
-        if (error) {
-          return res.status(500).json({
-            ok: false,
-            error: "Failed to add pupil (pin column also failed)",
-            debug: error.message,
-          });
-        }
-        inserted = data;
-      } else {
-        return res.status(500).json({
-          ok: false,
-          error: "Failed to add pupil",
-          debug: insertErr?.message || insertErr,
-        });
+      if (error) {
+        return res.status(500).json({ ok: false, error: "Failed to add pupil", debug: error.message, table });
       }
+      inserted = data;
     }
 
     return res.json({
       ok: true,
+      table_used: table,
       pupil: {
         id: inserted.id,
         first_name: inserted.first_name,
@@ -206,8 +200,7 @@ export default async function handler(req, res) {
         class_id: inserted.class_id,
         class_label: cls.class_label,
       },
-      // IMPORTANT: only show PIN once at creation time
-      pin,
+      pin, // show once
     });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
