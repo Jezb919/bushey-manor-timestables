@@ -1,6 +1,35 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
+/**
+ * Safe JSON fetch:
+ * - Reads response as text first
+ * - Tries JSON.parse
+ * - If not JSON, still surfaces useful error message
+ */
+async function fetchJson(url, options) {
+  const r = await fetch(url, options);
+  const text = await r.text();
+
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
+
+  if (!r.ok) {
+    const msg =
+      (data && (data.error || data.message)) ||
+      text ||
+      `Request failed (${r.status})`;
+    throw new Error(msg);
+  }
+
+  // If endpoint returned empty (rare), treat as ok
+  return data ?? { ok: true };
+}
+
 export default function AdminPupilsPage() {
   const [me, setMe] = useState(null);
   const [classes, setClasses] = useState([]);
@@ -145,8 +174,7 @@ export default function AdminPupilsPage() {
 
   // --------- auth + classes ----------
   useEffect(() => {
-    fetch("/api/teacher/me")
-      .then((r) => r.json())
+    fetchJson("/api/teacher/me")
       .then((data) => {
         if (!data.ok) {
           window.location.href = "/teacher/login";
@@ -162,31 +190,18 @@ export default function AdminPupilsPage() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/teacher/classes")
-      .then((r) => r.json())
+    fetchJson("/api/teacher/classes")
       .then((data) => {
         if (data?.ok && Array.isArray(data.classes) && data.classes.length) {
           setClasses(data.classes);
-          // pick first as default if current isn't present
           const labels = new Set(data.classes.map((c) => c.class_label));
           if (!labels.has(classLabel)) setClassLabel(data.classes[0].class_label);
         } else {
-          // fallback list if needed
-          setClasses([
-            { class_label: "M4" },
-            { class_label: "M3" },
-            { class_label: "B4" },
-            { class_label: "B3" },
-          ]);
+          setClasses([{ class_label: "M4" }, { class_label: "B4" }, { class_label: "M3" }, { class_label: "B3" }]);
         }
       })
       .catch(() => {
-        setClasses([
-          { class_label: "M4" },
-          { class_label: "M3" },
-          { class_label: "B4" },
-          { class_label: "B3" },
-        ]);
+        setClasses([{ class_label: "M4" }, { class_label: "B4" }, { class_label: "M3" }, { class_label: "B3" }]);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -197,8 +212,9 @@ export default function AdminPupilsPage() {
     setError("");
     setMessage("");
     try {
-      const r = await fetch(`/api/admin/pupils/list?class_label=${encodeURIComponent(label)}`);
-      const data = await r.json();
+      const data = await fetchJson(
+        `/api/admin/pupils/list?class_label=${encodeURIComponent(label)}`
+      );
       if (!data.ok) throw new Error(data.error || "Failed to load pupils");
       setPupils(data.pupils || []);
     } catch (e) {
@@ -230,7 +246,7 @@ export default function AdminPupilsPage() {
     setError("");
     setMessage("");
     try {
-      const r = await fetch("/api/admin/pupils/add", {
+      const data = await fetchJson("/api/admin/pupils/add", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -239,10 +255,8 @@ export default function AdminPupilsPage() {
           last_name: lastName.trim(),
         }),
       });
-      const data = await r.json();
       if (!data.ok) throw new Error(data.error || "Failed to add pupil");
 
-      // show the new PIN immediately
       setMessage(
         `Added ${data.pupil?.first_name || ""} ${data.pupil?.last_name || ""} — username: ${
           data.pupil?.username
@@ -262,15 +276,13 @@ export default function AdminPupilsPage() {
     if (!confirm("Reset this pupil's PIN? You will need to copy the new PIN.")) return;
 
     try {
-      const r = await fetch("/api/admin/pupils/reset_pin", {
+      const data = await fetchJson("/api/admin/pupils/reset_pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ student_id }),
       });
-      const data = await r.json();
       if (!data.ok) throw new Error(data.error || "Failed to reset PIN");
 
-      // show new PIN clearly
       alert(`New PIN: ${data.pin}`);
       setMessage(`PIN reset ✅ New PIN: ${data.pin}`);
       await loadPupils(classLabel);
@@ -285,12 +297,11 @@ export default function AdminPupilsPage() {
     if (!confirm("Delete this pupil? This cannot be undone.")) return;
 
     try {
-      const r = await fetch("/api/admin/pupils/delete", {
+      const data = await fetchJson("/api/admin/pupils/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ student_id }),
       });
-      const data = await r.json();
       if (!data.ok) throw new Error(data.error || "Failed to delete pupil");
       setMessage("Pupil deleted ✅");
       await loadPupils(classLabel);
@@ -302,18 +313,18 @@ export default function AdminPupilsPage() {
   async function deleteAllInClass() {
     setError("");
     setMessage("");
+
     const confirmText = prompt(
       `Type DELETE to remove ALL pupils in ${classLabel} (and their attempts).`
     );
     if (confirmText !== "DELETE") return;
 
     try {
-      const r = await fetch("/api/admin/pupils/delete_all", {
+      const data = await fetchJson("/api/admin/pupils/delete_all", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ class_label: classLabel }),
       });
-      const data = await r.json();
       if (!data.ok) throw new Error(data.error || "Failed to delete pupils");
       setMessage(`Deleted ${data.deleted || 0} pupil(s) ✅`);
       await loadPupils(classLabel);
@@ -327,12 +338,11 @@ export default function AdminPupilsPage() {
     setMessage("");
 
     try {
-      const r = await fetch("/api/admin/pupils/import_csv", {
+      const data = await fetchJson("/api/admin/pupils/import_csv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ csv: csvText }),
       });
-      const data = await r.json();
       if (!data.ok) throw new Error(data.error || "Import failed");
 
       setMessage(
@@ -386,9 +396,7 @@ export default function AdminPupilsPage() {
           <h1 style={styles.title}>Manage Pupils</h1>
           <div style={styles.sub}>
             Logged in as <b>{me.email}</b>{" "}
-            <span style={styles.pill("rgba(59,130,246,0.12)", "#1e3a8a")}>
-              admin
-            </span>
+            <span style={styles.pill("rgba(59,130,246,0.12)", "#1e3a8a")}>admin</span>
           </div>
           <div style={{ marginTop: 8 }}>
             <Link href="/teacher/dashboard">← Back to dashboard</Link>
@@ -518,9 +526,7 @@ export default function AdminPupilsPage() {
                   <b>
                     {(p.first_name || "").trim()} {(p.last_name || "").trim()}
                   </b>
-                  {!p.last_name ? (
-                    <div style={styles.small}>Surname missing</div>
-                  ) : null}
+                  {!p.last_name ? <div style={styles.small}>Surname missing</div> : null}
                 </td>
 
                 <td style={{ ...styles.td, ...styles.mono }}>{p.username}</td>
@@ -559,11 +565,6 @@ export default function AdminPupilsPage() {
             )}
           </tbody>
         </table>
-
-        <div style={{ marginTop: 10, ...styles.small }}>
-          If you can’t see PINs, it means your database column name is different.
-          (Tell me what the column is called and I’ll adjust.)
-        </div>
       </div>
     </div>
   );
