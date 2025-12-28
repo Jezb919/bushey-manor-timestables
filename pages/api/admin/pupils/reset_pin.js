@@ -1,7 +1,16 @@
-import cookie from "cookie";
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const out = {};
+  header.split(";").forEach((part) => {
+    const [k, ...v] = part.trim().split("=");
+    if (!k) return;
+    out[k] = decodeURIComponent(v.join("=") || "");
+  });
+  return out;
+}
 
 function readTeacherCookie(req) {
-  const cookies = cookie.parse(req.headers.cookie || "");
+  const cookies = parseCookies(req);
   const raw = cookies.bmtt_teacher || cookies.bmtt_session;
   if (!raw) return null;
   try {
@@ -32,12 +41,16 @@ function supabaseAdmin() {
 async function tryUpdatePin(supabase, student_id, newPin, columnName) {
   const payload = { [columnName]: newPin };
 
-  const { error } = await supabase.from("students").update(payload).eq("id", student_id);
+  const { error } = await supabase
+    .from("students")
+    .update(payload)
+    .eq("id", student_id);
 
   if (!error) return { ok: true, column: columnName };
 
-  // If column doesn't exist, try next
   const msg = String(error.message || "");
+
+  // If column doesn't exist, try next
   if (msg.includes("does not exist") && msg.includes(columnName)) {
     return { ok: false, reason: "missing_column", message: msg };
   }
@@ -47,15 +60,21 @@ async function tryUpdatePin(supabase, student_id, newPin, columnName) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
+  if (req.method !== "POST") {
+    return res.status(405).json({ ok: false, error: "Use POST" });
+  }
 
   const session = readTeacherCookie(req);
   if (!session || session.role !== "admin") {
-    return res.status(403).json({ ok: false, error: "Admins only", debug: session || null });
+    return res
+      .status(403)
+      .json({ ok: false, error: "Admins only", debug: session || null });
   }
 
   const { student_id } = req.body || {};
-  if (!student_id) return res.status(400).json({ ok: false, error: "Missing student_id" });
+  if (!student_id) {
+    return res.status(400).json({ ok: false, error: "Missing student_id" });
+  }
 
   try {
     const supabase = supabaseAdmin();
@@ -72,7 +91,7 @@ export default async function handler(req, res) {
 
     const newPin = genPin();
 
-    // Try common schema variants (your project has shifted a few times)
+    // Try common schema variants
     const candidates = ["pin", "pin_hash", "passcode", "password"];
     const attempts = [];
 
@@ -93,7 +112,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // If we got here: none of the columns exist
     return res.status(500).json({
       ok: false,
       error: "No usable PIN column found on students table",
