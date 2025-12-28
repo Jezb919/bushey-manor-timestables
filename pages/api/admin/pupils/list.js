@@ -34,6 +34,15 @@ async function supabaseAdmin() {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
+async function detectStudentTable(supabase) {
+  const tryTables = ["students", "pupils"];
+  for (const t of tryTables) {
+    const { error } = await supabase.from(t).select("id").limit(1);
+    if (!error) return t;
+  }
+  return "students";
+}
+
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Use GET" });
 
@@ -46,6 +55,7 @@ export default async function handler(req, res) {
 
   try {
     const supabase = await supabaseAdmin();
+    const table = await detectStudentTable(supabase);
 
     let classRow = null;
     if (class_label) {
@@ -54,6 +64,7 @@ export default async function handler(req, res) {
         .select("id,class_label")
         .eq("class_label", class_label)
         .single();
+
       if (clsErr || !cls) {
         return res.status(400).json({ ok: false, error: "Class not found", debug: clsErr?.message || clsErr });
       }
@@ -61,7 +72,7 @@ export default async function handler(req, res) {
     }
 
     let q = supabase
-      .from("pupils")
+      .from(table)
       .select("id,first_name,last_name,username,class_id")
       .order("first_name", { ascending: true })
       .order("last_name", { ascending: true });
@@ -69,13 +80,13 @@ export default async function handler(req, res) {
     if (classRow?.id) q = q.eq("class_id", classRow.id);
 
     const { data: pupils, error } = await q;
-
     if (error) {
-      return res.status(500).json({ ok: false, error: "Failed to load pupils", debug: error.message });
+      return res.status(500).json({ ok: false, error: "Failed to load pupils", debug: error.message, table });
     }
 
     return res.json({
       ok: true,
+      table_used: table,
       class: classRow ? { id: classRow.id, class_label: classRow.class_label } : null,
       pupils: pupils || [],
     });
