@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
-import { requireAdmin } from "../../../../lib/requireAdmin";
+import requireAdmin from "../../../../lib/requireAdmin";
 
 function parseCsv(text) {
   const lines = String(text || "")
@@ -78,7 +78,7 @@ function safeBody(req) {
       const parsed = JSON.parse(req.body);
       if (parsed && typeof parsed === "object") return parsed;
     } catch (_) {}
-    return { csvText: req.body }; // treat raw as CSV
+    return { csvText: req.body };
   }
 
   return {};
@@ -87,7 +87,6 @@ function safeBody(req) {
 export default async function handler(req, res) {
   try {
     if (req.method === "GET") {
-      // Handy "is this deployed" check
       await requireAdmin(req, res);
       if (res.writableEnded) return;
       return res.status(200).json({
@@ -102,7 +101,7 @@ export default async function handler(req, res) {
     }
 
     await requireAdmin(req, res);
-    if (res.writableEnded) return; // ✅ CRITICAL: stop if requireAdmin already responded
+    if (res.writableEnded) return;
 
     const body = safeBody(req);
     const csvText = body.csvText;
