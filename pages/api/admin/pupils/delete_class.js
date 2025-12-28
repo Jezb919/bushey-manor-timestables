@@ -9,77 +9,91 @@ function parseCookies(req) {
   return out;
 }
 
-function safeJsonParse(str) {
-  try { return JSON.parse(str); } catch { return null; }
-}
-
-function getAuthFromCookies(req) {
+function readTeacherCookie(req) {
   const cookies = parseCookies(req);
-  const raw = cookies.bmtt_teacher || cookies.bmtt_session || "";
-  const parsed = safeJsonParse(raw);
-  const role = parsed?.role || null;
-  const teacherId = parsed?.teacherId || parsed?.teacher_id || null;
-  return { role, teacherId };
-}
-
-async function supabaseAdmin() {
-  const { createClient } = await import("@supabase/supabase-js");
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error("Missing SUPABASE env vars");
-  return createClient(url, key, { auth: { persistSession: false } });
-}
-
-async function detectStudentTable(supabase) {
-  for (const t of ["students", "pupils"]) {
-    const { error } = await supabase.from(t).select("id").limit(1);
-    if (!error) return t;
+  const raw = cookies.bmtt_teacher || cookies.bmtt_session;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
   }
-  return "students";
+}
+
+function supabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceKey) throw new Error("Missing Supabase env vars");
+  const { createClient } = require("@supabase/supabase-js");
+  return createClient(url, serviceKey, { auth: { persistSession: false } });
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
-
-  const auth = getAuthFromCookies(req);
-  if (auth.role !== "admin") {
-    return res.status(403).json({ ok: false, error: "Admins only", debug: auth });
+  if (req.method !== "POST") {
+    return res.status(405).json({ ok: false, error: "Use POST" });
   }
 
-  let body = req.body;
-  if (typeof body === "string") {
-    try { body = JSON.parse(body); } catch {}
+  const session = readTeacherCookie(req);
+  if (!session || session.role !== "admin") {
+    return res.status(403).json({ ok: false, error: "Admins only" });
   }
-
-  const class_label = String(body?.class_label || "").trim();
-  if (!class_label) return res.status(400).json({ ok: false, error: "Missing class_label" });
 
   try {
-    const supabase = await supabaseAdmin();
-    const table = await detectStudentTable(supabase);
+    const { class_label } = req.body || {};
+    const label = String(class_label || "").trim();
+    if (!label) return res.status(400).json({ ok: false, error: "Missing class_label" });
 
+    const supabase = supabaseAdmin();
+
+    // 1) find class
     const { data: cls, error: clsErr } = await supabase
       .from("classes")
       .select("id,class_label")
-      .eq("class_label", class_label)
-      .single();
+      .eq("class_label", label)
+      .maybeSingle();
 
-    if (clsErr || !cls) {
-      return res.status(400).json({ ok: false, error: "Class not found", debug: clsErr?.message || clsErr });
-    }
+    if (clsErr) throw new Error(clsErr.message);
+    if (!cls) return res.status(404).json({ ok: false, error: "Class not found" });
 
-    // Delete pupils for that class (attempts should be cascade or handled elsewhere)
-    const { error: delErr } = await supabase
-      .from(table)
-      .delete()
+    // 2) students in that class
+    const { data: students, error: sErr } = await supabase
+      .from("students")
+      .select("id")
       .eq("class_id", cls.id);
 
-    if (delErr) {
-      return res.status(500).json({ ok: false, error: "Failed to delete pupils", debug: delErr.message, table });
+    if (sErr) throw new Error(sErr.message);
+
+    const ids = (students || []).map((s) => s.id);
+    if (ids.length === 0) {
+      return res.status(200).json({ ok: true, deleted: 0, class_label: label });
     }
 
-    return res.json({ ok: true, deleted_class: class_label, table_used: table });
+    // 3) delete attempts first (FK constraint)
+    const { error: aErr } = await supabase
+      .from("attempts")
+      .delete()
+      .in("student_id", ids);
+
+    if (aErr) throw new Error(aErr.message);
+
+    // 4) delete students
+    const { error: dErr } = await supabase
+      .from("students")
+      .delete()
+      .in("id", ids);
+
+    if (dErr) throw new Error(dErr.message);
+
+    return res.status(200).json({
+      ok: true,
+      deleted: ids.length,
+      class_label: label,
+    });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to delete pupils",
+      debug: String(e.message || e),
+    });
   }
 }
