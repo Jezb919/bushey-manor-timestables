@@ -1,25 +1,27 @@
-// pages/teacher/admin/pupils.js
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 export default function AdminPupilsPage() {
   const [me, setMe] = useState(null);
+
   const [classes, setClasses] = useState([]);
   const [classLabel, setClassLabel] = useState("M4");
 
-  const [list, setList] = useState([]);
-  const [loadingList, setLoadingList] = useState(false);
+  const [pupils, setPupils] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
 
   const [csvText, setCsvText] = useState("class_label,first_name,last_name\n");
-  const [importResult, setImportResult] = useState(null);
+  const [lastImportCreated, setLastImportCreated] = useState([]); // [{full_name, username, pin, class_label}]
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
+  const canDownloadPins = useMemo(() => lastImportCreated?.length > 0, [lastImportCreated]);
 
-  const canUsePage = useMemo(() => me && me.role === "admin", [me]);
-
-  // --- Auth check (admin only) ---
   useEffect(() => {
+    // confirm teacher/admin session
     fetch("/api/teacher/me")
       .then((r) => r.json())
       .then((data) => {
@@ -27,344 +29,465 @@ export default function AdminPupilsPage() {
           window.location.href = "/teacher/login";
           return;
         }
-        setMe(data.user);
-        if (data.user.role !== "admin") {
-          setErr("Admins only");
+        // only admins can be here
+        if (data.user?.role !== "admin") {
+          window.location.href = "/teacher";
+          return;
         }
+        setMe(data.user);
       })
-      .catch(() => {
-        window.location.href = "/teacher/login";
-      });
+      .catch(() => (window.location.href = "/teacher/login"));
   }, []);
 
-  // --- Load class list ---
   useEffect(() => {
-    if (!me) return;
+    // load classes list (fallback if endpoint not present)
     fetch("/api/teacher/classes")
       .then((r) => r.json())
       .then((data) => {
-        if (!data.ok) return;
-        const labels = (data.classes || []).map((c) => c.label);
-        setClasses(labels);
-        if (labels.length && !labels.includes(classLabel)) setClassLabel(labels[0]);
+        if (data?.ok && Array.isArray(data.classes) && data.classes.length) {
+          const labels = data.classes.map((c) => c.class_label).filter(Boolean);
+          setClasses(labels);
+          if (labels.includes(classLabel) === false) setClassLabel(labels[0]);
+        } else {
+          // fallback list if your endpoint returns something else
+          setClasses(["3M", "3B", "4M", "4B", "M4", "B4", "B3", "M3"]);
+        }
       })
-      .catch(() => {});
-  }, [me]);
+      .catch(() => setClasses(["3M", "3B", "4M", "4B", "M4", "B4", "B3", "M3"]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // --- Load pupils list for selected class ---
-  async function loadPupils(selected = classLabel) {
-    if (!canUsePage) return;
-    setLoadingList(true);
-    setErr("");
+  useEffect(() => {
+    if (!me) return;
+    loadPupils();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, classLabel]);
+
+  async function loadPupils() {
+    setError("");
+    setNotice("");
+    setLoading(true);
     try {
-      const r = await fetch(`/api/admin/pupils/list?class_label=${encodeURIComponent(selected)}`);
+      const r = await fetch(`/api/admin/pupils/list?class_label=${encodeURIComponent(classLabel)}`);
       const data = await r.json();
       if (!data.ok) {
-        setErr(data.error || "Failed to load pupils");
-        setList([]);
-      } else {
-        setList(data.pupils || []);
+        setError(data.error || "Failed to load pupils");
+        setPupils([]);
+        return;
       }
+      setPupils(Array.isArray(data.pupils) ? data.pupils : []);
     } catch (e) {
-      setErr("Failed to load pupils");
-      setList([]);
+      setError("Failed to load pupils");
+      setPupils([]);
     } finally {
-      setLoadingList(false);
+      setLoading(false);
     }
   }
 
-  useEffect(() => {
-    if (!canUsePage) return;
-    loadPupils(classLabel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canUsePage, classLabel]);
-
   async function logout() {
-    await fetch("/api/teacher/logout", { method: "POST" });
+    try {
+      await fetch("/api/teacher/logout", { method: "POST" });
+    } catch {}
     window.location.href = "/teacher/login";
   }
 
-  // --- Clear a whole class (your existing endpoint) ---
-  async function clearClass() {
-    setMsg("");
-    setErr("");
-    if (!confirm(`Delete ALL pupils in ${classLabel}? This is permanent.`)) return;
+  async function addPupil(e) {
+    e.preventDefault();
+    setError("");
+    setNotice("");
+    setLastImportCreated([]);
 
-    try {
-      const r = await fetch("/api/admin/pupils/clear_class", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ class_label: classLabel }),
-      });
-      const data = await r.json();
-      if (!data.ok) {
-        setErr(data.error || "Failed to delete pupils");
-      } else {
-        setMsg(`Deleted pupils in ${classLabel} ✅`);
-        await loadPupils(classLabel);
-      }
-    } catch (e) {
-      setErr("Failed to delete pupils");
+    const fn = (firstName || "").trim();
+    const ln = (lastName || "").trim();
+    if (!fn) {
+      setError("First name is required");
+      return;
     }
-  }
-
-  // --- Bulk import (your existing endpoint) ---
-  async function importCsv() {
-    setMsg("");
-    setErr("");
-    setImportResult(null);
 
     try {
-      const r = await fetch("/api/admin/pupils/bulk_import", {
+      const r = await fetch("/api/admin/pupils/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csv: csvText }),
+        body: JSON.stringify({
+          class_label: classLabel,
+          first_name: fn,
+          last_name: ln || null,
+        }),
       });
       const data = await r.json();
+
       if (!data.ok) {
-        setErr(data.error || "Import failed");
+        setError(data.error || "Failed to add pupil");
         return;
       }
-      setImportResult(data);
-      setMsg(`Imported ${data.created || 0} pupils ✅`);
-      await loadPupils(classLabel);
+
+      // try multiple possible response shapes
+      const created = data.pupil || data.student || data.created || null;
+      const username = data.username || created?.username;
+      const pin = data.pin || data.new_pin || data.temp_pin || created?.pin;
+
+      if (username && pin) {
+        alert(`✅ Created\n\nUsername: ${username}\nPIN: ${pin}\n\nCopy this now.`);
+      } else {
+        alert("✅ Pupil created (but the API didn’t return username+PIN).");
+      }
+
+      setFirstName("");
+      setLastName("");
+      await loadPupils();
     } catch (e) {
-      setErr("Import failed");
+      setError("Failed to add pupil");
     }
   }
 
-  // --- Download usernames + PINs (uses the last importResult created list if available) ---
-  function downloadPins() {
-    if (!importResult?.created_rows?.length) return;
-
-    const lines = [
-      "class_label,first_name,last_name,username,pin",
-      ...importResult.created_rows.map((r) =>
-        [
-          r.class_label || "",
-          r.first_name || "",
-          r.last_name || "",
-          r.username || "",
-          r.pin || "",
-        ]
-          .map((x) => String(x).replaceAll('"', '""'))
-          .map((x) => `"${x}"`)
-          .join(",")
-      ),
-    ];
-
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `pupils_${classLabel}_usernames_pins.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  // --- NEW: Reset PIN for one pupil ---
-  async function resetPin(studentId) {
-    setMsg("");
-    setErr("");
+  async function resetPin(p) {
+    setError("");
+    setNotice("");
+    setLastImportCreated([]);
 
     if (!confirm("Reset this pupil's PIN? You will need to copy the new PIN.")) return;
+
+    // IMPORTANT: we send several keys to match whatever your API expects
+    const payload = {
+      student_id: p.id,
+      pupil_id: p.id,
+      id: p.id,
+      username: p.username,
+    };
 
     try {
       const r = await fetch("/api/admin/pupils/reset_pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id: studentId }),
+        body: JSON.stringify(payload),
       });
-      const data = await r.json();
-      if (!data.ok) {
-        setErr(data.error || "Failed to reset PIN");
+
+      const data = await r.json().catch(() => ({}));
+
+      if (!r.ok || !data.ok) {
+        setError(data.error || `Failed to reset PIN`);
         return;
       }
 
-      // show PIN in a simple prompt so you can copy
-      alert(`New PIN for ${data.student?.username || "pupil"} is: ${data.pin}`);
-      setMsg("PIN reset ✅");
+      const newPin = data.pin || data.new_pin || data.temp_pin || data.newPIN;
+      if (newPin) {
+        alert(`✅ New PIN: ${newPin}\n\nCopy it now.`);
+      } else {
+        alert("✅ PIN reset, but the API did not return the new PIN.");
+      }
+
+      await loadPupils();
     } catch (e) {
-      setErr("Failed to reset PIN");
+      setError("Failed to reset PIN");
     }
   }
 
-  // --- NEW: Delete one pupil ---
-  async function deletePupil(studentId) {
-    setMsg("");
-    setErr("");
+  async function deletePupil(p) {
+    setError("");
+    setNotice("");
+    setLastImportCreated([]);
 
-    if (!confirm("Delete this pupil? This will also delete their attempts.")) return;
+    if (!confirm(`Delete pupil ${p.first_name || ""} ${p.last_name || ""} (${p.username})?`)) return;
 
     try {
       const r = await fetch("/api/admin/pupils/delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id: studentId }),
+        body: JSON.stringify({
+          student_id: p.id,
+          pupil_id: p.id,
+          id: p.id,
+          username: p.username,
+        }),
       });
-      const data = await r.json();
-      if (!data.ok) {
-        setErr(data.error || "Failed to delete pupil");
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        setError(data.error || "Failed to delete pupil");
         return;
       }
-      setMsg("Pupil deleted ✅");
-      await loadPupils(classLabel);
+      setNotice("Deleted ✅");
+      await loadPupils();
     } catch (e) {
-      setErr("Failed to delete pupil");
+      setError("Failed to delete pupil");
     }
+  }
+
+  async function deleteAllInClass() {
+    setError("");
+    setNotice("");
+    setLastImportCreated([]);
+
+    if (
+      !confirm(
+        `Delete ALL pupils in ${classLabel}?\n\nIf any have attempts, deletion may fail unless your DB is set to cascade deletes.`
+      )
+    )
+      return;
+
+    try {
+      const r = await fetch("/api/admin/pupils/delete_class", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ class_label: classLabel }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        setError(data.error || "Failed to delete pupils in class");
+        return;
+      }
+      setNotice(`Deleted pupils in ${classLabel} ✅`);
+      await loadPupils();
+    } catch (e) {
+      setError("Failed to delete pupils in class");
+    }
+  }
+
+  async function importCsv() {
+    setError("");
+    setNotice("");
+    setLastImportCreated([]);
+
+    const text = (csvText || "").trim();
+    if (!text) {
+      setError("Paste CSV first");
+      return;
+    }
+
+    // quick header check (you told me your app expects these headers)
+    const firstLine = text.split(/\r?\n/)[0].trim();
+    if (firstLine !== "class_label,first_name,last_name") {
+      setError("CSV must have headers: class_label,first_name,last_name");
+      return;
+    }
+
+    try {
+      const r = await fetch("/api/admin/pupils/bulk_import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ csv: text }),
+      });
+      const data = await r.json().catch(() => ({}));
+
+      if (!r.ok || !data.ok) {
+        setError(data.error || "Bulk import failed");
+        return;
+      }
+
+      // Expecting something like: { created: [{class_label, full_name, username, pin}] }
+      const created = Array.isArray(data.created) ? data.created : [];
+      setLastImportCreated(created);
+
+      const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+      if (skipped.length) {
+        setNotice(`Imported ✅ (some rows skipped: ${skipped.length})`);
+      } else {
+        setNotice("Imported ✅");
+      }
+
+      await loadPupils();
+    } catch (e) {
+      setError("Bulk import failed");
+    }
+  }
+
+  function downloadPins() {
+    if (!canDownloadPins) return;
+
+    // Create a CSV file for download
+    const lines = ["class_label,full_name,username,pin"];
+    for (const row of lastImportCreated) {
+      const cl = (row.class_label || "").replaceAll('"', '""');
+      const name = (row.full_name || row.name || "").replaceAll('"', '""');
+      const u = (row.username || "").replaceAll('"', '""');
+      const pin = String(row.pin ?? row.new_pin ?? "").replaceAll('"', '""');
+      lines.push(`"${cl}","${name}","${u}","${pin}"`);
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `usernames_pins_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   if (!me) return null;
 
   return (
-    <div style={{ padding: 30, maxWidth: 1000 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+    <div style={{ padding: 30 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
-          <h1 style={{ marginBottom: 6 }}>Manage Pupils</h1>
-          <div style={{ color: "#666" }}>Admin area</div>
+          <h1 style={{ marginTop: 0 }}>Manage Pupils</h1>
+          <p style={{ marginTop: 0, opacity: 0.8 }}>Admin area</p>
+          <p style={{ marginTop: 0 }}>
+            <Link href="/teacher">← Back to dashboard</Link>
+          </p>
         </div>
-        <button onClick={logout} style={{ padding: "10px 14px" }}>
+
+        <button onClick={logout} style={{ padding: "10px 14px", borderRadius: 10 }}>
           Log out
         </button>
       </div>
 
-      <div style={{ marginTop: 10 }}>
-        <Link href="/teacher">← Back to dashboard</Link>
+      {error && (
+        <div style={{ background: "#ffe5e5", color: "#9b1c1c", padding: 12, borderRadius: 10, marginBottom: 16 }}>
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div style={{ background: "#e8fff0", color: "#065f46", padding: 12, borderRadius: 10, marginBottom: 16 }}>
+          {notice}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 18 }}>
+        <b>Class:</b>{" "}
+        <select value={classLabel} onChange={(e) => setClassLabel(e.target.value)}>
+          {classes.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+          {classes.includes("M4") === false && <option value="M4">M4</option>}
+        </select>
+
+        <button onClick={loadPupils} style={{ padding: "6px 10px", borderRadius: 8 }}>
+          Refresh
+        </button>
+
+        <button
+          onClick={deleteAllInClass}
+          style={{
+            padding: "6px 10px",
+            borderRadius: 8,
+            border: "1px solid #b91c1c",
+            color: "#b91c1c",
+            background: "white",
+          }}
+        >
+          Delete ALL pupils in this class
+        </button>
       </div>
 
-      {err && (
-        <div style={{ marginTop: 16, padding: 12, background: "#ffe5e5", borderRadius: 10, color: "#a00" }}>
-          {err}
+      <div style={{ background: "#fff", borderRadius: 16, padding: 18, boxShadow: "0 2px 10px rgba(0,0,0,0.06)" }}>
+        <h2 style={{ marginTop: 0 }}>Add pupil to {classLabel}</h2>
+
+        <form onSubmit={addPupil} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            placeholder="First name"
+            style={{ padding: 10, minWidth: 180 }}
+          />
+          <input
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            placeholder="Surname"
+            style={{ padding: 10, minWidth: 180 }}
+          />
+          <button type="submit" style={{ padding: "10px 14px", borderRadius: 10 }}>
+            Add pupil
+          </button>
+        </form>
+
+        <p style={{ marginBottom: 0, opacity: 0.8 }}>
+          After creating a pupil, you’ll see their <b>username</b> and <b>PIN</b> (copy it straight away).
+        </p>
+      </div>
+
+      <div style={{ height: 20 }} />
+
+      <div style={{ background: "#fff", borderRadius: 16, padding: 18, boxShadow: "0 2px 10px rgba(0,0,0,0.06)" }}>
+        <h2 style={{ marginTop: 0 }}>Bulk import pupils</h2>
+        <p style={{ marginTop: 0 }}>
+          Paste CSV with headers: <b>class_label,first_name,last_name</b>
+        </p>
+
+        <textarea
+          value={csvText}
+          onChange={(e) => setCsvText(e.target.value)}
+          rows={10}
+          style={{ width: "100%", padding: 12, fontFamily: "monospace" }}
+        />
+
+        <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center" }}>
+          <button onClick={importCsv} style={{ padding: "8px 12px", borderRadius: 10 }}>
+            Import CSV
+          </button>
+
+          <button
+            onClick={downloadPins}
+            disabled={!canDownloadPins}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 10,
+              opacity: canDownloadPins ? 1 : 0.5,
+            }}
+          >
+            Download usernames + PINs
+          </button>
+
+          {canDownloadPins && <span style={{ opacity: 0.8 }}>{lastImportCreated.length} created</span>}
         </div>
-      )}
-      {msg && (
-        <div style={{ marginTop: 16, padding: 12, background: "#e6ffed", borderRadius: 10, color: "#046c2f" }}>
-          {msg}
-        </div>
-      )}
+      </div>
 
-      {!canUsePage && <p style={{ marginTop: 20, color: "crimson" }}>Admins only</p>}
+      <div style={{ height: 20 }} />
 
-      {canUsePage && (
-        <>
-          {/* Step 1 */}
-          <section style={{ marginTop: 30, padding: 18, background: "#f6f7f8", borderRadius: 14 }}>
-            <h2 style={{ marginTop: 0 }}>Step 1: Clear old test pupils (class-by-class)</h2>
+      <div style={{ background: "#fff", borderRadius: 16, padding: 18, boxShadow: "0 2px 10px rgba(0,0,0,0.06)" }}>
+        <h2 style={{ marginTop: 0 }}>Pupils in {classLabel}</h2>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-              <label>
-                Class:{" "}
-                <select
-                  value={classLabel}
-                  onChange={(e) => setClassLabel(e.target.value)}
-                  style={{ padding: 6, marginLeft: 6 }}
-                >
-                  {(classes.length ? classes : ["M4", "B3", "B4", "3M", "3B", "4M", "4B"]).map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </label>
+        {loading ? (
+          <p>Loading…</p>
+        ) : pupils.length === 0 ? (
+          <p>No pupils found.</p>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
+                <th style={{ padding: "10px 8px" }}>Name</th>
+                <th style={{ padding: "10px 8px" }}>Username</th>
+                <th style={{ padding: "10px 8px" }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pupils.map((p) => (
+                <tr key={p.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                  <td style={{ padding: "10px 8px" }}>
+                    <b>
+                      {(p.first_name || "").trim()} {(p.last_name || "").trim()}
+                    </b>
+                  </td>
+                  <td style={{ padding: "10px 8px" }}>{p.username}</td>
+                  <td style={{ padding: "10px 8px", display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <button onClick={() => resetPin(p)} style={{ padding: "6px 10px", borderRadius: 10 }}>
+                      Reset PIN
+                    </button>
+                    <button
+                      onClick={() => deletePupil(p)}
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: 10,
+                        border: "1px solid #b91c1c",
+                        color: "#b91c1c",
+                        background: "white",
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
 
-              <button
-                onClick={clearClass}
-                style={{ padding: "8px 12px", border: "1px solid #d33", color: "#d33", background: "white" }}
-              >
-                Delete ALL pupils in this class
-              </button>
-            </div>
-          </section>
-
-          {/* Step 2 */}
-          <section style={{ marginTop: 20, padding: 18, background: "#f6f7f8", borderRadius: 14 }}>
-            <h2 style={{ marginTop: 0 }}>Step 2: Bulk import pupils</h2>
-            <p style={{ marginTop: 6 }}>
-              Paste CSV with headers: <b>class_label,first_name,last_name</b>
-            </p>
-
-            <textarea
-              value={csvText}
-              onChange={(e) => setCsvText(e.target.value)}
-              rows={10}
-              style={{ width: "100%", padding: 10, fontFamily: "monospace" }}
-            />
-
-            <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-              <button onClick={importCsv} style={{ padding: "10px 14px" }}>
-                Import CSV
-              </button>
-
-              <button
-                onClick={downloadPins}
-                disabled={!importResult?.created_rows?.length}
-                style={{ padding: "10px 14px" }}
-              >
-                Download usernames + PINs
-              </button>
-            </div>
-
-            {importResult?.skipped?.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <b>Skipped rows:</b>
-                <ul>
-                  {importResult.skipped.slice(0, 50).map((s, idx) => (
-                    <li key={idx}>{s}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
-
-          {/* Step 3 */}
-          <section style={{ marginTop: 20, padding: 18, background: "white", borderRadius: 14, border: "1px solid #eee" }}>
-            <h2 style={{ marginTop: 0 }}>Pupils in {classLabel}</h2>
-
-            {loadingList ? (
-              <p>Loading…</p>
-            ) : list.length === 0 ? (
-              <p>No pupils found.</p>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ textAlign: "left", borderBottom: "1px solid #ddd" }}>
-                    <th style={{ padding: "10px 6px" }}>Name</th>
-                    <th style={{ padding: "10px 6px" }}>Username</th>
-                    <th style={{ padding: "10px 6px" }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {list.map((p) => (
-                    <tr key={p.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                      <td style={{ padding: "10px 6px" }}>
-                        <b>{`${p.first_name || ""} ${p.last_name || ""}`.trim() || "(no name)"}</b>
-                      </td>
-                      <td style={{ padding: "10px 6px", fontFamily: "monospace" }}>{p.username || "—"}</td>
-                      <td style={{ padding: "10px 6px", display: "flex", gap: 10, flexWrap: "wrap" }}>
-                        <button onClick={() => resetPin(p.id)} style={{ padding: "8px 12px" }}>
-                          Reset PIN
-                        </button>
-                        <button
-                          onClick={() => deletePupil(p.id)}
-                          style={{ padding: "8px 12px", border: "1px solid #d33", color: "#d33", background: "white" }}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-
-            <div style={{ marginTop: 10 }}>
-              <button onClick={() => loadPupils(classLabel)} style={{ padding: "8px 12px" }}>
-                Refresh list
-              </button>
-            </div>
-          </section>
-        </>
-      )}
+        <p style={{ marginBottom: 0, marginTop: 12, opacity: 0.7 }}>
+          Note: older pupils may show blank surname until you add it.
+        </p>
+      </div>
     </div>
   );
 }
