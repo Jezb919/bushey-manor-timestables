@@ -1,5 +1,68 @@
 import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
-import requireAdmin from "../../../../lib/requireAdmin";
+
+/**
+ * Self-contained admin check (no requireAdmin dependency).
+ * Looks for bmtt_teacher cookie containing JSON or base64 JSON.
+ */
+function parseCookies(cookieHeader) {
+  const out = {};
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx === -1) continue;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    out[k] = v;
+  }
+  return out;
+}
+
+function tryParseSession(raw) {
+  if (!raw) return null;
+
+  const candidates = [];
+  try {
+    candidates.push(decodeURIComponent(raw));
+  } catch (_) {}
+  candidates.push(raw);
+
+  for (const c of candidates) {
+    // plain JSON
+    try {
+      const j = JSON.parse(c);
+      if (j && typeof j === "object") return j;
+    } catch (_) {}
+
+    // base64 JSON
+    try {
+      const decoded = Buffer.from(c, "base64").toString("utf8");
+      const j = JSON.parse(decoded);
+      if (j && typeof j === "object") return j;
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+function ensureAdmin(req, res) {
+  const cookies = parseCookies(req.headers?.cookie || "");
+  const raw = cookies["bmtt_teacher"];
+  const session = tryParseSession(raw);
+
+  if (!session || session.role !== "admin") {
+    res.status(403).json({
+      ok: false,
+      error: "Admin only",
+      debug: {
+        hasCookie: !!raw,
+        parsedRole: session?.role ?? null,
+        parsedKeys: session ? Object.keys(session) : [],
+      },
+    });
+    return null;
+  }
+  return session;
+}
 
 function parseCsv(text) {
   const lines = String(text || "")
@@ -16,6 +79,10 @@ function parseCsv(text) {
   return { headers, rows };
 }
 
+function randomPin() {
+  return String(Math.floor(Math.random() * 10000)).padStart(4, "0");
+}
+
 function makeBaseUsername(first, last) {
   const f = (first || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   const l = (last || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -23,39 +90,14 @@ function makeBaseUsername(first, last) {
   return base || "student";
 }
 
-function randomPin() {
-  return String(Math.floor(Math.random() * 10000)).padStart(4, "0");
-}
-
-async function findClassIdByLabel(classLabel) {
-  const label = String(classLabel || "").trim();
-  if (!label) return null;
-
-  // Try classes.label
-  {
-    const { data } = await supabaseAdmin
-      .from("classes")
-      .select("id,label")
-      .eq("label", label)
-      .maybeSingle();
-    if (data?.id) return data.id;
-  }
-
-  // Try classes.class_label
-  {
-    const { data } = await supabaseAdmin
-      .from("classes")
-      .select("id,class_label")
-      .eq("class_label", label)
-      .maybeSingle();
-    if (data?.id) return data.id;
-  }
-
-  return null;
-}
-
 async function usernameExists(username) {
-  const { data } = await supabaseAdmin.from("students").select("id").eq("username", username).limit(1);
+  const { data, error } = await supabaseAdmin
+    .from("students")
+    .select("id")
+    .eq("username", username)
+    .limit(1);
+
+  if (error) throw error;
   return (data || []).length > 0;
 }
 
@@ -67,6 +109,35 @@ async function makeUniqueUsername(first, last) {
     if (!exists) return `${base}${i}`;
   }
   return `${base}${Date.now().toString().slice(-6)}`;
+}
+
+async function findClassIdByLabel(classLabel) {
+  const label = String(classLabel || "").trim();
+  if (!label) return null;
+
+  // Try classes.label
+  {
+    const { data, error } = await supabaseAdmin
+      .from("classes")
+      .select("id,label")
+      .eq("label", label)
+      .maybeSingle();
+    if (error) throw error;
+    if (data?.id) return data.id;
+  }
+
+  // Try classes.class_label
+  {
+    const { data, error } = await supabaseAdmin
+      .from("classes")
+      .select("id,class_label")
+      .eq("class_label", label)
+      .maybeSingle();
+    if (error) throw error;
+    if (data?.id) return data.id;
+  }
+
+  return null;
 }
 
 function safeBody(req) {
@@ -85,14 +156,16 @@ function safeBody(req) {
 }
 
 export default async function handler(req, res) {
+  const debugMode = String(req.query?.debug || "") === "1";
+
   try {
+    // Always return JSON (prevents "Unexpected end of JSON input")
     if (req.method === "GET") {
-      await requireAdmin(req, res);
+      ensureAdmin(req, res);
       if (res.writableEnded) return;
       return res.status(200).json({
         ok: true,
-        info:
-          "POST only. Send JSON { csvText: 'class_label,first_name,last_name\\nB4,Sam,Allen' }",
+        info: "POST only. Send JSON: { csvText: 'class_label,first_name,last_name\\nB4,Sam,Allen' }",
       });
     }
 
@@ -100,7 +173,7 @@ export default async function handler(req, res) {
       return res.status(405).json({ ok: false, error: "Method not allowed (POST only)" });
     }
 
-    await requireAdmin(req, res);
+    ensureAdmin(req, res);
     if (res.writableEnded) return;
 
     const body = safeBody(req);
@@ -214,7 +287,7 @@ export default async function handler(req, res) {
     return res.status(500).json({
       ok: false,
       error: "Server error (bulk import crashed)",
-      debug: e?.message || String(e),
+      debug: debugMode ? (e?.stack || e?.message || String(e)) : (e?.message || String(e)),
     });
   }
 }
