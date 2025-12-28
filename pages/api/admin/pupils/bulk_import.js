@@ -1,4 +1,11 @@
-import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
+// pages/api/admin/pupils/bulk_import.js
+
+import supabaseAdminDefault, {
+  supabaseAdmin as supabaseAdminNamed,
+} from "../../../../lib/supabaseAdmin";
+
+// ✅ Works no matter whether lib/supabaseAdmin exports named or default
+const supabaseAdmin = supabaseAdminNamed || supabaseAdminDefault;
 
 /**
  * Self-contained admin check (no requireAdmin dependency).
@@ -75,7 +82,9 @@ function parseCsv(text) {
   if (lines.length === 0) return { headers: [], rows: [] };
 
   const headers = lines[0].split(",").map((h) => h.trim());
-  const rows = lines.slice(1).map((line) => line.split(",").map((c) => (c ?? "").trim()));
+  const rows = lines
+    .slice(1)
+    .map((line) => line.split(",").map((c) => (c ?? "").trim()));
   return { headers, rows };
 }
 
@@ -161,6 +170,7 @@ async function runImport(csvText) {
   const expected = ["class_label", "first_name", "last_name"];
   const headerKey = headers.map((h) => h.toLowerCase());
   const okHeaders = expected.every((h) => headerKey.includes(h));
+
   if (!okHeaders) {
     return {
       ok: false,
@@ -228,96 +238,3 @@ async function runImport(csvText) {
         row: r + 2,
         reason: "Insert failed",
         values: { class_label, first_name, last_name },
-        error: insErr.message,
-      });
-      continue;
-    }
-
-    created.push({
-      id: inserted.id,
-      first_name: inserted.first_name,
-      last_name: inserted.last_name,
-      username: inserted.username,
-      pin: inserted.pin ?? pin,
-      class_label,
-    });
-  }
-
-  return {
-    ok: true,
-    status: 200,
-    created,
-    skipped,
-    summary: {
-      totalRows: rows.length,
-      created: created.length,
-      skipped: skipped.length,
-    },
-  };
-}
-
-export default async function handler(req, res) {
-  const debugMode = String(req.query?.debug || "") === "1";
-
-  try {
-    // Always return JSON (prevents "Unexpected end of JSON input")
-    if (req.method === "GET") {
-      ensureAdmin(req, res);
-      if (res.writableEnded) return;
-
-      // ✅ Debug GET import mode (so you can test without POST)
-      // Usage:
-      // /api/admin/pupils/bulk_import?debug=1&csv=class_label,first_name,last_name%0AB4,Sam,Allen
-      if (debugMode && req.query?.csv) {
-        const csvText = String(req.query.csv || "");
-        const result = await runImport(csvText);
-        return res.status(result.status || 200).json({
-          ...result,
-          debug: {
-            mode: "GET_IMPORT",
-            note: "This is debug-only. Your normal page should POST.",
-          },
-        });
-      }
-
-      return res.status(200).json({
-        ok: true,
-        info:
-          "POST only (normal use). Debug GET import: add &csv=... when debug=1. Example: ?debug=1&csv=class_label,first_name,last_name%0AB4,Sam,Allen",
-      });
-    }
-
-    if (req.method !== "POST") {
-      return res.status(405).json({ ok: false, error: "Method not allowed (POST only)" });
-    }
-
-    ensureAdmin(req, res);
-    if (res.writableEnded) return;
-
-    const body = safeBody(req);
-    const csvText = body.csvText;
-
-    if (!csvText || String(csvText).trim().length === 0) {
-      return res.status(400).json({
-        ok: false,
-        error: "No CSV provided. Paste CSV including the header row.",
-        debug: debugMode
-          ? {
-              contentType: req.headers["content-type"] || null,
-              bodyType: typeof req.body,
-              bodyPresent: req.body != null,
-            }
-          : undefined,
-      });
-    }
-
-    const result = await runImport(csvText);
-    return res.status(result.status || 200).json(result);
-  } catch (e) {
-    return res.status(500).json({
-      ok: false,
-      error: "Server error (bulk import crashed)",
-      debug: debugMode ? (e?.stack || e?.message || String(e)) : (e?.message || String(e)),
-    });
-  }
-}
