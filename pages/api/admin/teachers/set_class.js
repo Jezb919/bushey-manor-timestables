@@ -2,92 +2,84 @@
 import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 import { requireAdmin } from "../../../../lib/requireAdmin";
 
-function isUuid(v) {
-  return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
-  );
-}
-
 export default async function handler(req, res) {
+  // Helpful debug info if you open it in browser
+  if (req.method === "GET") {
+    return res.status(200).json({
+      ok: true,
+      info:
+        "POST only. Send JSON: { teacher_id (or teacherId), class_label (or classLabel) }. class_label null/'' clears.",
+    });
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ ok: false, error: "Method not allowed (POST only)" });
+  }
+
   try {
-    const auth = await requireAdmin(req, res);
-    if (!auth?.ok) return;
+    const admin = await requireAdmin(req, res);
+    if (!admin) return;
 
-    if (req.method !== "POST") {
-      return res.status(405).json({
-        ok: false,
-        error: "Method not allowed (POST only)",
-        info: "Send JSON: { teacher_id (or teacherId), class_label (or classLabel) }. class_label null/'' clears.",
-      });
-    }
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    // Accept both styles from the frontend (snake_case OR camelCase)
-    const body = req.body || {};
     const teacher_id = body.teacher_id || body.teacherId;
-    const class_label_raw = body.class_label ?? body.classLabel ?? null;
+    const class_label_raw = body.class_label ?? body.classLabel ?? "";
+    const class_label = String(class_label_raw || "").trim(); // may be ""
 
-    if (!isUuid(teacher_id)) {
-      return res.status(400).json({ ok: false, error: "Invalid teacher_id (must be uuid)" });
+    if (!teacher_id) {
+      return res.status(400).json({ ok: false, error: "Missing teacher_id" });
     }
 
-    const label = (class_label_raw || "").toString().trim();
-    const clearing =
-      !label || label === "(none)" || label === "none" || label === "no class";
-
-    // Always clear existing mapping rows for this teacher
+    // 1) Always clear existing assignment(s) for that teacher
     const del = await supabaseAdmin.from("teacher_classes").delete().eq("teacher_id", teacher_id);
     if (del.error) {
       return res.status(500).json({
         ok: false,
-        error: "Failed to clear existing class assignment",
+        error: "Failed clearing existing class assignment",
         debug: del.error.message,
       });
     }
 
-    if (clearing) {
-      return res.status(200).json({ ok: true, assigned: null });
+    // 2) If class_label blank -> that is "no class" (done)
+    if (!class_label) {
+      return res.status(200).json({
+        ok: true,
+        info: "Cleared assigned class",
+        debug: { teacher_id, class_label: "" },
+      });
     }
 
-    // Look up class by class_label (this is your real column name)
+    // 3) Find class by class_label (your DB uses classes.class_label)
     const cls = await supabaseAdmin
       .from("classes")
-      .select("id,class_label")
-      .eq("class_label", label)
-      .single();
+      .select("id, class_label")
+      .eq("class_label", class_label)
+      .maybeSingle();
 
-    if (cls.error || !cls.data?.id) {
-      return res.status(400).json({
-        ok: false,
-        error: `Class not found: ${label}`,
-        debug: cls.error ? cls.error.message : "No class row returned",
-      });
+    if (cls.error) {
+      return res.status(500).json({ ok: false, error: "Failed to lookup class", debug: cls.error.message });
+    }
+    if (!cls.data) {
+      return res.status(404).json({ ok: false, error: `Class not found: ${class_label}` });
     }
 
-    // Insert teacher -> class mapping using class_id (not class_label)
-    const ins = await supabaseAdmin
-      .from("teacher_classes")
-      .insert({ teacher_id, class_id: cls.data.id })
-      .select("teacher_id,class_id")
-      .single();
+    // 4) Insert new assignment
+    const ins = await supabaseAdmin.from("teacher_classes").insert({
+      teacher_id,
+      class_id: cls.data.id,
+    });
 
     if (ins.error) {
-      return res.status(500).json({
-        ok: false,
-        error: "Failed to assign class",
-        debug: ins.error.message,
-      });
+      return res.status(500).json({ ok: false, error: "Failed to assign class", debug: ins.error.message });
     }
 
     return res.status(200).json({
       ok: true,
-      assigned: { teacher_id, class_label: cls.data.class_label, class_id: cls.data.id },
+      info: "Assigned class",
+      class: cls.data,
+      debug: { teacher_id, class_label: cls.data.class_label },
     });
   } catch (e) {
-    return res.status(500).json({
-      ok: false,
-      error: "Server error",
-      debug: e?.message || String(e),
-    });
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
   }
 }
