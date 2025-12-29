@@ -1,109 +1,79 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
-const DEFAULT_CLASS_LABELS = ["B3", "B4", "B5", "B6", "M3", "M4", "M5", "M6"];
-
-// ---- If your API endpoints differ, change them here ----
-const API = {
-  whoami: "/api/teacher/whoami?debug=1",
-  listTeachers: "/api/admin/teachers/list",
-  createTeacher: "/api/admin/teachers/create",
-  setClass: "/api/admin/teachers/set_class",
-  makeAdmin: "/api/admin/teachers/make_admin",
-  makeTeacher: "/api/admin/teachers/make_teacher",
-  resetPassword: "/api/admin/teachers/reset_password",
-  sendSetupLink: "/api/admin/teachers/send_setup_link",
-  // optional if you have it:
-  listClasses: "/api/admin/classes/list",
-};
-
-async function fetchJson(url, opts = {}) {
-  const res = await fetch(url, opts);
+async function safeJson(res) {
   const text = await res.text();
-  let data = null;
   try {
-    data = text ? JSON.parse(text) : null;
+    return JSON.parse(text);
   } catch {
-    // non-json response
+    return { ok: false, error: "Bad JSON from server", raw: text };
   }
-
-  if (!res.ok) {
-    const msg =
-      data?.error ||
-      data?.message ||
-      `Request failed (${res.status})${text ? `: ${text.slice(0, 200)}` : ""}`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.data = data;
-    throw err;
-  }
-  return data;
 }
 
 export default function ManageTeachers() {
   const [me, setMe] = useState(null);
 
+  const [classes, setClasses] = useState([]);
   const [teachers, setTeachers] = useState([]);
-  const [classes, setClasses] = useState(DEFAULT_CLASS_LABELS);
 
   const [loading, setLoading] = useState(false);
-  const [busyId, setBusyId] = useState(null);
-
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState(null); // {type:'error'|'ok', text:string}
 
   // Add teacher form
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [role, setRole] = useState("teacher");
-  const [newClass, setNewClass] = useState("(none)");
+  const [newName, setNewName] = useState("");
+  const [newEmail, setNewEmail] = useState("");
+  const [newRole, setNewRole] = useState("teacher");
+  const [newClass, setNewClass] = useState("");
 
-  const roleBadge = useMemo(() => {
-    const r = me?.parsedRole || me?.role;
-    return r ? String(r) : "unknown";
-  }, [me]);
+  // Per-teacher selection for assigned class
+  const [selectedClassByTeacher, setSelectedClassByTeacher] = useState({}); // { [teacher_id]: class_label }
 
-  const meLabel = useMemo(() => {
-    const e = me?.email || me?.parsedEmail || me?.parsedKeys?.email;
-    const name = me?.full_name || me?.parsedFullName;
-    return name || e || "unknown";
+  const loggedInLabel = useMemo(() => {
+    if (!me?.ok) return "unknown";
+    const email = me.parsedEmail || me.email || "unknown";
+    const role = me.parsedRole || me.role || "unknown";
+    return `${email} (${role})`;
   }, [me]);
 
   async function loadAll() {
-    setErr("");
-    setMsg("");
     setLoading(true);
-    try {
-      // whoami
-      try {
-        const who = await fetchJson(API.whoami);
-        setMe(who);
-      } catch {
-        // whoami is helpful but not essential
-      }
+    setMsg(null);
 
-      // classes (optional endpoint). If it fails, we fall back.
-      try {
-        const c = await fetchJson(API.listClasses);
-        // Accept common shapes:
-        // { ok:true, classes:[{class_label:"B3"}] } OR {classes:["B3"]} OR [{class_label:"B3"}]
-        const raw = c?.classes ?? c;
-        const labels = Array.isArray(raw)
-          ? raw
-              .map((x) => (typeof x === "string" ? x : x?.class_label))
-              .filter(Boolean)
-          : [];
-        if (labels.length) setClasses(labels);
-      } catch {
-        // ignore
-      }
+    try {
+      // whoami (for header)
+      const who = await fetch("/api/teacher/whoami?debug=1");
+      const whoJ = await safeJson(who);
+      setMe({
+        ok: whoJ.ok,
+        parsedEmail: whoJ?.parsedEmail || whoJ?.parsed?.email || whoJ?.debug?.email,
+        parsedRole: whoJ?.parsedRole || whoJ?.parsed?.role || whoJ?.debug?.role,
+        parsedFullName: whoJ?.parsedFullName || whoJ?.parsed?.full_name || whoJ?.debug?.full_name,
+        raw: whoJ,
+      });
+
+      // classes
+      const cRes = await fetch("/api/admin/classes/list?debug=1");
+      const cJ = await safeJson(cRes);
+      if (!cJ.ok) throw new Error(cJ.error || "Failed to load classes");
+      setClasses(cJ.classes || []);
 
       // teachers
-      const t = await fetchJson(API.listTeachers);
-      const rows = t?.teachers ?? t?.rows ?? t;
-      setTeachers(Array.isArray(rows) ? rows : []);
+      const tRes = await fetch("/api/admin/teachers/list?debug=1");
+      const tJ = await safeJson(tRes);
+      if (!tJ.ok) throw new Error(tJ.error || "Failed to load teachers");
+      const list = tJ.teachers || [];
+      setTeachers(list);
+
+      // initialise selections
+      const map = {};
+      for (const t of list) {
+        map[t.id] = t.class_label || "";
+      }
+      setSelectedClassByTeacher(map);
+
+      setMsg({ type: "ok", text: "Loaded." });
     } catch (e) {
-      setErr(e.message || "Failed to load teachers");
+      setMsg({ type: "error", text: String(e.message || e) });
     } finally {
       setLoading(false);
     }
@@ -114,181 +84,166 @@ export default function ManageTeachers() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function onCreateTeacher() {
-    setErr("");
-    setMsg("");
-    try {
-      if (!fullName.trim()) throw new Error("Please enter full name");
-      if (!email.trim()) throw new Error("Please enter email");
-
-      const payload = {
-        full_name: fullName.trim(),
-        email: email.trim(),
-        role,
-        class_label: newClass && newClass !== "(none)" ? newClass : null,
-      };
-
-      await fetchJson(API.createTeacher, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      setMsg("Teacher created.");
-      setFullName("");
-      setEmail("");
-      setRole("teacher");
-      setNewClass("(none)");
-      await loadAll();
-    } catch (e) {
-      setErr(e.message || "Failed to create teacher");
-    }
+  function setTeacherClassChoice(teacherId, classLabel) {
+    setSelectedClassByTeacher((prev) => ({ ...prev, [teacherId]: classLabel }));
   }
 
-  async function onSaveClass(t) {
-    setErr("");
-    setMsg("");
-    setBusyId(t.id);
-    try {
-      const class_label =
-        t._pendingClass && t._pendingClass !== "(none)" ? t._pendingClass : null;
+  async function saveTeacherClass(teacher) {
+    setLoading(true);
+    setMsg(null);
 
-      await fetchJson(API.setClass, {
+    try {
+      const class_label = selectedClassByTeacher[teacher.id] || ""; // '' clears
+
+      const res = await fetch("/api/admin/teachers/set_class", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ teacher_id: t.id, class_label }),
+        body: JSON.stringify({
+          teacher_id: teacher.id,
+          class_label: class_label === "(none)" ? "" : class_label,
+        }),
       });
 
-      setMsg("Saved.");
+      const j = await safeJson(res);
+      if (!j.ok) throw new Error(j.error || "Failed to assign class");
+
+      // refresh teachers so dropdown reflects saved state
       await loadAll();
+      setMsg({ type: "ok", text: `Saved class for ${teacher.full_name || teacher.email || "teacher"}.` });
     } catch (e) {
-      setErr(e.message || "Failed to save class");
+      setMsg({ type: "error", text: String(e.message || e) });
     } finally {
-      setBusyId(null);
+      setLoading(false);
     }
   }
 
-  async function callAction(url, body) {
-    setErr("");
-    setMsg("");
-    setBusyId(body?.teacher_id || "busy");
+  async function addTeacher() {
+    setLoading(true);
+    setMsg(null);
+
     try {
-      await fetchJson(url, {
+      if (!newName.trim()) throw new Error("Please enter a full name.");
+      if (!newEmail.trim()) throw new Error("Please enter an email.");
+
+      const res = await fetch("/api/admin/teachers/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          full_name: newName.trim(),
+          email: newEmail.trim(),
+          role: newRole,
+          class_label: newClass || "",
+        }),
+      });
+
+      const j = await safeJson(res);
+      if (!j.ok) throw new Error(j.error || "Failed to create teacher");
+
+      setNewName("");
+      setNewEmail("");
+      setNewRole("teacher");
+      setNewClass("");
+
+      await loadAll();
+      setMsg({ type: "ok", text: "Teacher created. Now click “Send setup link” so they can set a password." });
+    } catch (e) {
+      setMsg({ type: "error", text: String(e.message || e) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Optional action helpers (won’t break if endpoint missing)
+  async function callAction(url, body) {
+    setLoading(true);
+    setMsg(null);
+    try {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body || {}),
       });
-      setMsg("Done.");
+      const j = await safeJson(res);
+      if (!j.ok) throw new Error(j.error || "Action failed");
       await loadAll();
+      setMsg({ type: "ok", text: j.info || "Done." });
     } catch (e) {
-      setErr(e.message || "Action failed");
+      setMsg({ type: "error", text: String(e.message || e) });
     } finally {
-      setBusyId(null);
+      setLoading(false);
     }
   }
 
-  function updatePendingClass(teacherId, value) {
-    setTeachers((prev) =>
-      prev.map((t) =>
-        t.id === teacherId ? { ...t, _pendingClass: value } : t
-      )
-    );
-  }
-
-  const containerStyle = {
-    maxWidth: 1100,
-    margin: "0 auto",
-    padding: "24px 16px 64px",
-    fontFamily:
-      'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial',
-  };
-
-  const cardStyle = {
-    background: "#fff",
-    border: "1px solid #e5e7eb",
-    borderRadius: 16,
-    padding: 18,
-    boxShadow: "0 10px 25px rgba(0,0,0,0.04)",
-    marginTop: 16,
-  };
-
-  const pill = (bg) => ({
-    display: "inline-block",
-    fontSize: 12,
-    padding: "4px 10px",
-    borderRadius: 999,
-    border: "1px solid #e5e7eb",
-    background: bg || "#f3f4f6",
-    marginLeft: 8,
-    verticalAlign: "middle",
-  });
-
-  const btn = (variant) => {
-    const base = {
-      borderRadius: 10,
-      padding: "8px 12px",
-      border: "1px solid #d1d5db",
-      background: "#fff",
-      cursor: "pointer",
-      fontWeight: 600,
-      marginRight: 8,
-      marginBottom: 8,
-      whiteSpace: "nowrap",
-    };
-    if (variant === "primary")
-      return { ...base, background: "#111827", color: "#fff", borderColor: "#111827" };
-    if (variant === "danger")
-      return { ...base, background: "#fff", borderColor: "#ef4444", color: "#b91c1c" };
-    return base;
-  };
+  const classOptions = useMemo(() => {
+    const labels = (classes || []).map((c) => c.class_label).filter(Boolean);
+    labels.sort((a, b) => a.localeCompare(b));
+    return labels;
+  }, [classes]);
 
   return (
-    <div style={containerStyle}>
-      <h1 style={{ fontSize: 46, margin: 0, letterSpacing: -1 }}>Manage Teachers</h1>
+    <div style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+      <h1 style={{ fontSize: 56, margin: "0 0 8px 0" }}>Manage Teachers</h1>
 
-      <div style={{ marginTop: 8, color: "#374151" }}>
-        Logged in as <b>{meLabel}</b>
-        <span style={pill("#e0f2fe")}>{roleBadge}</span>
+      <div style={{ marginBottom: 12, color: "#333" }}>
+        <div>Logged in as <b>{loggedInLabel}</b></div>
+        <div style={{ marginTop: 6 }}>
+          <Link href="/teacher/dashboard">← Back to dashboard</Link>
+        </div>
       </div>
 
-      <div style={{ marginTop: 8 }}>
-        <Link href="/teacher/dashboard">← Back to dashboard</Link>
-      </div>
-
-      {(err || msg) && (
-        <div
-          style={{
-            ...cardStyle,
-            borderColor: err ? "#fecaca" : "#bbf7d0",
-            background: err ? "#fef2f2" : "#f0fdf4",
-          }}
-        >
-          <b style={{ color: err ? "#991b1b" : "#166534" }}>
-            {err ? err : msg}
-          </b>
+      {msg?.type === "error" && (
+        <div style={{
+          background: "#fde8e8",
+          border: "1px solid #f5b5b5",
+          padding: 14,
+          borderRadius: 10,
+          margin: "14px 0"
+        }}>
+          <b>Server error</b>: {msg.text}
         </div>
       )}
 
-      <div style={cardStyle}>
-        <h2 style={{ marginTop: 0 }}>Add teacher</h2>
+      {msg?.type === "ok" && (
+        <div style={{
+          background: "#ecfdf3",
+          border: "1px solid #b7f0c9",
+          padding: 14,
+          borderRadius: 10,
+          margin: "14px 0"
+        }}>
+          {msg.text}
+        </div>
+      )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 2fr 1fr 1fr auto", gap: 10 }}>
+      {/* Add teacher */}
+      <div style={{
+        background: "#fff",
+        border: "1px solid #eee",
+        borderRadius: 16,
+        padding: 18,
+        boxShadow: "0 8px 30px rgba(0,0,0,0.04)",
+        marginTop: 18
+      }}>
+        <h2 style={{ fontSize: 34, margin: "0 0 12px 0" }}>Add teacher</h2>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 160px 160px 160px", gap: 12, alignItems: "center" }}>
           <input
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
             placeholder="Full name (e.g. Raquel Abeledo Pineiroa)"
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db" }}
+            style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
           />
           <input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            value={newEmail}
+            onChange={(e) => setNewEmail(e.target.value)}
             placeholder="Email (e.g. raquel@busheymanor.local)"
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db" }}
+            style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
           />
+
           <select
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db" }}
+            value={newRole}
+            onChange={(e) => setNewRole(e.target.value)}
+            style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
           >
             <option value="teacher">teacher</option>
             <option value="admin">admin</option>
@@ -297,142 +252,175 @@ export default function ManageTeachers() {
           <select
             value={newClass}
             onChange={(e) => setNewClass(e.target.value)}
-            style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db" }}
+            style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
           >
-            <option>(none)</option>
-            {classes.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
+            <option value="">(no class)</option>
+            {classOptions.map((lbl) => (
+              <option key={lbl} value={lbl}>{lbl}</option>
             ))}
           </select>
 
-          <button style={btn("primary")} onClick={onCreateTeacher} disabled={loading}>
+          <button
+            onClick={addTeacher}
+            disabled={loading}
+            style={{
+              padding: "12px 16px",
+              borderRadius: 12,
+              border: "1px solid #111827",
+              background: "#111827",
+              color: "white",
+              fontWeight: 700,
+              cursor: "pointer"
+            }}
+          >
             Add teacher
           </button>
         </div>
 
-        <div style={{ marginTop: 10, color: "#6b7280" }}>
+        <div style={{ marginTop: 10, color: "#555" }}>
           After adding, click <b>Send setup link</b> so they can set their password.
         </div>
       </div>
 
-      <div style={cardStyle}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <h2 style={{ marginTop: 0 }}>Teachers</h2>
-          <button style={btn()} onClick={loadAll} disabled={loading}>
-            {loading ? "Loading..." : "Refresh"}
+      {/* Teachers list */}
+      <div style={{
+        background: "#fff",
+        border: "1px solid #eee",
+        borderRadius: 16,
+        padding: 18,
+        boxShadow: "0 8px 30px rgba(0,0,0,0.04)",
+        marginTop: 18
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h2 style={{ fontSize: 34, margin: 0 }}>Teachers</h2>
+          <button
+            onClick={loadAll}
+            disabled={loading}
+            style={{
+              padding: "10px 14px",
+              borderRadius: 12,
+              border: "1px solid #ccc",
+              background: "#f6f6f6",
+              cursor: "pointer"
+            }}
+          >
+            Refresh
           </button>
         </div>
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
-                <th style={{ padding: "10px 8px" }}>Name</th>
-                <th style={{ padding: "10px 8px" }}>Email</th>
-                <th style={{ padding: "10px 8px" }}>Role</th>
-                <th style={{ padding: "10px 8px" }}>Assigned class</th>
-                <th style={{ padding: "10px 8px" }}>Actions</th>
-              </tr>
-            </thead>
+        <div style={{ marginTop: 14, borderTop: "1px solid #eee" }} />
 
-            <tbody>
-              {teachers.map((t) => {
-                const assigned = t.class_label || t.assigned_class || t.classLabel || null;
-                const pending = t._pendingClass ?? (assigned || "(none)");
-                const busy = busyId === t.id;
+        <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12 }}>
+          <thead>
+            <tr style={{ textAlign: "left" }}>
+              <th style={{ padding: "10px 8px" }}>Name</th>
+              <th style={{ padding: "10px 8px" }}>Email</th>
+              <th style={{ padding: "10px 8px" }}>Role</th>
+              <th style={{ padding: "10px 8px" }}>Assigned class</th>
+              <th style={{ padding: "10px 8px" }}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(teachers || []).map((t) => {
+              const current = selectedClassByTeacher[t.id] ?? (t.class_label || "");
+              return (
+                <tr key={t.id} style={{ borderTop: "1px solid #eee", verticalAlign: "top" }}>
+                  <td style={{ padding: "14px 8px", fontWeight: 800 }}>
+                    {t.full_name || "—"}
+                  </td>
+                  <td style={{ padding: "14px 8px" }}>
+                    <span style={{ fontWeight: 700 }}>{t.email}</span>
+                  </td>
+                  <td style={{ padding: "14px 8px" }}>
+                    <span style={{
+                      display: "inline-block",
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid #c7d2fe",
+                      background: "#eef2ff",
+                      fontWeight: 700
+                    }}>
+                      {t.role}
+                    </span>
+                  </td>
+                  <td style={{ padding: "14px 8px" }}>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <select
+                        value={current || "(none)"}
+                        onChange={(e) => setTeacherClassChoice(t.id, e.target.value === "(none)" ? "" : e.target.value)}
+                        style={{ padding: 10, borderRadius: 12, border: "1px solid #ddd", minWidth: 140 }}
+                      >
+                        <option value="(none)">(none)</option>
+                        {classOptions.map((lbl) => (
+                          <option key={lbl} value={lbl}>{lbl}</option>
+                        ))}
+                      </select>
 
-                return (
-                  <tr key={t.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                    <td style={{ padding: "12px 8px", fontWeight: 700 }}>
-                      {t.full_name || t.name || "—"}
-                    </td>
-                    <td style={{ padding: "12px 8px" }}>{t.email || "—"}</td>
-                    <td style={{ padding: "12px 8px" }}>
-                      <span style={pill(t.role === "admin" ? "#e0f2fe" : "#eef2ff")}>
-                        {t.role || "—"}
-                      </span>
-                    </td>
+                      <button
+                        onClick={() => saveTeacherClass(t)}
+                        disabled={loading}
+                        style={{
+                          padding: "10px 14px",
+                          borderRadius: 12,
+                          border: "1px solid #111827",
+                          background: "#111827",
+                          color: "white",
+                          fontWeight: 800,
+                          cursor: "pointer"
+                        }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                    <div style={{ marginTop: 6, color: "#555" }}>
+                      Teachers will only see their assigned class.
+                    </div>
+                  </td>
 
-                    <td style={{ padding: "12px 8px" }}>
-                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        <select
-                          value={pending}
-                          onChange={(e) => updatePendingClass(t.id, e.target.value)}
-                          style={{ padding: 10, borderRadius: 10, border: "1px solid #d1d5db", minWidth: 140 }}
-                        >
-                          <option>(none)</option>
-                          {classes.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-
-                        <button style={btn("primary")} onClick={() => onSaveClass(t)} disabled={busy}>
-                          {busy ? "Saving..." : "Save"}
-                        </button>
-                      </div>
-
-                      <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>
-                        Teachers will only see their assigned class.
-                      </div>
-                    </td>
-
-                    <td style={{ padding: "12px 8px" }}>
-                      <div style={{ display: "flex", flexWrap: "wrap" }}>
-                        {t.role === "admin" ? (
-                          <button
-                            style={btn()}
-                            disabled={busy}
-                            onClick={() => callAction(API.makeTeacher, { teacher_id: t.id })}
-                          >
-                            Make teacher
-                          </button>
-                        ) : (
-                          <button
-                            style={btn()}
-                            disabled={busy}
-                            onClick={() => callAction(API.makeAdmin, { teacher_id: t.id })}
-                          >
-                            Make admin
-                          </button>
-                        )}
-
+                  <td style={{ padding: "14px 8px" }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                      {t.role === "admin" ? (
                         <button
-                          style={btn()}
-                          disabled={busy}
-                          onClick={() => callAction(API.resetPassword, { teacher_id: t.id })}
+                          onClick={() => callAction("/api/admin/teachers/make_teacher", { teacher_id: t.id })}
+                          disabled={loading}
+                          style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ccc", background: "#fff", cursor: "pointer", fontWeight: 700 }}
                         >
-                          Reset password
+                          Make teacher
                         </button>
-
+                      ) : (
                         <button
-                          style={btn()}
-                          disabled={busy}
-                          onClick={() => callAction(API.sendSetupLink, { teacher_id: t.id })}
+                          onClick={() => callAction("/api/admin/teachers/make_admin", { teacher_id: t.id })}
+                          disabled={loading}
+                          style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ccc", background: "#fff", cursor: "pointer", fontWeight: 700 }}
                         >
-                          Send setup link
+                          Make admin
                         </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                      )}
 
-              {!teachers.length && (
-                <tr>
-                  <td colSpan={5} style={{ padding: 14, color: "#6b7280" }}>
-                    No teachers found.
+                      <button
+                        onClick={() => callAction("/api/admin/teachers/reset_password", { teacher_id: t.id })}
+                        disabled={loading}
+                        style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ccc", background: "#fff", cursor: "pointer", fontWeight: 700 }}
+                      >
+                        Reset password
+                      </button>
+
+                      <button
+                        onClick={() => callAction("/api/admin/teachers/send_setup_link", { teacher_id: t.id })}
+                        disabled={loading}
+                        style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ccc", background: "#fff", cursor: "pointer", fontWeight: 700 }}
+                      >
+                        Send setup link
+                      </button>
+                    </div>
                   </td>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              );
+            })}
+          </tbody>
+        </table>
 
-        <div style={{ marginTop: 12, color: "#6b7280" }}>
+        <div style={{ marginTop: 14, color: "#555" }}>
           Tip: Set class for each teacher once. Admins can leave class blank.
         </div>
       </div>
