@@ -3,40 +3,40 @@ import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 import { requireAdmin } from "../../../../lib/requireAdmin";
 
 function isUuid(v) {
-  return typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+  return (
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+  );
 }
 
 export default async function handler(req, res) {
   try {
-    // Auth: admin only
     const auth = await requireAdmin(req, res);
-    if (!auth?.ok) return; // requireAdmin already responded
+    if (!auth?.ok) return;
 
     if (req.method !== "POST") {
       return res.status(405).json({
         ok: false,
         error: "Method not allowed (POST only)",
-        info: "Send JSON: { teacher_id: '<uuid>', class_label: 'B3' } or class_label: null to clear",
+        info: "Send JSON: { teacher_id (or teacherId), class_label (or classLabel) }. class_label null/'' clears.",
       });
     }
 
-    const { teacher_id, class_label } = req.body || {};
+    // Accept both styles from the frontend (snake_case OR camelCase)
+    const body = req.body || {};
+    const teacher_id = body.teacher_id || body.teacherId;
+    const class_label_raw = body.class_label ?? body.classLabel ?? null;
 
     if (!isUuid(teacher_id)) {
       return res.status(400).json({ ok: false, error: "Invalid teacher_id (must be uuid)" });
     }
 
-    // Normalise "none"
-    const label = (class_label || "").toString().trim();
-    const clearing = !label || label === "(none)" || label === "none" || label === "no class";
+    const label = (class_label_raw || "").toString().trim();
+    const clearing =
+      !label || label === "(none)" || label === "none" || label === "no class";
 
-    // 1) Always clear existing assignment rows for this teacher (avoids ON CONFLICT issues)
-    const del = await supabaseAdmin
-      .from("teacher_classes")
-      .delete()
-      .eq("teacher_id", teacher_id);
-
+    // Always clear existing mapping rows for this teacher
+    const del = await supabaseAdmin.from("teacher_classes").delete().eq("teacher_id", teacher_id);
     if (del.error) {
       return res.status(500).json({
         ok: false,
@@ -45,12 +45,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // 2) If clearing, we're done
     if (clearing) {
       return res.status(200).json({ ok: true, assigned: null });
     }
 
-    // 3) Look up class by class_label (NOT classes.label)
+    // Look up class by class_label (this is your real column name)
     const cls = await supabaseAdmin
       .from("classes")
       .select("id,class_label")
@@ -65,7 +64,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4) Insert new mapping using class_id
+    // Insert teacher -> class mapping using class_id (not class_label)
     const ins = await supabaseAdmin
       .from("teacher_classes")
       .insert({ teacher_id, class_id: cls.data.id })
