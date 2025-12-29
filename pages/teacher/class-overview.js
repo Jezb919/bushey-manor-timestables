@@ -1,129 +1,138 @@
-import { useEffect, useMemo, useState } from "react";
+// pages/teacher/class-overview.js
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/router";
 
-function scoreColor(score) {
-  if (typeof score !== "number") return "#f3f4f6"; // grey
-  if (score === 100) return "#b7f7c2"; // light green
-  if (score >= 90) return "#2ecc71"; // green
-  if (score >= 70) return "#f59e0b"; // orange
-  return "#ef4444"; // red
+function colourForScore(score) {
+  if (score === null || score === undefined) return { bg: "#f5f5f5", fg: "#111" };
+  const s = Number(score);
+  if (Number.isNaN(s)) return { bg: "#f5f5f5", fg: "#111" };
+  if (s === 100) return { bg: "#b9ffb9", fg: "#111" };
+  if (s >= 90) return { bg: "#44c767", fg: "#fff" };
+  if (s >= 70) return { bg: "#ffb347", fg: "#111" };
+  return { bg: "#ff2b55", fg: "#fff" };
 }
 
-export default function ClassOverviewPage() {
-  const [me, setMe] = useState(null);
-  const [classLabel, setClassLabel] = useState("M4");
-  const [classes, setClasses] = useState([]);
-  const [data, setData] = useState(null);
+export default function ClassOverview() {
+  const router = useRouter();
+  const initialFromUrl = (router.query.class_label || "").toString();
+
+  const [allowed, setAllowed] = useState([]);
+  const [classLabel, setClassLabel] = useState(initialFromUrl || "");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  // load me (session)
-  useEffect(() => {
-    fetch("/api/teacher/me")
-      .then((r) => r.json())
-      .then((j) => {
-        if (!j.ok) {
-          window.location.href = "/teacher/login";
-          return;
-        }
-        setMe(j.user);
-      })
-      .catch(() => window.location.href = "/teacher/login");
-  }, []);
+  async function load(nextLabel) {
+    const label = (nextLabel ?? classLabel ?? "").toString();
 
-  // load classes dropdown
-  useEffect(() => {
-    fetch("/api/teacher/classes")
-      .then((r) => r.json())
-      .then((j) => {
-        if (j.ok) setClasses(j.classes || []);
-      })
-      .catch(() => {});
-  }, []);
-
-  // load overview data
-  async function load(label) {
+    setLoading(true);
     setErr("");
-    setData(null);
+
     try {
-      const r = await fetch(`/api/teacher/class_overview?class_label=${encodeURIComponent(label)}`);
-      const j = await r.json();
-      if (!j.ok) {
-        setErr(j.error || "Failed to load");
-        return;
+      const url = `/api/teacher/class_overview?class_label=${encodeURIComponent(label)}`;
+      const resp = await fetch(url, { credentials: "include" });
+
+      const text = await resp.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(text || `Request failed (${resp.status})`);
       }
-      setData(j);
-    } catch {
-      setErr("Failed to load");
+
+      if (!resp.ok || !data.ok) {
+        throw new Error(data?.error || `Request failed (${resp.status})`);
+      }
+
+      const allowed_classes = Array.isArray(data.allowed_classes) ? data.allowed_classes : [];
+      setAllowed(allowed_classes);
+
+      // API may “snap” to first allowed if teacher chooses a class they’re not allowed.
+      const selected = data?.class?.class_label || allowed_classes[0] || "";
+      setClassLabel(selected);
+
+      setRows(Array.isArray(data.rows) ? data.rows : []);
+
+      // keep URL in sync
+      router.replace(
+        { pathname: "/teacher/class-overview", query: selected ? { class_label: selected } : {} },
+        undefined,
+        { shallow: true }
+      );
+    } catch (e) {
+      setRows([]);
+      setErr(String(e?.message || e));
+    } finally {
+      setLoading(false);
     }
   }
 
+  // Initial load (and when URL changes first time)
   useEffect(() => {
-    load(classLabel);
+    load(initialFromUrl || classLabel || "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [classLabel]);
+  }, []);
 
-  const concernPills = useMemo(() => {
-    const items = data?.concerns || [];
-    return items.slice(0, 30);
-  }, [data]);
-
-  async function logout() {
-    await fetch("/api/teacher/logout", { method: "POST" });
-    window.location.href = "/teacher/login";
+  function onChangeClass(e) {
+    const next = e.target.value;
+    setClassLabel(next);
+    load(next);
   }
 
   return (
-    <div style={{ padding: 30 }}>
-      <h1>Class Overview</h1>
-
-      {me && (
-        <p>
-          Logged in as <b>{me.email}</b> ({me.role})
-        </p>
-      )}
-
-      <p>
-        <Link href="/teacher">← Back to dashboard</Link>
-      </p>
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
+      <h1 style={{ fontSize: 52, margin: 0 }}>Class Overview</h1>
+      <div style={{ marginTop: 8, marginBottom: 14 }}>
+        <Link href="/teacher/dashboard">← Back to dashboard</Link>
+      </div>
 
       {err && (
         <div
           style={{
-            background: "#fee2e2",
+            background: "#ffe6e6",
+            border: "1px solid #ffb3b3",
+            color: "#a40000",
             padding: 12,
-            borderRadius: 10,
+            borderRadius: 12,
             marginBottom: 16,
+            fontWeight: 700,
           }}
         >
-          <b>{err}</b>
+          {err}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 18 }}>
         <select
           value={classLabel}
-          onChange={(e) => setClassLabel(e.target.value)}
-          style={{ padding: 10, borderRadius: 10 }}
+          onChange={onChangeClass}
+          disabled={!allowed.length}
+          style={{ padding: "10px 12px", borderRadius: 10 }}
         >
-          {(classes.length ? classes : [{ class_label: "M4" }]).map((c) => (
-            <option key={c.id || c.class_label} value={c.class_label}>
-              {c.class_label}
-            </option>
-          ))}
+          {allowed.length ? (
+            allowed.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))
+          ) : (
+            <option value="">No classes</option>
+          )}
         </select>
 
         <button
           onClick={() => load(classLabel)}
-          style={{ padding: "10px 14px", borderRadius: 10 }}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 10,
+            border: "2px solid #111",
+            background: "#fff",
+            fontWeight: 800,
+            cursor: "pointer",
+          }}
         >
-          Refresh
-        </button>
-
-        <button
-          onClick={logout}
-          style={{ marginLeft: "auto", padding: "10px 14px", borderRadius: 10 }}
-        >
-          Log out
+          {loading ? "Loading…" : "Refresh"}
         </button>
       </div>
 
@@ -132,104 +141,72 @@ export default function ClassOverviewPage() {
           background: "white",
           borderRadius: 16,
           padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
-          marginBottom: 18,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
         }}
       >
-        <h2 style={{ marginTop: 0 }}>Concerns (≤ 70%) — {classLabel}</h2>
-        <div style={{ color: "#555", marginBottom: 10 }}>
-          Click a pupil to open full detail (graph + heatmap).
-        </div>
+        <h2 style={{ fontSize: 34, margin: 0 }}>Pupils — {classLabel || "—"}</h2>
+        <p style={{ marginTop: 6, color: "#333" }}>Colour shows latest result. Click a row for pupil detail.</p>
 
-        {concernPills.length === 0 ? (
-          <div>No pupils currently at 70% or below.</div>
-        ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-            {concernPills.map((p) => (
-              <Link
-                key={p.id}
-                href={`/teacher/pupil/${p.id}`}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "10px 14px",
-                  borderRadius: 999,
-                  background: scoreColor(p.latest_score),
-                  color: p.latest_score < 70 ? "white" : "black",
-                  textDecoration: "none",
-                  fontWeight: 700,
-                }}
-              >
-                <span>{p.name}</span>
-                <span style={{ opacity: 0.9 }}>
-                  {typeof p.latest_score === "number" ? `${p.latest_score}%` : "—"}
-                </span>
-              </Link>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div
-        style={{
-          background: "white",
-          borderRadius: 16,
-          padding: 18,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.06)",
-        }}
-      >
-        <h2 style={{ marginTop: 0 }}>Pupils — {classLabel}</h2>
-        <div style={{ color: "#555", marginBottom: 10 }}>
-          Colour shows latest result. Click a row for pupil detail.
-        </div>
-
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-              <th style={{ padding: "10px 8px" }}>Pupil</th>
-              <th style={{ padding: "10px 8px" }}>Latest</th>
-              <th style={{ padding: "10px 8px" }}>Recent</th>
-              <th style={{ padding: "10px 8px" }}>Attempts</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data?.pupils || []).length === 0 ? (
-              <tr>
-                <td style={{ padding: 12 }} colSpan={4}>
-                  No pupils found for this class.
-                </td>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #e6e6e6" }}>
+                <th style={{ padding: "12px 10px" }}>Pupil</th>
+                <th style={{ padding: "12px 10px" }}>Latest</th>
+                <th style={{ padding: "12px 10px" }}>Recent</th>
+                <th style={{ padding: "12px 10px" }}>Attempts</th>
               </tr>
-            ) : (
-              (data?.pupils || []).map((p) => (
-                <tr
-                  key={p.id}
-                  onClick={() => (window.location.href = `/teacher/pupil/${p.id}`)}
-                  style={{
-                    cursor: "pointer",
-                    background: scoreColor(p.latest_score),
-                    color: typeof p.latest_score === "number" && p.latest_score < 70 ? "white" : "black",
-                    borderBottom: "1px solid rgba(0,0,0,0.05)",
-                  }}
-                >
-                  <td style={{ padding: "12px 8px", fontWeight: 700 }}>{p.name}</td>
-                  <td style={{ padding: "12px 8px", fontWeight: 800 }}>
-                    {typeof p.latest_score === "number" ? `${p.latest_score}%` : "—"}
-                  </td>
-                  <td style={{ padding: "12px 8px" }}>
-                    {(p.recent_scores || []).length
-                      ? p.recent_scores.map((s) => `${s}%`).join(", ")
-                      : "—"}
-                  </td>
-                  <td style={{ padding: "12px 8px", fontWeight: 700 }}>{p.attempts_count || 0}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+            </thead>
 
-        <div style={{ marginTop: 14, color: "#666" }}>
-          Colour key: 100% light green • 90–99% green • 70–89% orange • &lt;70% red
+            <tbody>
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={4} style={{ padding: 14 }}>
+                    No pupils found for this class.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((r) => {
+                  const { bg, fg } = colourForScore(r.latest_score);
+                  return (
+                    <tr
+                      key={r.pupil_id}
+                      onClick={() => router.push(`/teacher/pupil/${r.pupil_id}`)}
+                      style={{
+                        cursor: "pointer",
+                        borderBottom: "1px solid #f0f0f0",
+                        background: bg,
+                        color: fg,
+                      }}
+                      title="Click for pupil detail"
+                    >
+                      <td style={{ padding: "12px 10px", fontWeight: 900 }}>
+                        {r.pupil_name}{" "}
+                        <span style={{ fontWeight: 700, opacity: 0.9 }}>({r.username})</span>
+                      </td>
+                      <td style={{ padding: "12px 10px", fontWeight: 900 }}>
+                        {r.latest_score === null || r.latest_score === undefined ? "—" : `${r.latest_score}%`}
+                      </td>
+                      <td style={{ padding: "12px 10px", fontWeight: 800 }}>
+                        {Array.isArray(r.recent) && r.recent.length
+                          ? r.recent.map((x, i) => (
+                              <span key={i} style={{ marginRight: 10 }}>
+                                {x ?? "—"}%
+                              </span>
+                            ))
+                          : "—"}
+                      </td>
+                      <td style={{ padding: "12px 10px", fontWeight: 900 }}>{r.attempts ?? 0}</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 10, color: "#555" }}>
+          Colour key: <b>100%</b> light green • <b>90–99%</b> green • <b>70–89%</b> orange • <b>&lt;70%</b> red
         </div>
       </div>
     </div>
