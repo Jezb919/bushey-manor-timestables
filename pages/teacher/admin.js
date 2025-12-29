@@ -1,362 +1,273 @@
-// pages/teacher/admin.js
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
-async function safeFetchJson(url, options) {
-  const res = await fetch(url, options);
-  const contentType = res.headers.get("content-type") || "";
-  const text = await res.text();
+const CLASS_OPTIONS = ["B3", "B4", "B5", "B6", "M3", "M4", "M5", "M6"];
 
-  // If we got HTML (often a 404 page), return a clear error instead of crashing
-  if (!contentType.includes("application/json")) {
-    return {
-      ok: false,
-      status: res.status,
-      error: `Non-JSON response from ${url} (status ${res.status}). This usually means the API route file is missing or misnamed.`,
-      raw: text.slice(0, 200),
-    };
-  }
-
-  let json;
-  try {
-    json = JSON.parse(text);
-  } catch (e) {
-    return {
-      ok: false,
-      status: res.status,
-      error: `Invalid JSON from ${url} (status ${res.status}).`,
-      raw: text.slice(0, 200),
-    };
-  }
-
-  // Keep status in the object for debugging
-  return { status: res.status, ...json };
-}
-
-export default function AdminPage() {
+export default function TeacherAdminPage() {
   const [me, setMe] = useState(null);
   const [teachers, setTeachers] = useState([]);
-  const [classes, setClasses] = useState([]);
-  const [errorBox, setErrorBox] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState(null);
 
-  const [selectedTeacherId, setSelectedTeacherId] = useState("");
-  const [assignedClassIds, setAssignedClassIds] = useState([]);
+  const [savingId, setSavingId] = useState(null);
+  const [draftClass, setDraftClass] = useState({}); // { teacherId: "M3" }
 
-  const [newEmail, setNewEmail] = useState("");
-  const [newFullName, setNewFullName] = useState("");
-  const [newRole, setNewRole] = useState("teacher");
-  const [newPassword, setNewPassword] = useState("");
-
-  const selectedTeacher = useMemo(
-    () => teachers.find((t) => t.id === selectedTeacherId) || null,
-    [teachers, selectedTeacherId]
-  );
-
-  async function loadMe() {
-    const j = await safeFetchJson("/api/teacher/me");
-    if (!j.ok) {
-      setErrorBox(j.error || "Failed to load /api/teacher/me");
-      setMe({ ok: true, loggedIn: false });
-      return;
+  async function fetchJSON(url, opts) {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch (e) {
+      throw new Error(`Bad JSON from ${url}: ${text?.slice(0, 200)}`);
     }
-    setMe(j);
-    setClasses(j.classes || []);
+    if (!r.ok) {
+      throw new Error(json?.error || `Request failed (${r.status})`);
+    }
+    return json;
   }
 
-  async function loadTeachers() {
-    const j = await safeFetchJson("/api/teacher/admin/teachers");
-    if (!j.ok) {
-      setErrorBox(j.error || "Failed to load teachers");
-      setTeachers([]);
-      return;
-    }
-    setTeachers(j.teachers || []);
-  }
+  async function loadAll() {
+    setLoading(true);
+    setMsg(null);
+    try {
+      const who = await fetchJSON("/api/teacher/whoami?debug=1");
+      setMe(who);
 
-  async function loadAssignments(teacherId) {
-    if (!teacherId) return;
-    const j = await safeFetchJson(
-      `/api/teacher/admin/assignments?teacher_id=${teacherId}`
-    );
-    if (!j.ok) {
-      setErrorBox(j.error || "Failed to load assignments");
-      setAssignedClassIds([]);
-      return;
+      // existing endpoint you already have (working page)
+      const list = await fetchJSON("/api/admin/teachers/list");
+      const rows = list?.teachers || list?.rows || list?.data || [];
+      setTeachers(rows);
+
+      // seed draft values from existing class_label
+      const map = {};
+      for (const t of rows) map[t.id] = t.class_label || "";
+      setDraftClass(map);
+    } catch (e) {
+      setMsg(String(e.message || e));
+    } finally {
+      setLoading(false);
     }
-    setAssignedClassIds(j.classIds || []);
   }
 
   useEffect(() => {
-    loadMe();
-    loadTeachers();
+    loadAll();
   }, []);
 
-  useEffect(() => {
-    if (selectedTeacherId) loadAssignments(selectedTeacherId);
-  }, [selectedTeacherId]);
+  const isAdmin = useMemo(() => {
+    return me?.parsedRole === "admin" || me?.role === "admin" || me?.teacher?.role === "admin";
+  }, [me]);
 
-  async function createTeacher(e) {
-    e.preventDefault();
-    setErrorBox("");
-
-    const j = await safeFetchJson("/api/teacher/admin/teachers", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: newEmail,
-        full_name: newFullName,
-        role: newRole,
-        password: newPassword,
-      }),
-    });
-
-    if (!j.ok) {
-      setErrorBox(j.error || j.details || "Create failed");
-      return;
+  async function actionPOST(url, body, okMessage) {
+    setMsg(null);
+    try {
+      const r = await fetchJSON(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      if (okMessage) setMsg(okMessage);
+      await loadAll();
+      return r;
+    } catch (e) {
+      setMsg(String(e.message || e));
+      return null;
     }
-
-    setNewEmail("");
-    setNewFullName("");
-    setNewPassword("");
-    await loadTeachers();
-    alert("Teacher created ✅");
   }
 
-  function toggleClass(classId) {
-    setAssignedClassIds((prev) =>
-      prev.includes(classId) ? prev.filter((x) => x !== classId) : [...prev, classId]
-    );
-  }
-
-  async function saveAssignments() {
-    if (!selectedTeacherId) return alert("Select a teacher first");
-    setErrorBox("");
-
-    const j = await safeFetchJson("/api/teacher/admin/assignments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ teacher_id: selectedTeacherId, classIds: assignedClassIds }),
-    });
-
-    if (!j.ok) {
-      setErrorBox(j.error || j.details || "Save failed");
-      return;
+  async function setTeacherClass(teacherId) {
+    setSavingId(teacherId);
+    setMsg(null);
+    try {
+      const chosen = (draftClass[teacherId] || "").trim();
+      const r = await fetchJSON("/api/admin/teachers/set_class", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teacher_id: teacherId, class_label: chosen }),
+      });
+      setMsg(`Saved class for teacher.`);
+      await loadAll();
+      return r;
+    } catch (e) {
+      setMsg(String(e.message || e));
+      return null;
+    } finally {
+      setSavingId(null);
     }
-
-    alert("Assignments saved ✅");
   }
 
-  async function resetPassword() {
-    if (!selectedTeacherId) return alert("Select a teacher first");
-    const pw = prompt("Enter a NEW password for this teacher:");
-    if (!pw) return;
-
-    setErrorBox("");
-
-    const j = await safeFetchJson("/api/teacher/admin/reset_password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ teacher_id: selectedTeacherId, password: pw }),
-    });
-
-    if (!j.ok) {
-      setErrorBox(j.error || j.details || "Reset failed");
-      return;
-    }
-
-    alert("Password reset ✅");
+  // These endpoints already exist on your working page:
+  function makeAdmin(id) {
+    return actionPOST("/api/admin/teachers/make_admin", { teacher_id: id }, "Role updated.");
   }
-
-  // Guards
-  if (!me) return <div style={wrap}><Card>Loading…</Card></div>;
-  if (!me.loggedIn) return <div style={wrap}><Card>Please log in first.</Card></div>;
-  if (me.teacher?.role !== "admin") return <div style={wrap}><Card>Admin only.</Card></div>;
+  function makeTeacher(id) {
+    return actionPOST("/api/admin/teachers/make_teacher", { teacher_id: id }, "Role updated.");
+  }
+  function resetPassword(id) {
+    return actionPOST("/api/admin/teachers/reset_password", { teacher_id: id }, "Password reset.");
+  }
+  function sendSetupLink(id) {
+    return actionPOST("/api/admin/teachers/send_setup_link", { teacher_id: id }, "Setup link sent.");
+  }
 
   return (
-    <div style={wrap}>
-      <div style={{ width: "100%", maxWidth: 1100 }}>
-        <h1 style={h1}>Admin: Teachers & Classes</h1>
-        <p style={sub}>Create teachers, assign classes, and reset passwords.</p>
+    <div style={{ padding: 28, maxWidth: 1100, margin: "0 auto", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial" }}>
+      <h1 style={{ fontSize: 52, margin: "0 0 6px 0" }}>Manage Teachers</h1>
+      <div style={{ marginBottom: 14, opacity: 0.8 }}>
+        Logged in as <b>{me?.parsedKeys?.includes?.("email") ? me?.parsedKeys : ""}</b>
+      </div>
 
-        {errorBox && (
-          <div style={errorStyle}>
-            <strong>Fix needed:</strong>
-            <div style={{ marginTop: 6 }}>{errorBox}</div>
-            <div style={{ marginTop: 10, fontSize: 12 }}>
-              Check these URLs:
-              <div><a href="/api/teacher/admin/teachers">/api/teacher/admin/teachers</a></div>
-              <div><a href="/api/teacher/admin/assignments?teacher_id=TEST">/api/teacher/admin/assignments?teacher_id=TEST</a></div>
-            </div>
-          </div>
-        )}
+      <div style={{ marginBottom: 16 }}>
+        <a href="/teacher/dashboard">← Back to dashboard</a>
+      </div>
 
-        <div style={grid}>
-          <Card>
-            <h2 style={h2}>Create teacher</h2>
-            <form onSubmit={createTeacher}>
-              <Field label="Email">
-                <input style={input} value={newEmail} onChange={(e) => setNewEmail(e.target.value)} required />
-              </Field>
+      {msg && (
+        <div style={{ background: "#ffe5e5", border: "1px solid #ffb3b3", padding: 12, borderRadius: 10, marginBottom: 16 }}>
+          {msg}
+        </div>
+      )}
 
-              <Field label="Full name">
-                <input style={input} value={newFullName} onChange={(e) => setNewFullName(e.target.value)} required />
-              </Field>
+      {!isAdmin && (
+        <div style={{ background: "#fff3cd", border: "1px solid #ffe69c", padding: 12, borderRadius: 10, marginBottom: 16 }}>
+          This page is admin-only.
+        </div>
+      )}
 
-              <Field label="Role">
-                <select style={input} value={newRole} onChange={(e) => setNewRole(e.target.value)}>
-                  <option value="teacher">teacher</option>
-                  <option value="admin">admin</option>
-                </select>
-              </Field>
+      <div style={{ background: "white", border: "1px solid #e6e6e6", borderRadius: 16, padding: 18, boxShadow: "0 10px 30px rgba(0,0,0,0.06)" }}>
+        <div style={{ display: "flex", gap: 12, justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>Teachers</div>
+          <button onClick={loadAll} disabled={loading} style={btn()}>
+            {loading ? "Loading..." : "Refresh"}
+          </button>
+        </div>
 
-              <Field label="Password">
-                <input style={input} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required type="password" />
-              </Field>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left" }}>
+                <th style={th()}>Name</th>
+                <th style={th()}>Email</th>
+                <th style={th()}>Role</th>
+                <th style={th()}>Assigned class</th>
+                <th style={th()}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {teachers.map((t) => (
+                <tr key={t.id} style={{ borderTop: "1px solid #eee" }}>
+                  <td style={td()}>
+                    <b>{t.full_name || t.name || "(no name)"}</b>
+                  </td>
+                  <td style={td()}>{t.email}</td>
+                  <td style={td()}>
+                    <span style={{ padding: "4px 10px", borderRadius: 999, background: "#eef2ff", border: "1px solid #c7d2fe" }}>
+                      {t.role}
+                    </span>
+                  </td>
 
-              <button style={btnPrimary} type="submit">Create</button>
-            </form>
-          </Card>
+                  <td style={td()}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <select
+                        value={draftClass[t.id] ?? ""}
+                        onChange={(e) => setDraftClass((p) => ({ ...p, [t.id]: e.target.value }))}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: 10,
+                          border: "1px solid #ddd",
+                          minWidth: 90,
+                          background: "white",
+                        }}
+                        disabled={!isAdmin}
+                      >
+                        <option value="">(none)</option>
+                        {CLASS_OPTIONS.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
 
-          <Card>
-            <h2 style={h2}>Assign classes</h2>
+                      <button
+                        onClick={() => setTeacherClass(t.id)}
+                        disabled={!isAdmin || savingId === t.id}
+                        style={btnPrimary(savingId === t.id)}
+                        title="Save this teacher's class"
+                      >
+                        {savingId === t.id ? "Saving..." : "Save"}
+                      </button>
+                    </div>
 
-            <Field label="Select teacher">
-              <select style={input} value={selectedTeacherId} onChange={(e) => setSelectedTeacherId(e.target.value)}>
-                <option value="">— choose —</option>
-                {teachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.full_name} ({t.email}) [{t.role}]
-                  </option>
-                ))}
-              </select>
-            </Field>
+                    <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                      Teachers will only see their assigned class.
+                    </div>
+                  </td>
 
-            {selectedTeacher && (
-              <div style={{ marginTop: 10, marginBottom: 10, fontSize: 14, color: "#475569" }}>
-                Editing: <strong>{selectedTeacher.full_name}</strong>
-              </div>
-            )}
+                  <td style={td()}>
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      {t.role === "admin" ? (
+                        <button onClick={() => makeTeacher(t.id)} disabled={!isAdmin} style={btn()}>
+                          Make teacher
+                        </button>
+                      ) : (
+                        <button onClick={() => makeAdmin(t.id)} disabled={!isAdmin} style={btn()}>
+                          Make admin
+                        </button>
+                      )}
 
-            <div style={classBox}>
-              {classes.map((c) => (
-                <label key={c.id} style={classChip(assignedClassIds.includes(c.id))}>
-                  <input
-                    type="checkbox"
-                    checked={assignedClassIds.includes(c.id)}
-                    onChange={() => toggleClass(c.id)}
-                    style={{ marginRight: 8 }}
-                  />
-                  {c.class_label} (Y{c.year_group})
-                </label>
+                      <button onClick={() => resetPassword(t.id)} disabled={!isAdmin} style={btn()}>
+                        Reset password
+                      </button>
+
+                      <button onClick={() => sendSetupLink(t.id)} disabled={!isAdmin} style={btn()}>
+                        Send setup link
+                      </button>
+                    </div>
+                  </td>
+                </tr>
               ))}
-            </div>
 
-            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-              <button style={btnPrimary} onClick={saveAssignments}>Save assignments</button>
-              <button style={btnGhost} onClick={resetPassword}>Reset password</button>
-            </div>
-          </Card>
+              {teachers.length === 0 && (
+                <tr>
+                  <td colSpan={5} style={{ padding: 16, opacity: 0.7 }}>
+                    {loading ? "Loading..." : "No teachers found."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 14, fontSize: 13, opacity: 0.75 }}>
+          Tip: Set class for each teacher once. Admins can leave class blank.
         </div>
       </div>
     </div>
   );
 }
 
-function Card({ children }) {
-  return <div style={card}>{children}</div>;
+function th() {
+  return { padding: "10px 10px", fontSize: 12, opacity: 0.75, borderBottom: "1px solid #eee" };
 }
-
-function Field({ label, children }) {
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={labelStyle}>{label}</div>
-      {children}
-    </div>
-  );
+function td() {
+  return { padding: "12px 10px", verticalAlign: "top" };
 }
-
-/* Styles */
-const wrap = {
-  minHeight: "100vh",
-  background: "#f8fafc",
-  display: "flex",
-  justifyContent: "center",
-  padding: "24px",
-  fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif",
-};
-const h1 = { fontSize: 28, margin: "0 0 6px", color: "#0f172a" };
-const sub = { margin: "0 0 18px", color: "#475569" };
-const h2 = { fontSize: 18, margin: "0 0 12px", color: "#0f172a" };
-
-const grid = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 };
-
-const card = {
-  background: "white",
-  borderRadius: 14,
-  padding: 16,
-  border: "1px solid #e2e8f0",
-  boxShadow: "0 8px 24px rgba(15, 23, 42, 0.06)",
-};
-
-const labelStyle = { fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 };
-
-const input = {
-  width: "100%",
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #cbd5e1",
-  outline: "none",
-  fontSize: 14,
-};
-
-const btnPrimary = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "none",
-  background: "#2563eb",
-  color: "white",
-  fontWeight: 800,
-  cursor: "pointer",
-};
-
-const btnGhost = {
-  padding: "10px 12px",
-  borderRadius: 10,
-  border: "1px solid #cbd5e1",
-  background: "white",
-  color: "#0f172a",
-  fontWeight: 800,
-  cursor: "pointer",
-};
-
-const classBox = {
-  display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 10,
-  padding: 10,
-  border: "1px solid #e2e8f0",
-  borderRadius: 12,
-  background: "#f8fafc",
-  maxHeight: 280,
-  overflow: "auto",
-};
-
-const classChip = (on) => ({
-  display: "flex",
-  alignItems: "center",
-  padding: "10px 12px",
-  borderRadius: 12,
-  border: `1px solid ${on ? "#93c5fd" : "#e2e8f0"}`,
-  background: on ? "#eff6ff" : "white",
-  cursor: "pointer",
-  fontWeight: 700,
-  color: "#0f172a",
-});
-
-const errorStyle = {
-  background: "#fff7ed",
-  border: "1px solid #fdba74",
-  padding: 12,
-  borderRadius: 12,
-  marginBottom: 14,
-  color: "#7c2d12",
-};
+function btn() {
+  return {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #d5d5d5",
+    background: "white",
+    cursor: "pointer",
+    fontWeight: 600,
+  };
+}
+function btnPrimary(loading) {
+  return {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #111827",
+    background: loading ? "#111827" : "#111827",
+    color: "white",
+    cursor: "pointer",
+    fontWeight: 700,
+  };
+}
