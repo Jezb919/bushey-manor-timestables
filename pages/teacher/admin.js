@@ -1,8 +1,7 @@
-// pages/teacher/admin.js
 export async function getServerSideProps() {
   return {
     redirect: {
-      destination: "/teacher/admin/teachers",
+      destination: "/teacher/dashboard",
       permanent: false,
     },
   };
