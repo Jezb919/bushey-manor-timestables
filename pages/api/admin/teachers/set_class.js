@@ -11,34 +11,27 @@ export default async function handler(req, res) {
     if (!admin?.ok) return; // requireAdmin already responded
 
     const { teacher_id, class_label } = req.body || {};
-    if (!teacher_id || !class_label) {
-      return res.status(400).json({ ok: false, error: "Missing teacher_id or class_label" });
+
+    if (!teacher_id) {
+      return res.status(400).json({ ok: false, error: "Missing teacher_id" });
     }
 
-    // Find the class by class_label (your DB uses class_label, not classes.label)
-    const { data: cls, error: classErr } = await supabaseAdmin
-      .from("classes")
-      .select("id, class_label")
-      .eq("class_label", class_label)
+    // Allow null/empty to mean "unassigned"
+    const clean = (class_label || "").trim().toUpperCase();
+    const newValue = clean === "" ? null : clean;
+
+    const { data, error } = await supabaseAdmin
+      .from("teachers")
+      .update({ class_label: newValue })
+      .eq("id", teacher_id)
+      .select("id,email,full_name,role,class_label")
       .single();
 
-    if (classErr || !cls) {
-      return res.status(404).json({ ok: false, error: "Class not found", debug: classErr?.message });
+    if (error) {
+      return res.status(500).json({ ok: false, error: "Failed to set class", debug: error.message });
     }
 
-    // Upsert assignment (one class per teacher)
-    const { error: upsertErr } = await supabaseAdmin
-      .from("teacher_class_assignments")
-      .upsert(
-        { teacher_id, class_id: cls.id },
-        { onConflict: "teacher_id" }
-      );
-
-    if (upsertErr) {
-      return res.status(500).json({ ok: false, error: "Failed to assign class", debug: upsertErr.message });
-    }
-
-    return res.status(200).json({ ok: true, teacher_id, class_label: cls.class_label });
+    return res.json({ ok: true, teacher: data });
   } catch (e) {
     return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
   }
