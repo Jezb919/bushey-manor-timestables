@@ -1,105 +1,157 @@
+// pages/student/login.js
 import { useState } from "react";
+import Head from "next/head";
+import Link from "next/link";
 
-export default function StudentLogin() {
+export default function StudentLoginPage() {
   const [username, setUsername] = useState("");
   const [pin, setPin] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (loading) return;
-
+  async function onSubmit(e) {
+    e.preventDefault(); // IMPORTANT: stops browser doing GET
     setMsg("");
-    setLoading(true);
+    setBusy(true);
 
     try {
-      const r = await fetch("/api/student/login", {
+      const resp = await fetch("/api/student/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include", // IMPORTANT: so cookie is saved
         body: JSON.stringify({
           username: username.trim(),
           pin: pin.trim(),
         }),
       });
 
-      const j = await r.json().catch(() => null);
+      let data = null;
+      try {
+        data = await resp.json();
+      } catch {
+        // ignore JSON parse error
+      }
 
-      if (!r.ok || !j?.ok) {
-        setMsg(j?.error || `Login failed (${r.status})`);
-        setLoading(false);
+      if (!resp.ok || !data?.ok) {
+        const errText =
+          data?.error || `Login failed (${resp.status})`;
+        setMsg(errText);
+        setBusy(false);
         return;
       }
 
-      // Success -> go to test
-      // Prefer mixed (your main quiz), fallback to /student/tests
-      try {
-        const head = await fetch("/student/tests/mixed", { method: "HEAD" });
-        window.location.href = head.ok ? "/student/tests/mixed" : "/student/tests";
-      } catch {
-        window.location.href = "/student/tests";
-      }
+      // Success -> go to student tests home
+      window.location.href = "/student/tests";
     } catch (err) {
       setMsg("Login failed (network error)");
-      setLoading(false);
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <div style={{ maxWidth: 520, margin: "40px auto", padding: 16, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 44, marginBottom: 6 }}>Student Login</h1>
-      <p style={{ marginTop: 0, opacity: 0.8 }}>
-        Enter your <b>username</b> and <b>PIN</b>.
-      </p>
+    <>
+      <Head>
+        <title>Student Login</title>
+      </Head>
 
-      {msg ? (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: "#f6f7fb",
+        }}
+      >
         <div
           style={{
-            background: "#fee2e2",
-            border: "1px solid #fecaca",
-            padding: 12,
-            borderRadius: 10,
-            marginBottom: 12,
+            width: "100%",
+            maxWidth: 720,
+            background: "white",
+            borderRadius: 18,
+            padding: 28,
+            boxShadow: "0 10px 40px rgba(0,0,0,0.08)",
           }}
         >
-          {msg}
+          <h1 style={{ fontSize: 56, margin: 0 }}>Student Login</h1>
+          <p style={{ marginTop: 8, fontSize: 18, color: "#333" }}>
+            Enter your <b>username</b> and PIN.
+          </p>
+
+          {msg ? (
+            <div
+              style={{
+                marginTop: 16,
+                background: "#fde7e7",
+                border: "1px solid #f4bcbc",
+                color: "#7a1b1b",
+                borderRadius: 12,
+                padding: "14px 16px",
+                fontSize: 18,
+              }}
+            >
+              {msg}
+            </div>
+          ) : null}
+
+          <form onSubmit={onSubmit} style={{ marginTop: 18 }}>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Username"
+              autoComplete="username"
+              style={inputStyle}
+              disabled={busy}
+            />
+
+            <input
+              value={pin}
+              onChange={(e) => setPin(e.target.value)}
+              placeholder="PIN (4 digits)"
+              inputMode="numeric"
+              autoComplete="current-password"
+              style={inputStyle}
+              disabled={busy}
+            />
+
+            <button
+              type="submit"
+              disabled={busy}
+              style={{
+                marginTop: 12,
+                width: "100%",
+                borderRadius: 14,
+                padding: "16px 18px",
+                fontSize: 18,
+                border: "none",
+                cursor: busy ? "not-allowed" : "pointer",
+                background: "#0b1220",
+                color: "white",
+              }}
+            >
+              {busy ? "Logging in..." : "Log in"}
+            </button>
+          </form>
+
+          <div style={{ marginTop: 14 }}>
+            <Link href="/" style={{ color: "#334" }}>
+              ← Back
+            </Link>
+          </div>
         </div>
-      ) : null}
-
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10 }}>
-        <input
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          placeholder="Username (e.g. sama1)"
-          autoComplete="username"
-          style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd", fontSize: 16 }}
-        />
-
-        <input
-          value={pin}
-          onChange={(e) => setPin(e.target.value)}
-          placeholder="PIN"
-          autoComplete="current-password"
-          inputMode="numeric"
-          style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd", fontSize: 16 }}
-        />
-
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            padding: 12,
-            borderRadius: 10,
-            border: "none",
-            background: loading ? "#444" : "#111827",
-            color: "white",
-            fontSize: 16,
-            cursor: loading ? "default" : "pointer",
-          }}
-        >
-          {loading ? "Logging in..." : "Log in"}
-        </button>
-      </form>
-    </div>
+      </div>
+    </>
   );
 }
+
+const inputStyle = {
+  width: "100%",
+  borderRadius: 14,
+  padding: "16px 18px",
+  fontSize: 18,
+  border: "1px solid #d7dbe5",
+  outline: "none",
+  marginTop: 12,
+};
