@@ -21,6 +21,13 @@ function parseCookies(cookieHeader) {
   return out;
 }
 
+function pick(obj, keys) {
+  for (const k of keys) {
+    if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "GET") {
@@ -41,6 +48,7 @@ export default async function handler(req, res) {
     }
 
     const class_id = session.class_id || null;
+
     if (!class_id) {
       return res.status(200).json({
         ok: true,
@@ -52,31 +60,51 @@ export default async function handler(req, res) {
 
     const supabase = getSupabaseAdmin();
 
+    // IMPORTANT: select("*") so we don't crash if column names differ
     const { data: cls, error } = await supabase
       .from("classes")
-      .select("id, class_label, minimum_table, maximum_table, test_start_date")
+      .select("*")
       .eq("id", class_id)
       .maybeSingle();
 
     if (error) {
-      return res.status(500).json({ ok: false, error: "Server error", debug: error.message });
+      return res.status(500).json({
+        ok: false,
+        error: "Server error",
+        debug: error.message,
+      });
     }
+
     if (!cls) {
       return res.status(404).json({ ok: false, error: "Class not found" });
     }
+
+    // Try multiple possible column names (in case yours differ)
+    const classLabel = pick(cls, ["class_label", "classLabel", "label"]);
+    const minTable = pick(cls, ["minimum_table", "min_table", "minimumTable", "minTable"]);
+    const maxTable = pick(cls, ["maximum_table", "max_table", "maximumTable", "maxTable"]);
+    const startDate = pick(cls, ["test_start_date", "testStartDate", "start_date", "startDate"]);
 
     return res.status(200).json({
       ok: true,
       signedIn: true,
       settings: {
         class_id: cls.id,
-        class_label: cls.class_label,
-        minimum_table: cls.minimum_table,
-        maximum_table: cls.maximum_table,
-        test_start_date: cls.test_start_date, // keep as-is (string/date)
+        class_label: classLabel,
+        minimum_table: minTable,
+        maximum_table: maxTable,
+        test_start_date: startDate,
+      },
+      debug: {
+        // helps us confirm what your real columns are
+        classKeys: Object.keys(cls),
       },
     });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
+    return res.status(500).json({
+      ok: false,
+      error: "Server error",
+      debug: String(e?.message || e),
+    });
   }
 }
