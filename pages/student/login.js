@@ -1,87 +1,105 @@
 import { useState } from "react";
-import Link from "next/link";
 
 export default function StudentLogin() {
   const [username, setUsername] = useState("");
   const [pin, setPin] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState("");
 
-  async function onSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
-    setError("");
-    setBusy(true);
+    if (loading) return;
+
+    setMsg("");
+    setLoading(true);
 
     try {
       const r = await fetch("/api/student/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, pin }),
+        body: JSON.stringify({
+          username: username.trim(),
+          pin: pin.trim(),
+        }),
       });
 
-      const data = await r.json();
-      if (!data.ok) {
-        setError(data.error || "Invalid login");
-        setBusy(false);
+      const j = await r.json().catch(() => null);
+
+      if (!r.ok || !j?.ok) {
+        setMsg(j?.error || `Login failed (${r.status})`);
+        setLoading(false);
         return;
       }
 
-      // Send them to student home (or tests page if you prefer)
-      window.location.href = "/student";
+      // Success -> go to test
+      // Prefer mixed (your main quiz), fallback to /student/tests
+      try {
+        const head = await fetch("/student/tests/mixed", { method: "HEAD" });
+        window.location.href = head.ok ? "/student/tests/mixed" : "/student/tests";
+      } catch {
+        window.location.href = "/student/tests";
+      }
     } catch (err) {
-      setError("Login failed");
-      setBusy(false);
+      setMsg("Login failed (network error)");
+      setLoading(false);
     }
   }
 
   return (
-    <div style={{ padding: 30, maxWidth: 760 }}>
-      <h1>Pupil login</h1>
+    <div style={{ maxWidth: 520, margin: "40px auto", padding: 16, fontFamily: "system-ui" }}>
+      <h1 style={{ fontSize: 44, marginBottom: 6 }}>Student Login</h1>
+      <p style={{ marginTop: 0, opacity: 0.8 }}>
+        Enter your <b>username</b> and <b>PIN</b>.
+      </p>
 
-      {error && <p style={{ color: "red" }}>{error}</p>}
-
-      <form onSubmit={onSubmit}>
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: "block", marginBottom: 6 }}>Username</label>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="e.g. zacjx1"
-            style={{ width: "100%", padding: 12, fontSize: 16 }}
-            autoComplete="username"
-          />
-        </div>
-
-        <div style={{ marginBottom: 12 }}>
-          <label style={{ display: "block", marginBottom: 6 }}>PIN</label>
-          <input
-            value={pin}
-            onChange={(e) =>
-              setPin(e.target.value.replace(/\D/g, "").slice(0, 4))
-            }
-            placeholder="4 digits"
-            style={{ width: "100%", padding: 12, fontSize: 16 }}
-            inputMode="numeric"
-            autoComplete="one-time-code"
-          />
-        </div>
-
-        <button
-          disabled={busy}
+      {msg ? (
+        <div
           style={{
-            width: "100%",
-            padding: 14,
-            fontSize: 18,
-            cursor: busy ? "not-allowed" : "pointer",
+            background: "#fee2e2",
+            border: "1px solid #fecaca",
+            padding: 12,
+            borderRadius: 10,
+            marginBottom: 12,
           }}
         >
-          {busy ? "Logging in..." : "Log in"}
+          {msg}
+        </div>
+      ) : null}
+
+      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 10 }}>
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Username (e.g. sama1)"
+          autoComplete="username"
+          style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd", fontSize: 16 }}
+        />
+
+        <input
+          value={pin}
+          onChange={(e) => setPin(e.target.value)}
+          placeholder="PIN"
+          autoComplete="current-password"
+          inputMode="numeric"
+          style={{ padding: 12, borderRadius: 10, border: "1px solid #ddd", fontSize: 16 }}
+        />
+
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            padding: 12,
+            borderRadius: 10,
+            border: "none",
+            background: loading ? "#444" : "#111827",
+            color: "white",
+            fontSize: 16,
+            cursor: loading ? "default" : "pointer",
+          }}
+        >
+          {loading ? "Logging in..." : "Log in"}
         </button>
       </form>
-
-      <p style={{ marginTop: 18 }}>
-        <Link href="/">Back</Link>
-      </p>
     </div>
   );
 }
