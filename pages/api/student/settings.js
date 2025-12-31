@@ -1,10 +1,17 @@
-// pages/api/student/settings.js
-import { supabaseAdmin } from "../../../lib/supabaseAdmin";
+import { createClient } from "@supabase/supabase-js";
 
-function parseCookies(req) {
-  const header = req.headers.cookie || "";
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+  if (!url || !serviceKey) throw new Error("Missing Supabase env vars");
+  return createClient(url, serviceKey, { auth: { persistSession: false } });
+}
+
+function parseCookies(cookieHeader) {
   const out = {};
-  header.split(";").forEach((part) => {
+  if (!cookieHeader) return out;
+  cookieHeader.split(";").forEach((part) => {
     const idx = part.indexOf("=");
     if (idx === -1) return;
     const k = part.slice(0, idx).trim();
@@ -16,59 +23,57 @@ function parseCookies(req) {
 
 export default async function handler(req, res) {
   try {
-    const cookies = parseCookies(req);
-    const raw = cookies["bmtt_student"];
+    if (req.method !== "GET") {
+      return res
+        .status(405)
+        .json({ ok: false, error: "Method not allowed (GET only)" });
+    }
+
+    const cookies = parseCookies(req.headers.cookie || "");
+    const raw = cookies.bmtt_student;
     if (!raw) return res.status(200).json({ ok: true, signedIn: false });
 
-    let sess = null;
+    let session;
     try {
-      sess = JSON.parse(raw);
+      session = JSON.parse(raw);
     } catch {
       return res.status(200).json({ ok: true, signedIn: false });
     }
 
-    if (!sess?.class_id) {
+    const class_id = session.class_id || null;
+    if (!class_id) {
       return res.status(200).json({
         ok: true,
         signedIn: true,
         settings: null,
-        error: "Student has no class assigned",
-        session: sess,
+        warning: "No class_id in session",
       });
     }
 
-    // safest: select * so we don’t get caught by column naming differences
-    const { data: cls, error } = await supabaseAdmin
+    const supabase = getSupabaseAdmin();
+
+    const { data: cls, error } = await supabase
       .from("classes")
-      .select("*")
-      .eq("id", sess.class_id)
+      .select("id, class_label, minimum_table, maximum_table, test_start_date")
+      .eq("id", class_id)
       .maybeSingle();
 
     if (error) {
-      return res.status(500).json({ ok: false, error: "Database error", debug: error.message });
+      return res.status(500).json({ ok: false, error: "Server error", debug: error.message });
     }
-
     if (!cls) {
-      return res.status(200).json({ ok: true, signedIn: true, settings: null, error: "Class not found" });
+      return res.status(404).json({ ok: false, error: "Class not found" });
     }
-
-    // Normalise keys
-    const class_label = cls.class_label ?? cls["class label"] ?? null;
-    const year_group = cls.year_group ?? cls["year group"] ?? null;
-    const minimum_table = cls.minimum_table ?? cls["minimum table"] ?? null;
-    const maximum_table = cls.maximum_table ?? cls["maximum table"] ?? null;
-    const test_start_date = cls.test_start_date ?? cls["test start date"] ?? null;
 
     return res.status(200).json({
       ok: true,
       signedIn: true,
       settings: {
         class_id: cls.id,
-        class_label,
-        year_group,
-        minimum_table,
-        maximum_table,
-        test_start_date,
+        class_label: cls.class_label,
+        minimum_table: cls.minimum_table,
+        maximum_table: cls.maximum_table,
+        test_start_date: cls.test_start_date, // keep as-is (string/date)
       },
     });
   } catch (e) {
