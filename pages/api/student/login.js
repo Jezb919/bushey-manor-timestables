@@ -1,68 +1,128 @@
 // pages/api/student/login.js
-import { supabaseAdmin } from "../../../lib/supabaseAdmin";
-import { serialize } from "cookie";
+// Student login: verifies username + PIN, then sets bmtt_student cookie
 
-function json(res, status, body) {
-  res.status(status).setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(body));
+const { serialize } = require("cookie");
+const bcrypt = require("bcryptjs");
+const { createClient } = require("@supabase/supabase-js");
+
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+
+  if (!url || !serviceKey) {
+    throw new Error(
+      "Missing SUPABASE env vars. Need NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY."
+    );
+  }
+
+  return createClient(url, serviceKey, {
+    auth: { persistSession: false },
+  });
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      return json(res, 405, {
+      return res.status(405).json({
         ok: false,
         error: "Method not allowed (POST only)",
-        info:
-          "Send JSON: { username, pin }. Debug: POST same body to test.",
+        info: "Send JSON: { username, pin }",
       });
     }
 
     const { username, pin } = req.body || {};
+
     if (!username || !pin) {
-      return json(res, 400, { ok: false, error: "Missing username or pin" });
+      return res.status(400).json({
+        ok: false,
+        error: "Missing username or pin",
+      });
     }
 
-    // pupils table must contain username + pin_hash (or pin) depending on your schema
-    // This version assumes you store pin in a column called "pin" (plain) OR "pin_hash" (hashed).
-    // If you only have plain pin, keep the equality check below.
-    const { data: pupil, error } = await supabaseAdmin
+    const supabase = getSupabaseAdmin();
+
+    // Try to load pupil record
+    // We support either pin_hash (recommended) or pin (legacy/plain)
+    const { data: pupil, error } = await supabase
       .from("pupils")
-      .select("id, first_name, last_name, username, class_id, pin")
-      .eq("username", username.trim())
-      .single();
+      .select(
+        "id, first_name, last_name, class_id, class_label, username, pin_hash, pin"
+      )
+      .eq("username", String(username).trim())
+      .maybeSingle();
 
-    if (error || !pupil) {
-      return json(res, 401, { ok: false, error: "Invalid username or PIN" });
+    if (error) {
+      return res.status(500).json({ ok: false, error: error.message });
     }
 
-    const okPin = String(pupil.pin) === String(pin).trim();
-    if (!okPin) {
-      return json(res, 401, { ok: false, error: "Invalid username or PIN" });
+    if (!pupil) {
+      return res.status(401).json({ ok: false, error: "Invalid login" });
     }
 
-    // Create a small session payload
+    const pinStr = String(pin).trim();
+
+    // Check pin in a flexible way
+    let pinOk = false;
+
+    // If bcrypt hash exists
+    if (pupil.pin_hash && typeof pupil.pin_hash === "string") {
+      // bcrypt hashes usually start with $2
+      if (pupil.pin_hash.startsWith("$2")) {
+        pinOk = await bcrypt.compare(pinStr, pupil.pin_hash);
+      } else {
+        // If it’s not bcrypt, fall back to direct compare
+        pinOk = pinStr === String(pupil.pin_hash);
+      }
+    } else if (pupil.pin != null) {
+      pinOk = pinStr === String(pupil.pin);
+    }
+
+    if (!pinOk) {
+      return res.status(401).json({ ok: false, error: "Invalid login" });
+    }
+
+    const fullName = `${pupil.first_name || ""} ${pupil.last_name || ""}`.trim();
+
+    // IMPORTANT: class_label might be stored on pupils OR derived elsewhere.
+    // If your pupils table does NOT have class_label, we still set null and your /api/student/settings can derive later.
     const session = {
       pupil_id: pupil.id,
       pupilId: pupil.id,
       username: pupil.username,
-      class_id: pupil.class_id,
-      classId: pupil.class_id,
-      name: `${pupil.first_name || ""} ${pupil.last_name || ""}`.trim(),
+      full_name: fullName,
+      fullName,
+      class_label: pupil.class_label || null,
+      classLabel: pupil.class_label || null,
+      class_id: pupil.class_id || null,
+      classId: pupil.class_id || null,
+      role: "student",
     };
 
-    // Set cookie (httpOnly so pupils can’t tamper with it)
     const cookie = serialize("bmtt_student", JSON.stringify(session), {
       httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
-      secure: true,
       path: "/",
-      maxAge: 60 * 60 * 24 * 30, // 30 days
+      maxAge: 60 * 60 * 24 * 60, // 60 days
     });
 
     res.setHeader("Set-Cookie", cookie);
-    return json(res, 200, { ok: true });
+
+    return res.status(200).json({
+      ok: true,
+      pupil: {
+        id: pupil.id,
+        username: pupil.username,
+        full_name: fullName,
+        class_label: pupil.class_label || null,
+      },
+    });
   } catch (e) {
-    return json(res, 500, { ok: false, error: "Server error", debug: String(e) });
+    return res.status(500).json({
+      ok: false,
+      error: "Server error",
+      debug: String(e && e.stack ? e.stack : e),
+    });
   }
-}
+};
