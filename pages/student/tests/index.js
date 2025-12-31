@@ -1,155 +1,139 @@
+// pages/student/tests/index.js
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/router";
 
-export default function TestStart() {
+export default function StudentTestsHome() {
   const router = useRouter();
-  const { name, class: className } = router.query;
+  const [loading, setLoading] = useState(true);
+  const [signedIn, setSignedIn] = useState(false);
+  const [settings, setSettings] = useState(null);
+  const [error, setError] = useState(null);
 
-  const safeName = typeof name === "string" ? name.trim() : "";
-  const safeClass = typeof className === "string" ? className.trim() : "";
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      setError(null);
 
-  const goToTest = () => {
-    // Send them to the REAL test page
-    router.push(
-      `/student/tests/mixed?name=${encodeURIComponent(safeName)}&class=${encodeURIComponent(
-        safeClass
-      )}`
-    );
-  };
+      // 1) session
+      const sResp = await fetch("/api/student/session");
+      const sData = await sResp.json().catch(() => null);
+
+      if (!sData?.signedIn) {
+        setSignedIn(false);
+        setLoading(false);
+        return;
+      }
+
+      setSignedIn(true);
+
+      // 2) class settings
+      const setResp = await fetch("/api/student/settings");
+      const setData = await setResp.json().catch(() => null);
+
+      if (!setData?.ok || !setData?.signedIn) {
+        setError(setData?.error || "Could not load class settings");
+        setLoading(false);
+        return;
+      }
+
+      setSettings(setData.settings || null);
+      setLoading(false);
+    })();
+  }, []);
+
+  function canStartTest() {
+    if (!settings) return false;
+    if (!settings.minimum_table || !settings.maximum_table) return false;
+
+    // optional: enforce test_start_date if present
+    if (settings.test_start_date) {
+      const start = new Date(settings.test_start_date);
+      // if the date string is invalid, ignore it
+      if (!Number.isNaN(start.getTime())) {
+        const now = new Date();
+        // compare dates by time
+        if (now < start) return false;
+      }
+    }
+    return true;
+  }
+
+  function startTest() {
+    router.push("/student/tests/mixed");
+  }
 
   return (
-    <div style={outerStyle}>
-      <div style={cardStyle}>
-        <Header />
+    <div style={{ maxWidth: 900, margin: "60px auto", padding: "0 16px" }}>
+      <h1 style={{ fontSize: 54, margin: 0 }}>Maths Test</h1>
+      <p style={{ fontSize: 18, marginTop: 10 }}>This test includes mixed times tables.</p>
 
-        <div style={{ textAlign: "center", marginTop: "1.5rem" }}>
-          <h1 style={{ margin: 0, fontSize: "2.2rem" }}>Maths Test</h1>
+      {loading && <p style={{ marginTop: 18 }}>Loading…</p>}
 
-          <p style={{ color: "#d1d5db", marginTop: "0.75rem" }}>
-            This test includes <strong>mixed times tables</strong>.
-          </p>
+      {!loading && !signedIn && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ background: "#fde2e2", border: "1px solid #f5b5b5", padding: 14, borderRadius: 10 }}>
+            You are not logged in. Please log in first.
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Link href="/student/login">Go to Student Login</Link>
+          </div>
+        </div>
+      )}
 
-          {/* If they arrived without name/class, send them back */}
-          {(!safeName || !safeClass) && (
-            <div style={{ marginTop: "1rem" }}>
-              <p style={{ color: "#fca5a5", marginBottom: "0.75rem" }}>
-                Name and class missing — please go back and enter them.
-              </p>
-              <a href="/student" style={linkStyle}>
-                Go to Student Login
-              </a>
+      {!loading && signedIn && (
+        <div style={{ marginTop: 18 }}>
+          {error && (
+            <div style={{ background: "#fde2e2", border: "1px solid #f5b5b5", padding: 14, borderRadius: 10 }}>
+              {error}
             </div>
           )}
 
-          <div style={{ marginTop: "1.75rem" }}>
-            <button
-              onClick={goToTest}
-              disabled={!safeName || !safeClass}
-              style={buttonStyle(!safeName || !safeClass)}
-            >
-              Start Test
-            </button>
+          {settings && (
+            <div style={{ marginTop: 14, fontSize: 16 }}>
+              <div>
+                <b>Class:</b> {settings.class_label || "(unknown)"}
+              </div>
+              <div>
+                <b>Tables:</b> {settings.minimum_table ?? "?"} to {settings.maximum_table ?? "?"}
+              </div>
+              {settings.test_start_date && (
+                <div>
+                  <b>Test start date:</b> {String(settings.test_start_date)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!canStartTest() && (
+            <div style={{ marginTop: 16, color: "#b42318" }}>
+              Test not available yet (check class settings or start date).
+            </div>
+          )}
+
+          <button
+            onClick={startTest}
+            disabled={!canStartTest()}
+            style={{
+              marginTop: 18,
+              fontSize: 18,
+              padding: "14px 22px",
+              borderRadius: 12,
+              border: "none",
+              background: canStartTest() ? "#3b4658" : "#9aa4b2",
+              color: "white",
+              cursor: canStartTest() ? "pointer" : "not-allowed",
+              minWidth: 220,
+            }}
+          >
+            START TEST
+          </button>
+
+          <div style={{ marginTop: 14 }}>
+            <Link href="/student/login">Back to Student Login</Link>
           </div>
-
-          <div style={{ marginTop: "1.25rem" }}>
-            <a href="/student" style={linkStyle}>
-              Back to Student Login
-            </a>
-          </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-/* ---------- styles ---------- */
-
-const outerStyle = {
-  minHeight: "100vh",
-  background:
-    "radial-gradient(circle at top, #facc15 0, #0f172a 35%, #020617 100%)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "1.5rem",
-  color: "white",
-  fontFamily:
-    "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-};
-
-const cardStyle = {
-  background: "rgba(3,7,18,0.95)",
-  borderRadius: "22px",
-  padding: "2rem 2.5rem",
-  maxWidth: "680px",
-  width: "100%",
-  boxShadow: "0 25px 60px rgba(0,0,0,0.55)",
-  border: "1px solid rgba(148,163,184,0.35)",
-};
-
-const buttonStyle = (disabled) => ({
-  padding: "14px 28px",
-  fontSize: "1.05rem",
-  fontWeight: 800,
-  borderRadius: "999px",
-  border: "none",
-  width: "240px",
-  cursor: disabled ? "not-allowed" : "pointer",
-  background: disabled
-    ? "#4b5563"
-    : "linear-gradient(135deg,#f59e0b,#facc15)",
-  color: disabled ? "#e5e7eb" : "#111827",
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
-});
-
-const linkStyle = {
-  fontSize: "0.9rem",
-  color: "#9ca3af",
-  textDecoration: "underline",
-};
-
-function Header() {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "0.8rem",
-        justifyContent: "center",
-      }}
-    >
-      <div
-        style={{
-          width: "56px",
-          height: "56px",
-          borderRadius: "50%",
-          background: "white",
-          border: "3px solid #facc15",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontWeight: 900,
-          color: "#0f172a",
-        }}
-      >
-        BM
-      </div>
-
-      <div style={{ textAlign: "left" }}>
-        <div
-          style={{
-            fontSize: "0.75rem",
-            letterSpacing: "0.16em",
-            textTransform: "uppercase",
-            color: "#e5e7eb",
-          }}
-        >
-          Bushey Manor
-        </div>
-        <div style={{ fontSize: "1.3rem", fontWeight: 900, color: "#facc15" }}>
-          Times Tables Arena
-        </div>
-      </div>
+      )}
     </div>
   );
 }
