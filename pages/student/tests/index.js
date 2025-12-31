@@ -1,139 +1,138 @@
-// pages/student/tests/index.js
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
 export default function StudentTestsHome() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [signedIn, setSignedIn] = useState(false);
+  const [session, setSession] = useState(null);
   const [settings, setSettings] = useState(null);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    (async () => {
-      setLoading(true);
-      setError(null);
+    let mounted = true;
 
-      // 1) session
-      const sResp = await fetch("/api/student/session");
-      const sData = await sResp.json().catch(() => null);
+    async function load() {
+      try {
+        setLoading(true);
+        setError("");
 
-      if (!sData?.signedIn) {
-        setSignedIn(false);
-        setLoading(false);
-        return;
-      }
+        const sRes = await fetch("/api/student/session");
+        const sJson = await sRes.json();
 
-      setSignedIn(true);
+        if (!sJson?.signedIn) {
+          if (mounted) {
+            setLoading(false);
+            setSession(null);
+            setSettings(null);
+          }
+          return;
+        }
 
-      // 2) class settings
-      const setResp = await fetch("/api/student/settings");
-      const setData = await setResp.json().catch(() => null);
+        const setRes = await fetch("/api/student/settings");
+        const setJson = await setRes.json();
 
-      if (!setData?.ok || !setData?.signedIn) {
-        setError(setData?.error || "Could not load class settings");
-        setLoading(false);
-        return;
-      }
-
-      setSettings(setData.settings || null);
-      setLoading(false);
-    })();
-  }, []);
-
-  function canStartTest() {
-    if (!settings) return false;
-    if (!settings.minimum_table || !settings.maximum_table) return false;
-
-    // optional: enforce test_start_date if present
-    if (settings.test_start_date) {
-      const start = new Date(settings.test_start_date);
-      // if the date string is invalid, ignore it
-      if (!Number.isNaN(start.getTime())) {
-        const now = new Date();
-        // compare dates by time
-        if (now < start) return false;
+        if (mounted) {
+          setSession(sJson.session || null);
+          setSettings(setJson.settings || null);
+          setLoading(false);
+        }
+      } catch (e) {
+        if (mounted) {
+          setError("Failed to load test info.");
+          setLoading(false);
+        }
       }
     }
-    return true;
+
+    load();
+    return () => (mounted = false);
+  }, []);
+
+  const availability = useMemo(() => {
+    if (!settings?.test_start_date) return { ok: true, reason: "" };
+    const start = new Date(settings.test_start_date);
+    if (Number.isNaN(start.getTime())) return { ok: true, reason: "" };
+    const now = new Date();
+    if (now < start) {
+      return { ok: false, reason: "Test not available yet (check class settings or start date)." };
+    }
+    return { ok: true, reason: "" };
+  }, [settings]);
+
+  const minT = settings?.minimum_table ?? "?";
+  const maxT = settings?.maximum_table ?? "?";
+  const classLabel = settings?.class_label || session?.class_label || "?";
+
+  if (loading) {
+    return (
+      <div style={{ padding: 40 }}>
+        <h1>Maths Test</h1>
+        <p>Loading…</p>
+      </div>
+    );
   }
 
-  function startTest() {
-    router.push("/student/tests/mixed");
+  if (!session) {
+    return (
+      <div style={{ padding: 40 }}>
+        <h1>Maths Test</h1>
+        <p>You are not signed in.</p>
+        <p>
+          <Link href="/student/login">Go to Student Login</Link>
+        </p>
+      </div>
+    );
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: "60px auto", padding: "0 16px" }}>
-      <h1 style={{ fontSize: 54, margin: 0 }}>Maths Test</h1>
-      <p style={{ fontSize: 18, marginTop: 10 }}>This test includes mixed times tables.</p>
+    <div style={{ padding: 40, maxWidth: 800, margin: "0 auto" }}>
+      <h1 style={{ fontSize: 56, marginBottom: 10 }}>Maths Test</h1>
+      <p style={{ fontSize: 18, marginTop: 0 }}>
+        This test includes <b>mixed times tables</b>.
+      </p>
 
-      {loading && <p style={{ marginTop: 18 }}>Loading…</p>}
-
-      {!loading && !signedIn && (
-        <div style={{ marginTop: 18 }}>
-          <div style={{ background: "#fde2e2", border: "1px solid #f5b5b5", padding: 14, borderRadius: 10 }}>
-            You are not logged in. Please log in first.
-          </div>
-          <div style={{ marginTop: 12 }}>
-            <Link href="/student/login">Go to Student Login</Link>
-          </div>
+      {!!error && (
+        <div style={{ background: "#ffe6e6", padding: 12, borderRadius: 10, marginTop: 16 }}>
+          {error}
         </div>
       )}
 
-      {!loading && signedIn && (
-        <div style={{ marginTop: 18 }}>
-          {error && (
-            <div style={{ background: "#fde2e2", border: "1px solid #f5b5b5", padding: 14, borderRadius: 10 }}>
-              {error}
-            </div>
-          )}
+      <div style={{ marginTop: 18, fontSize: 18 }}>
+        <div>
+          <b>Class:</b> {classLabel}
+        </div>
+        <div>
+          <b>Tables:</b> {minT} to {maxT}
+        </div>
+      </div>
 
-          {settings && (
-            <div style={{ marginTop: 14, fontSize: 16 }}>
-              <div>
-                <b>Class:</b> {settings.class_label || "(unknown)"}
-              </div>
-              <div>
-                <b>Tables:</b> {settings.minimum_table ?? "?"} to {settings.maximum_table ?? "?"}
-              </div>
-              {settings.test_start_date && (
-                <div>
-                  <b>Test start date:</b> {String(settings.test_start_date)}
-                </div>
-              )}
-            </div>
-          )}
-
-          {!canStartTest() && (
-            <div style={{ marginTop: 16, color: "#b42318" }}>
-              Test not available yet (check class settings or start date).
-            </div>
-          )}
-
-          <button
-            onClick={startTest}
-            disabled={!canStartTest()}
-            style={{
-              marginTop: 18,
-              fontSize: 18,
-              padding: "14px 22px",
-              borderRadius: 12,
-              border: "none",
-              background: canStartTest() ? "#3b4658" : "#9aa4b2",
-              color: "white",
-              cursor: canStartTest() ? "pointer" : "not-allowed",
-              minWidth: 220,
-            }}
-          >
-            START TEST
-          </button>
-
-          <div style={{ marginTop: 14 }}>
-            <Link href="/student/login">Back to Student Login</Link>
-          </div>
+      {!availability.ok && (
+        <div style={{ marginTop: 16, color: "darkred", fontSize: 18 }}>
+          {availability.reason}
         </div>
       )}
+
+      <div style={{ marginTop: 26 }}>
+        <button
+          onClick={() => router.push("/student/tests/mixed")}
+          disabled={!availability.ok}
+          style={{
+            fontSize: 20,
+            padding: "14px 28px",
+            borderRadius: 12,
+            border: "none",
+            cursor: availability.ok ? "pointer" : "not-allowed",
+            opacity: availability.ok ? 1 : 0.5,
+          }}
+        >
+          START TEST
+        </button>
+      </div>
+
+      <div style={{ marginTop: 20 }}>
+        <Link href="/student/login">Back to Student Login</Link>
+      </div>
     </div>
   );
 }
