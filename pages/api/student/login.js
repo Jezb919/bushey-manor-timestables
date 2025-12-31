@@ -1,29 +1,52 @@
 // pages/api/student/login.js
-import { createClient } from "@supabase/supabase-js";
+import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 
-function getSupabaseAdmin() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-  const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
-
-  if (!url || !serviceKey) {
-    throw new Error(
-      "Missing env vars: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY."
-    );
-  }
-
-  return createClient(url, serviceKey, { auth: { persistSession: false } });
+// --- tiny cookie helpers (no npm 'cookie' dependency) ---
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const out = {};
+  header.split(";").forEach((part) => {
+    const idx = part.indexOf("=");
+    if (idx === -1) return;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    out[k] = decodeURIComponent(v);
+  });
+  return out;
 }
 
 function setCookie(res, name, value, opts = {}) {
-  const parts = [];
-  parts.push(`${name}=${encodeURIComponent(value)}`);
-  parts.push(`Path=${opts.path || "/"}`);
-  if (opts.httpOnly !== false) parts.push("HttpOnly");
-  parts.push(`SameSite=${opts.sameSite || "Lax"}`);
-  if (opts.maxAge != null) parts.push(`Max-Age=${opts.maxAge}`);
-  if (opts.secure) parts.push("Secure");
-  res.setHeader("Set-Cookie", parts.join("; "));
+  const {
+    httpOnly = true,
+    sameSite = "Lax",
+    secure = process.env.NODE_ENV === "production",
+    path = "/",
+    maxAge = 60 * 60 * 24 * 30, // 30 days
+  } = opts;
+
+  const parts = [
+    `${name}=${encodeURIComponent(value)}`,
+    `Path=${path}`,
+    `Max-Age=${maxAge}`,
+    `SameSite=${sameSite}`,
+  ];
+  if (httpOnly) parts.push("HttpOnly");
+  if (secure) parts.push("Secure");
+
+  // allow multiple set-cookie headers
+  const prev = res.getHeader("Set-Cookie");
+  if (!prev) res.setHeader("Set-Cookie", parts.join("; "));
+  else if (Array.isArray(prev)) res.setHeader("Set-Cookie", [...prev, parts.join("; ")]);
+  else res.setHeader("Set-Cookie", [prev, parts.join("; ")]);
+}
+
+function clearCookie(res, name) {
+  setCookie(res, name, "", { maxAge: 0 });
+}
+
+// store session as a simple JSON string
+function makeStudentSession(payload) {
+  return JSON.stringify(payload);
 }
 
 export default async function handler(req, res) {
@@ -37,61 +60,77 @@ export default async function handler(req, res) {
     }
 
     const { username, pin } = req.body || {};
-    if (!username || !pin) {
-      return res.status(400).json({ ok: false, error: "Missing username or pin" });
+    const u = (username || "").trim().toLowerCase();
+    const p = (pin || "").toString().trim();
+
+    if (!u || !p) {
+      return res.status(400).json({ ok: false, error: "Missing username or PIN" });
+    }
+    if (!/^\d{4}$/.test(p)) {
+      return res.status(400).json({ ok: false, error: "PIN must be 4 digits" });
     }
 
-    const supabase = getSupabaseAdmin();
-
-    const { data: pupil, error } = await supabase
-      .from("pupils")
-      .select("id, first_name, last_name, class_id, class_label, username, pin")
-      .eq("username", String(username).trim())
+    // IMPORTANT: your table is called 'students'
+    // Columns you listed include: id, username, pin, class_id, active, first_name/surname/last_name etc.
+    const { data: student, error } = await supabaseAdmin
+      .from("students")
+      .select("id, username, pin, class_id, active, first_name, surname, last_name")
+      .eq("username", u)
+      .limit(1)
       .maybeSingle();
 
-    if (error) return res.status(500).json({ ok: false, error: error.message });
-    if (!pupil) return res.status(401).json({ ok: false, error: "Invalid login" });
+    if (error) {
+      return res.status(500).json({ ok: false, error: "Database error", debug: error.message });
+    }
 
-    const pinOk = String(pin).trim() === String(pupil.pin ?? "").trim();
-    if (!pinOk) return res.status(401).json({ ok: false, error: "Invalid login" });
+    if (!student) {
+      return res.status(401).json({ ok: false, error: "Invalid username or PIN" });
+    }
 
-    const fullName = `${pupil.first_name || ""} ${pupil.last_name || ""}`.trim();
+    if (student.active === false) {
+      return res.status(403).json({ ok: false, error: "Account disabled" });
+    }
 
-    const session = {
-      role: "student",
-      pupil_id: pupil.id,
-      pupilId: pupil.id,
-      username: pupil.username,
-      full_name: fullName,
-      fullName,
-      class_label: pupil.class_label || null,
-      classLabel: pupil.class_label || null,
-      class_id: pupil.class_id || null,
-      classId: pupil.class_id || null,
-    };
+    // simplest: check plain 4-digit pin column
+    if ((student.pin || "").toString() !== p) {
+      return res.status(401).json({ ok: false, error: "Invalid username or PIN" });
+    }
 
-    setCookie(res, "bmtt_student", JSON.stringify(session), {
-      path: "/",
-      sameSite: "Lax",
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 60 * 24 * 60, // 60 days
+    // fetch class_label (your session showed class_label null earlier — this fixes it)
+    let class_label = null;
+    if (student.class_id) {
+      const { data: cls } = await supabaseAdmin
+        .from("classes")
+        .select("class_label")
+        .eq("id", student.class_id)
+        .maybeSingle();
+      class_label = cls?.class_label ?? null;
+    }
+
+    // clear any old student cookie first (avoid weirdness)
+    clearCookie(res, "bmtt_student");
+
+    // create cookie session
+    const session = makeStudentSession({
+      studentId: student.id,
+      class_id: student.class_id || null,
+      class_label,
+      username: student.username,
     });
+
+    setCookie(res, "bmtt_student", session);
 
     return res.status(200).json({
       ok: true,
-      pupil: {
-        id: pupil.id,
-        username: pupil.username,
-        full_name: fullName,
-        class_label: pupil.class_label || null,
+      student: {
+        id: student.id,
+        username: student.username,
+        class_id: student.class_id || null,
+        class_label,
+        name: [student.first_name, student.last_name || student.surname].filter(Boolean).join(" "),
       },
     });
   } catch (e) {
-    return res.status(500).json({
-      ok: false,
-      error: "Server error",
-      debug: String(e && e.stack ? e.stack : e),
-    });
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
   }
 }
