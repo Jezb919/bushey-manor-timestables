@@ -1,8 +1,5 @@
 // pages/api/student/login.js
-// Student login: verifies username + PIN (plain match), then sets bmtt_student cookie
-
-const { serialize } = require("cookie");
-const { createClient } = require("@supabase/supabase-js");
+import { createClient } from "@supabase/supabase-js";
 
 function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -11,16 +8,25 @@ function getSupabaseAdmin() {
 
   if (!url || !serviceKey) {
     throw new Error(
-      "Missing SUPABASE env vars. Need NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY."
+      "Missing env vars: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY."
     );
   }
 
-  return createClient(url, serviceKey, {
-    auth: { persistSession: false },
-  });
+  return createClient(url, serviceKey, { auth: { persistSession: false } });
 }
 
-module.exports = async function handler(req, res) {
+function setCookie(res, name, value, opts = {}) {
+  const parts = [];
+  parts.push(`${name}=${encodeURIComponent(value)}`);
+  parts.push(`Path=${opts.path || "/"}`);
+  if (opts.httpOnly !== false) parts.push("HttpOnly");
+  parts.push(`SameSite=${opts.sameSite || "Lax"}`);
+  if (opts.maxAge != null) parts.push(`Max-Age=${opts.maxAge}`);
+  if (opts.secure) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({
@@ -37,7 +43,6 @@ module.exports = async function handler(req, res) {
 
     const supabase = getSupabaseAdmin();
 
-    // Read pupil
     const { data: pupil, error } = await supabase
       .from("pupils")
       .select("id, first_name, last_name, class_id, class_label, username, pin")
@@ -53,6 +58,7 @@ module.exports = async function handler(req, res) {
     const fullName = `${pupil.first_name || ""} ${pupil.last_name || ""}`.trim();
 
     const session = {
+      role: "student",
       pupil_id: pupil.id,
       pupilId: pupil.id,
       username: pupil.username,
@@ -62,18 +68,15 @@ module.exports = async function handler(req, res) {
       classLabel: pupil.class_label || null,
       class_id: pupil.class_id || null,
       classId: pupil.class_id || null,
-      role: "student",
     };
 
-    const cookie = serialize("bmtt_student", JSON.stringify(session), {
+    setCookie(res, "bmtt_student", JSON.stringify(session), {
+      path: "/",
+      sameSite: "Lax",
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
       maxAge: 60 * 60 * 24 * 60, // 60 days
     });
-
-    res.setHeader("Set-Cookie", cookie);
 
     return res.status(200).json({
       ok: true,
@@ -91,4 +94,4 @@ module.exports = async function handler(req, res) {
       debug: String(e && e.stack ? e.stack : e),
     });
   }
-};
+}
