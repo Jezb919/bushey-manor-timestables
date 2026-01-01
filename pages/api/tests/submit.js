@@ -21,132 +21,81 @@ function parseCookies(cookieHeader) {
   return out;
 }
 
-function getStudentSession(req) {
-  const cookies = parseCookies(req.headers.cookie || "");
-  const raw = cookies.bmtt_student;
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-
-function toInt(v, fallback = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : fallback;
-}
-
-function nowIso() {
-  return new Date().toISOString();
-}
-
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({
         ok: false,
         error: "Method not allowed (POST only)",
-        info:
-          "Send JSON: { answers: [{a,b,given_answer,response_time_ms,question_index?,table_number?}], started_at?, finished_at? }",
+        info: "Send JSON: { test_type, started_at, finished_at, answers:[{a,b,table_number,given_answer,correct_answer,is_correct,response_time_ms}] }",
       });
     }
 
-    const session = getStudentSession(req);
-    if (!session?.studentId && !session?.student_id) {
-      return res.status(401).json({ ok: false, error: "Not signed in" });
+    // --- Require student session cookie ---
+    const cookies = parseCookies(req.headers.cookie || "");
+    const raw = cookies.bmtt_student;
+    if (!raw) return res.status(401).json({ ok: false, error: "Not signed in" });
+
+    let session;
+    try {
+      session = JSON.parse(raw);
+    } catch {
+      return res.status(401).json({ ok: false, error: "Invalid session cookie" });
     }
 
-    const student_id = session.studentId || session.student_id;
-    const class_id = session.class_id || null;
-    const class_label = session.class_label || null;
+    const studentId = session.studentId || session.student_id;
+    const classLabel = session.class_label || session.classLabel || null;
 
-    const body = req.body || {};
-    const answers = Array.isArray(body.answers) ? body.answers : [];
-
-    if (!answers.length) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "No answers received" });
+    if (!studentId) {
+      return res.status(400).json({ ok: false, error: "Missing studentId in session" });
+    }
+    if (!classLabel) {
+      return res.status(400).json({ ok: false, error: "Missing class_label in session" });
     }
 
-    const started_at = body.started_at || nowIso();
-    const finished_at = body.finished_at || nowIso();
+    const { test_type, started_at, finished_at, answers } = req.body || {};
 
-    // Recompute correctness server-side (don’t trust browser)
-    const normalized = answers.map((q, idx) => {
-      const a = toInt(q.a, 0);
-      const b = toInt(q.b, 0);
+    if (!Array.isArray(answers) || answers.length === 0) {
+      return res.status(400).json({ ok: false, error: "answers[] is required" });
+    }
 
-      // allow different field names coming from the front-end
-      const given =
-        q.given_answer ?? q.givenAnswer ?? q.answer ?? q.given ?? null;
-      const given_answer = given === "" || given === null ? null : toInt(given);
+    const startedAt = started_at ? new Date(started_at) : new Date();
+    const finishedAt = finished_at ? new Date(finished_at) : new Date();
 
-      const correct_answer = a * b;
-      const is_correct = given_answer !== null && given_answer === correct_answer;
+    // --- Compute score + avg response time ---
+    const maxScore = answers.length;
+    const score = answers.reduce((acc, x) => acc + (x?.is_correct ? 1 : 0), 0);
+    const percent = maxScore > 0 ? (score / maxScore) * 100 : 0;
 
-      const response_time_ms = toInt(q.response_time_ms ?? q.responseTimeMs, 0);
-
-      // question index
-      const question_index =
-        q.question_index ?? q.questionIndex ?? idx;
-
-      // table number: prefer explicit value from client, else use the "table factor"
-      const table_number =
-        q.table_number ?? q.tableNumber ?? q.table_num ?? q.tableNum ?? a;
-
-      return {
-        student_id,
-        question_index: toInt(question_index, idx),
-        a,
-        b,
-        table_number: toInt(table_number, a),
-        table_num: toInt(table_number, a), // for compatibility if your DB uses table_num
-        correct_answer,
-        given_answer,
-        is_correct,
-        response_time_ms,
-        created_at: nowIso(),
-      };
-    });
-
-    const score = normalized.reduce((acc, q) => acc + (q.is_correct ? 1 : 0), 0);
-    const total = normalized.length;
-    const max_score = total;
-    const percent = total > 0 ? (score / total) * 100 : 0;
-
-    const avg_response_time_ms =
-      total > 0
-        ? Math.round(
-            normalized.reduce((acc, q) => acc + (q.response_time_ms || 0), 0) /
-              total
-          )
-        : 0;
+    const responseTimes = answers
+      .map((x) => Number(x?.response_time_ms))
+      .filter((n) => Number.isFinite(n) && n >= 0);
+    const avgResponseTimeMs =
+      responseTimes.length > 0
+        ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
+        : null;
 
     const supabase = getSupabaseAdmin();
 
-    // Insert attempt summary into your "attempts" table
+    // --- Insert attempt (your table is "attempts") ---
     const attemptInsert = {
-      student_id,
-      class_label: class_label || null,
-      started_at,
-      finished_at,
+      student_id: studentId,
+      class_label: classLabel,
+      started_at: startedAt.toISOString(),
+      finished_at: finishedAt.toISOString(),
       score,
-      max_score,
+      max_score: maxScore,
       percent,
-      avg_response_time_ms,
+      avg_response_time_ms: avgResponseTimeMs,
       completed: true,
-      total,
-      created_at: nowIso(),
+      total: maxScore,
     };
 
-    // If your schema has test_config_id, allow it but don’t require it
-    if (body.test_config_id || body.testConfigId) {
-      attemptInsert.test_config_id = body.test_config_id || body.testConfigId;
-    }
+    // If your attempts table requires test_config_id and it is NOT nullable,
+    // you MUST set it here. If it IS nullable, leaving undefined is fine.
+    // attemptInsert.test_config_id = null;
 
-    const { data: attempt, error: attemptErr } = await supabase
+    const { data: attemptRow, error: attemptErr } = await supabase
       .from("attempts")
       .insert(attemptInsert)
       .select("*")
@@ -160,41 +109,38 @@ export default async function handler(req, res) {
       });
     }
 
-    // Insert per-question rows into question_records
-    const attempt_id = attempt.id;
+    const attemptId = attemptRow.id;
 
-    const questionRows = normalized.map((q) => ({
-      attempt_id,
-      student_id: q.student_id,
-      question_index: q.question_index,
-      a: q.a,
-      b: q.b,
-      table_number: q.table_number, // your table shows this exists
-      table_num: q.table_num,       // your table also shows this exists
-      correct_answer: q.correct_answer,
-      given_answer: q.given_answer,
-      is_correct: q.is_correct,
-      response_time_ms: q.response_time_ms,
-      created_at: nowIso(),
+    // --- Insert per-question rows (question_records) ---
+    const qRows = answers.map((x, i) => ({
+      attempt_id: attemptId,
+      student_id: studentId,
+      question_index: Number.isFinite(x.question_index) ? x.question_index : i,
+      a: Number(x.a),
+      b: Number(x.b),
+      table_num: Number(x.table_number ?? x.table_num ?? x.tableNumber ?? x.tableNum ?? x.a),
+      correct_answer: Number(x.correct_answer),
+      given_answer: x.given_answer === "" || x.given_answer == null ? null : Number(x.given_answer),
+      is_correct: !!x.is_correct,
+      response_time_ms: Number.isFinite(Number(x.response_time_ms)) ? Number(x.response_time_ms) : null,
     }));
 
-    const { error: qErr } = await supabase
-      .from("question_records")
-      .insert(questionRows);
+    const { error: qErr } = await supabase.from("question_records").insert(qRows);
 
     if (qErr) {
-      // Attempt saved, but questions failed (still return attempt so teacher dashboard can work)
+      // We keep the attempt, but tell you questions failed.
       return res.status(200).json({
         ok: true,
-        warning: "Attempt saved but question rows failed",
-        attempt,
+        attempt: attemptRow,
+        warning: "Attempt saved but question_records insert failed",
         debug: qErr.message,
       });
     }
 
     return res.status(200).json({
       ok: true,
-      attempt,
+      attempt: attemptRow,
+      info: "Saved attempt + question records",
     });
   } catch (e) {
     return res.status(500).json({
