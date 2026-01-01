@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
@@ -8,6 +8,7 @@ function randInt(min, max) {
 
 export default function MixedTest() {
   const router = useRouter();
+
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [settings, setSettings] = useState(null);
@@ -19,8 +20,25 @@ export default function MixedTest() {
   const [finished, setFinished] = useState(false);
   const [error, setError] = useState("");
 
-  const minT = useMemo(() => Number(settings?.minimum_table ?? 2), [settings]);
+  // Timing + recording
+  const startedAtRef = useRef(null);
+  const questionStartRef = useRef(null);
+  const [answersLog, setAnswersLog] = useState([]); // per-question answers for saving
+
+  const minT = useMemo(() => Number(settings?.minimum_table ?? 1), [settings]);
   const maxT = useMemo(() => Number(settings?.maximum_table ?? 12), [settings]);
+
+  const questionCount = useMemo(() => {
+    const n = Number(settings?.question_count ?? settings?.num_questions ?? 25);
+    return Number.isFinite(n) && n > 0 ? n : 25;
+  }, [settings]);
+
+  const secondsPerQuestion = useMemo(() => {
+    const s = Number(settings?.seconds_per_question ?? 6);
+    return Number.isFinite(s) && s > 0 ? s : 6;
+  }, [settings]);
+
+  const testStartDate = useMemo(() => settings?.test_start_date ?? null, [settings]);
 
   useEffect(() => {
     let mounted = true;
@@ -32,7 +50,6 @@ export default function MixedTest() {
 
         const sRes = await fetch("/api/student/session");
         const sJson = await sRes.json();
-
         if (!sJson?.signedIn) {
           router.push("/student/login");
           return;
@@ -40,7 +57,6 @@ export default function MixedTest() {
 
         const setRes = await fetch("/api/student/settings");
         const setJson = await setRes.json();
-
         if (!setJson?.settings) {
           if (mounted) {
             setError("Could not load class settings.");
@@ -49,11 +65,26 @@ export default function MixedTest() {
           return;
         }
 
-        // Build a 25-question mixed test
-        const qs = Array.from({ length: 25 }).map(() => {
-          const a = randInt(minT, maxT);
-          const b = randInt(2, 12);
-          return { a, b, expected: a * b };
+        // If there is a test start date in the future, block starting.
+        if (setJson.settings.test_start_date) {
+          const start = new Date(setJson.settings.test_start_date);
+          if (!isNaN(start.getTime()) && start.getTime() > Date.now()) {
+            if (mounted) {
+              setSession(sJson.session);
+              setSettings(setJson.settings);
+              setQuestions([]);
+              setLoading(false);
+              setError("Test not available yet (check class settings or start date).");
+            }
+            return;
+          }
+        }
+
+        // Build the test based on class settings
+        const qs = Array.from({ length: questionCount }).map(() => {
+          const a = randInt(minT, maxT);     // table number range set by teacher/admin
+          const b = randInt(2, 12);          // multiplier 2..12 (typical KS2)
+          return { a, b, expected: a * b, table_number: a };
         });
 
         if (mounted) {
@@ -64,6 +95,9 @@ export default function MixedTest() {
           setAnswer("");
           setCorrectCount(0);
           setFinished(false);
+          setAnswersLog([]);
+          startedAtRef.current = new Date();
+          questionStartRef.current = performance.now();
           setLoading(false);
         }
       } catch (e) {
@@ -76,26 +110,35 @@ export default function MixedTest() {
 
     boot();
     return () => (mounted = false);
-  }, [router]); // run once
+  }, [router, minT, maxT, questionCount]); // if settings change, rebuild
 
-  async function submitResult(finalCorrect) {
+  async function submitResult(finalCorrect, finalAnswersLog) {
     try {
-      // Send to your existing submit endpoint.
-      // It can ignore unknown fields if it wants.
-      await fetch("/api/tests/submit", {
+      const finishedAt = new Date();
+
+      const r = await fetch("/api/tests/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          studentId: session?.studentId,
-          class_id: session?.class_id,
           test_type: "mixed",
-          total: questions.length,
-          score: finalCorrect,
-          questions: questions.map((q) => ({ a: q.a, b: q.b, expected: q.expected })),
+          started_at: startedAtRef.current?.toISOString?.() || null,
+          finished_at: finishedAt.toISOString(),
+          answers: finalAnswersLog,
         }),
       });
-    } catch {
-      // Even if saving fails, we still show the score on screen.
+
+      // If saving fails we still show score, but this helps debugging.
+      const j = await r.json().catch(() => null);
+      if (!r.ok) {
+        // eslint-disable-next-line no-console
+        console.log("Submit failed", r.status, j);
+      } else {
+        // eslint-disable-next-line no-console
+        console.log("Submit OK", j);
+      }
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.log("Submit crashed", e);
     }
   }
 
@@ -104,7 +147,26 @@ export default function MixedTest() {
     const given = Number(answer);
     const isCorrect = !Number.isNaN(given) && given === q.expected;
 
+    // time for this question
+    const now = performance.now();
+    const responseMs =
+      questionStartRef.current != null ? Math.round(now - questionStartRef.current) : null;
+
     const newCorrect = correctCount + (isCorrect ? 1 : 0);
+
+    const logRow = {
+      question_index: idx,
+      a: q.a,
+      b: q.b,
+      table_number: q.table_number,
+      correct_answer: q.expected,
+      given_answer: answer === "" ? null : given,
+      is_correct: isCorrect,
+      response_time_ms: responseMs,
+    };
+
+    const nextLog = [...answersLog, logRow];
+    setAnswersLog(nextLog);
     setCorrectCount(newCorrect);
 
     const nextIdx = idx + 1;
@@ -112,17 +174,18 @@ export default function MixedTest() {
 
     if (nextIdx >= questions.length) {
       setFinished(true);
-      submitResult(newCorrect);
+      submitResult(newCorrect, nextLog);
       return;
     }
 
     setIdx(nextIdx);
+    questionStartRef.current = performance.now();
   }
 
   if (loading) {
     return (
       <div style={{ padding: 40 }}>
-        <h1>Times Tables Arena</h1>
+        <h1>Maths Test</h1>
         <p>Loading test…</p>
       </div>
     );
@@ -149,7 +212,9 @@ export default function MixedTest() {
         <p style={{ fontSize: 20 }}>
           Score: <b>{correctCount}</b> / {questions.length}
         </p>
-
+        <p style={{ marginTop: 8, opacity: 0.8 }}>
+          Saved for teacher dashboards (attempts + heatmap data).
+        </p>
         <p style={{ marginTop: 16 }}>
           <Link href="/student/tests">Back to Test Home</Link>
         </p>
@@ -162,7 +227,16 @@ export default function MixedTest() {
   return (
     <div style={{ padding: 40, maxWidth: 800, margin: "0 auto" }}>
       <h1 style={{ fontSize: 44, marginBottom: 10 }}>Maths Test</h1>
+
       <p style={{ marginTop: 0 }}>
+        Class: <b>{settings?.class_label || "?"}</b>
+        <br />
+        Tables: <b>{minT}</b> to <b>{maxT}</b>
+        <br />
+        Questions: <b>{questionCount}</b> • Target speed: <b>{secondsPerQuestion}s</b>
+      </p>
+
+      <p>
         Question <b>{idx + 1}</b> of {questions.length}
       </p>
 
