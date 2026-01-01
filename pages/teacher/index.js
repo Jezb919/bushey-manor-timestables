@@ -1,108 +1,125 @@
-import Link from "next/link";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
-export default function TeacherHome() {
-  const [me, setMe] = useState(null);
-  const [loading, setLoading] = useState(true);
+export default function TeacherDashboard() {
+  const [user, setUser] = useState(null);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      try {
-        // Try to load who is logged in
-        // (your project has used /api/teacher/me in places; if not present, it will just fall back)
-        let r = await fetch("/api/teacher/me");
-        if (!r.ok) r = await fetch("/api/teacher/session");
-        const j = await r.json();
-
-        if (!cancelled) {
-          setMe(j?.teacher || j?.session || j || null);
+    fetch("/api/teacher/me")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data?.ok) {
+          window.location.href = "/teacher/login";
+          return;
         }
-      } catch (e) {
-        if (!cancelled) setMe(null);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
+        setUser(data.user);
+      })
+      .catch(() => (window.location.href = "/teacher/login"));
   }, []);
 
-  const role =
-    me?.role || me?.teacher?.role || me?.session?.role || (me?.signedIn ? "teacher" : null);
-  const email = me?.email || me?.teacher?.email || me?.session?.email || "unknown";
-  const displayRole = role || "unknown";
+  async function logout() {
+    try {
+      await fetch("/api/teacher/logout", { method: "POST" });
+    } finally {
+      window.location.href = "/teacher/login";
+    }
+  }
 
-  const isAdmin = displayRole === "admin";
+  if (!user) return null;
+
+  const isAdmin = user.role === "admin";
 
   return (
-    <div style={{ maxWidth: 900, margin: "40px auto", padding: "0 16px" }}>
-      <h1 style={{ fontSize: 56, margin: 0 }}>{isAdmin ? "Admin Dashboard" : "Teacher Dashboard"}</h1>
+    <div style={{ padding: 28, maxWidth: 980, margin: "0 auto" }}>
+      <h1 style={{ margin: 0 }}>
+        {isAdmin ? "Admin Dashboard" : "Teacher Dashboard"}
+      </h1>
 
-      <p style={{ marginTop: 12, fontSize: 18 }}>
-        {loading ? (
-          <>Loading session…</>
-        ) : (
-          <>
-            Logged in as <strong>{email}</strong> ({displayRole})
-          </>
-        )}
+      <p style={{ marginTop: 10, opacity: 0.85 }}>
+        Logged in as <b>{user.email}</b> ({user.role})
       </p>
 
-      <div style={{ marginTop: 18 }}>
-        <Link href="/teacher/logout" style={{ display: "inline-block", padding: "10px 14px", border: "1px solid #ddd", borderRadius: 10 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14 }}>
+        <button
+          onClick={logout}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 10,
+            border: "1px solid #ddd",
+            cursor: "pointer",
+          }}
+        >
           Log out
-        </Link>
-      </div>
+        </button>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 18, marginTop: 28 }}>
-        <section style={{ border: "1px solid #eee", borderRadius: 16, padding: 18 }}>
-          <h2 style={{ marginTop: 0, fontSize: 28 }}>Teaching tools</h2>
-
-          <ul style={{ margin: 0, paddingLeft: 20, fontSize: 18, lineHeight: 1.7 }}>
-            <li>
-              <Link href="/teacher/class-overview">📋 Class overview</Link>
-            </li>
-
-            <li>
-              {/* This is your “questions + timer” page */}
-              <Link href="/teacher/attainment-overview">⚙️ Class settings (questions + timer)</Link>
-            </li>
-
-            <li>
-              <Link href="/teacher/pupil">📈 Individual graphs</Link>
-            </li>
-
-            <li>
-              <Link href="/teacher/dashboard">📊 Class graphs</Link>
-            </li>
-          </ul>
-        </section>
-
+        {/* If you ever need the admin landing page */}
         {isAdmin && (
-          <section style={{ border: "1px solid #eee", borderRadius: 16, padding: 18 }}>
-            <h2 style={{ marginTop: 0, fontSize: 28 }}>Admin tools</h2>
-
-            <ul style={{ margin: 0, paddingLeft: 20, fontSize: 18, lineHeight: 1.7 }}>
-              <li>
-                <Link href="/teacher/admin/teachers">🧑‍🏫 Manage teachers</Link>
-              </li>
-              <li>
-                <Link href="/teacher/admin/pupils">🧒 Manage pupils</Link>
-              </li>
-            </ul>
-          </section>
+          <Link
+            href="/teacher/admin"
+            style={{
+              padding: "10px 14px",
+              borderRadius: 10,
+              border: "1px solid #ddd",
+              textDecoration: "none",
+              display: "inline-block",
+            }}
+          >
+            Admin Home
+          </Link>
         )}
       </div>
 
-      <div style={{ marginTop: 20, opacity: 0.7, fontSize: 14 }}>
-        Tip: If “Back to dashboard” ever takes you to the old dashboard, it’s linking to <code>/teacher/dashboard</code>. We’ll fix that in Step B.
+      <div
+        style={{
+          marginTop: 18,
+          border: "1px solid #eee",
+          borderRadius: 14,
+          padding: 16,
+        }}
+      >
+        <h2 style={{ marginTop: 0 }}>Teacher tools</h2>
+        <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+          <li>
+            <Link href="/teacher/class-overview">Class overview</Link>
+          </li>
+          <li>
+            <Link href="/teacher/class-settings">
+              Class settings (questions + timer + start date)
+            </Link>
+          </li>
+          <li>
+            <Link href="/teacher/attainment-individual">Individual graphs</Link>
+          </li>
+          <li>
+            <Link href="/teacher/attainment-class">Class graphs</Link>
+          </li>
+        </ul>
       </div>
+
+      {isAdmin && (
+        <div
+          style={{
+            marginTop: 18,
+            border: "1px solid #eee",
+            borderRadius: 14,
+            padding: 16,
+          }}
+        >
+          <h2 style={{ marginTop: 0 }}>Admin tools</h2>
+          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+            <li>
+              <Link href="/teacher/admin/teachers">Manage teachers</Link>
+            </li>
+            <li>
+              <Link href="/teacher/admin/pupils">Manage pupils</Link>
+            </li>
+          </ul>
+
+          <p style={{ marginTop: 10, opacity: 0.75 }}>
+            Admin can see all classes in Class Overview. Teachers see only their class.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
