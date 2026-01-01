@@ -10,20 +10,19 @@ export default function MixedTest() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState(null);
   const [settings, setSettings] = useState(null);
+  const [error, setError] = useState("");
 
   const [questions, setQuestions] = useState([]);
   const [idx, setIdx] = useState(0);
   const [answer, setAnswer] = useState("");
   const [correctCount, setCorrectCount] = useState(0);
   const [finished, setFinished] = useState(false);
-  const [error, setError] = useState("");
 
-  // Timing + recording
+  // IMPORTANT: use refs so we never lose answers due to React async state
   const startedAtRef = useRef(null);
   const questionStartRef = useRef(null);
-  const [answersLog, setAnswersLog] = useState([]); // per-question answers for saving
+  const answersRef = useRef([]); // <-- ALL answers stored here
 
   const minT = useMemo(() => Number(settings?.minimum_table ?? 1), [settings]);
   const maxT = useMemo(() => Number(settings?.maximum_table ?? 12), [settings]);
@@ -38,8 +37,6 @@ export default function MixedTest() {
     return Number.isFinite(s) && s > 0 ? s : 6;
   }, [settings]);
 
-  const testStartDate = useMemo(() => settings?.test_start_date ?? null, [settings]);
-
   useEffect(() => {
     let mounted = true;
 
@@ -48,6 +45,7 @@ export default function MixedTest() {
         setLoading(true);
         setError("");
 
+        // Must be signed in
         const sRes = await fetch("/api/student/session");
         const sJson = await sRes.json();
         if (!sJson?.signedIn) {
@@ -55,6 +53,7 @@ export default function MixedTest() {
           return;
         }
 
+        // Load class settings (min/max tables, question_count, seconds_per_question)
         const setRes = await fetch("/api/student/settings");
         const setJson = await setRes.json();
         if (!setJson?.settings) {
@@ -65,41 +64,47 @@ export default function MixedTest() {
           return;
         }
 
-        // If there is a test start date in the future, block starting.
+        // If start date exists and is in future, block
         if (setJson.settings.test_start_date) {
           const start = new Date(setJson.settings.test_start_date);
           if (!isNaN(start.getTime()) && start.getTime() > Date.now()) {
             if (mounted) {
-              setSession(sJson.session);
               setSettings(setJson.settings);
               setQuestions([]);
               setLoading(false);
-              setError("Test not available yet (check class settings or start date).");
+              setError("Test not available yet (check class settings / start date).");
             }
             return;
           }
         }
 
-        // Build the test based on class settings
-        const qs = Array.from({ length: questionCount }).map(() => {
-          const a = randInt(minT, maxT);     // table number range set by teacher/admin
-          const b = randInt(2, 12);          // multiplier 2..12 (typical KS2)
+        const clsSettings = setJson.settings;
+        const minTable = Number(clsSettings.minimum_table ?? 1);
+        const maxTable = Number(clsSettings.maximum_table ?? 12);
+        const qCount = Number(clsSettings.question_count ?? clsSettings.num_questions ?? 25);
+
+        // Build questions
+        const qs = Array.from({ length: qCount }).map(() => {
+          const a = randInt(minTable, maxTable); // table number range
+          const b = randInt(2, 12);              // multiplier 2..12
           return { a, b, expected: a * b, table_number: a };
         });
 
-        if (mounted) {
-          setSession(sJson.session);
-          setSettings(setJson.settings);
-          setQuestions(qs);
-          setIdx(0);
-          setAnswer("");
-          setCorrectCount(0);
-          setFinished(false);
-          setAnswersLog([]);
-          startedAtRef.current = new Date();
-          questionStartRef.current = performance.now();
-          setLoading(false);
-        }
+        if (!mounted) return;
+
+        setSettings(clsSettings);
+        setQuestions(qs);
+        setIdx(0);
+        setAnswer("");
+        setCorrectCount(0);
+        setFinished(false);
+
+        // Reset refs
+        answersRef.current = [];
+        startedAtRef.current = new Date();
+        questionStartRef.current = performance.now();
+
+        setLoading(false);
       } catch (e) {
         if (mounted) {
           setError("Failed to load test.");
@@ -109,72 +114,73 @@ export default function MixedTest() {
     }
 
     boot();
-    return () => (mounted = false);
-  }, [router, minT, maxT, questionCount]); // if settings change, rebuild
+    return () => {
+      mounted = false;
+    };
+  }, [router]);
 
-  async function submitResult(finalCorrect, finalAnswersLog) {
+  async function submitResult() {
     try {
       const finishedAt = new Date();
+
+      const payload = {
+        test_type: "mixed",
+        started_at: startedAtRef.current?.toISOString?.() || null,
+        finished_at: finishedAt.toISOString(),
+        answers: answersRef.current, // <-- FULL list
+      };
 
       const r = await fetch("/api/tests/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          test_type: "mixed",
-          started_at: startedAtRef.current?.toISOString?.() || null,
-          finished_at: finishedAt.toISOString(),
-          answers: finalAnswersLog,
-        }),
+        body: JSON.stringify(payload),
       });
 
-      // If saving fails we still show score, but this helps debugging.
       const j = await r.json().catch(() => null);
+      // eslint-disable-next-line no-console
+      console.log("Submit response:", r.status, j);
+
       if (!r.ok) {
-        // eslint-disable-next-line no-console
-        console.log("Submit failed", r.status, j);
-      } else {
-        // eslint-disable-next-line no-console
-        console.log("Submit OK", j);
+        setError(j?.error || "Submit failed");
       }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.log("Submit crashed", e);
+      setError("Submit crashed");
     }
   }
 
   function onNext() {
     const q = questions[idx];
-    const given = Number(answer);
-    const isCorrect = !Number.isNaN(given) && given === q.expected;
+    if (!q) return;
 
-    // time for this question
+    const given = answer === "" ? null : Number(answer);
+    const isCorrect = given !== null && !Number.isNaN(given) && given === q.expected;
+
     const now = performance.now();
     const responseMs =
       questionStartRef.current != null ? Math.round(now - questionStartRef.current) : null;
 
-    const newCorrect = correctCount + (isCorrect ? 1 : 0);
-
-    const logRow = {
+    // Push into ref (never lost)
+    answersRef.current.push({
       question_index: idx,
       a: q.a,
       b: q.b,
       table_number: q.table_number,
       correct_answer: q.expected,
-      given_answer: answer === "" ? null : given,
+      given_answer: given,
       is_correct: isCorrect,
       response_time_ms: responseMs,
-    };
+    });
 
-    const nextLog = [...answersLog, logRow];
-    setAnswersLog(nextLog);
-    setCorrectCount(newCorrect);
+    if (isCorrect) setCorrectCount((c) => c + 1);
 
     const nextIdx = idx + 1;
     setAnswer("");
 
     if (nextIdx >= questions.length) {
       setFinished(true);
-      submitResult(newCorrect, nextLog);
+      submitResult(); // submits ALL answers
       return;
     }
 
@@ -186,12 +192,12 @@ export default function MixedTest() {
     return (
       <div style={{ padding: 40 }}>
         <h1>Maths Test</h1>
-        <p>Loading test…</p>
+        <p>Loading…</p>
       </div>
     );
   }
 
-  if (error) {
+  if (error && !finished) {
     return (
       <div style={{ padding: 40 }}>
         <h1>Maths Test</h1>
@@ -212,8 +218,8 @@ export default function MixedTest() {
         <p style={{ fontSize: 20 }}>
           Score: <b>{correctCount}</b> / {questions.length}
         </p>
-        <p style={{ marginTop: 8, opacity: 0.8 }}>
-          Saved for teacher dashboards (attempts + heatmap data).
+        <p style={{ opacity: 0.75 }}>
+          Saved: attempts = 1 row, question_records = {questions.length} rows
         </p>
         <p style={{ marginTop: 16 }}>
           <Link href="/student/tests">Back to Test Home</Link>
