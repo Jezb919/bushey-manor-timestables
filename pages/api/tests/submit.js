@@ -1,222 +1,206 @@
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+  if (!url || !serviceKey) throw new Error("Missing Supabase env vars");
+  return createClient(url, serviceKey, { auth: { persistSession: false } });
+}
 
-function parseCookies(req) {
-  const header = req.headers.cookie || "";
+function parseCookies(cookieHeader) {
   const out = {};
-  header.split(";").forEach((part) => {
-    const [k, ...v] = part.trim().split("=");
-    if (!k) return;
-    out[k] = decodeURIComponent(v.join("=") || "");
+  if (!cookieHeader) return out;
+  cookieHeader.split(";").forEach((part) => {
+    const idx = part.indexOf("=");
+    if (idx === -1) return;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    out[k] = decodeURIComponent(v);
   });
   return out;
 }
 
-function getStudentIdFromCookie(req) {
-  const cookies = parseCookies(req);
+function getStudentSession(req) {
+  const cookies = parseCookies(req.headers.cookie || "");
   const raw = cookies.bmtt_student;
   if (!raw) return null;
-
   try {
-    const obj = JSON.parse(raw);
-    return obj.student_id || obj.studentId || obj.id || null;
+    return JSON.parse(raw);
   } catch {
     return null;
   }
 }
 
-function toNum(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : null;
+function toInt(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
 }
 
-function normaliseAnswers(body) {
-  // Your frontend might send answers under different keys. We support a few.
-  const candidates = [
-    body.answers,
-    body.results,
-    body.responses,
-    body.questions, // sometimes people name it this
-    body.items,
-  ];
-
-  for (const c of candidates) {
-    if (Array.isArray(c) && c.length) return c;
-  }
-
-  return [];
-}
-
-/**
- * Normalise a single question result to a standard structure:
- * {
- *   table_number: 1..19,
- *   is_correct: boolean,
- * }
- *
- * Supports multiple shapes like:
- * { a:7, b:8, user_answer:56, correct_answer:56 }
- * { table_number:7, is_correct:true }
- * { table:7, correct:true }
- */
-function normaliseQuestionRow(q) {
-  // infer table number
-  const tableCandidate =
-    q.table_number ??
-    q.tableNumber ??
-    q.table ??
-    q.times_table ??
-    q.timesTable ??
-    q.a; // common pattern where a is the table
-
-  const table_number = toNum(tableCandidate);
-
-  // infer correctness
-  let is_correct = null;
-
-  if (typeof q.is_correct === "boolean") is_correct = q.is_correct;
-  if (typeof q.correct === "boolean") is_correct = q.correct;
-
-  if (is_correct === null) {
-    // compare answers if present
-    const ua = toNum(q.user_answer ?? q.userAnswer ?? q.answer ?? q.given_answer);
-    const ca = toNum(q.correct_answer ?? q.correctAnswer ?? q.expected_answer);
-
-    if (ua !== null && ca !== null) is_correct = ua === ca;
-  }
-
-  // if still unknown, ignore this record
-  if (!Number.isFinite(table_number) || table_number < 1 || table_number > 19) return null;
-  if (typeof is_correct !== "boolean") return null;
-
-  return { table_number, is_correct };
+function nowIso() {
+  return new Date().toISOString();
 }
 
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
-      return res.status(405).json({ ok: false, error: "Use POST" });
-    }
-
-    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-
-    // 1) Identify student
-    let student_id = body.student_id || body.studentId || null;
-    if (!student_id) {
-      student_id = getStudentIdFromCookie(req);
-    }
-
-    if (!student_id) {
-      return res.status(401).json({
+      return res.status(405).json({
         ok: false,
-        error: "Not logged in as a pupil",
-        note: "No student_id in POST body and no bmtt_student cookie found.",
+        error: "Method not allowed (POST only)",
+        info:
+          "Send JSON: { answers: [{a,b,given_answer,response_time_ms,question_index?,table_number?}], started_at?, finished_at? }",
       });
     }
 
-    // 2) Get answers
-    const rawAnswers = normaliseAnswers(body);
-    if (!rawAnswers.length) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing answers",
-        note: "Expected an array in body.answers (or results/responses/questions).",
-      });
+    const session = getStudentSession(req);
+    if (!session?.studentId && !session?.student_id) {
+      return res.status(401).json({ ok: false, error: "Not signed in" });
     }
 
-    // 3) Normalise questions for question_records
-    const qRows = [];
-    let correctCount = 0;
+    const student_id = session.studentId || session.student_id;
+    const class_id = session.class_id || null;
+    const class_label = session.class_label || null;
 
-    for (const q of rawAnswers) {
-      const row = normaliseQuestionRow(q);
-      if (!row) continue;
-      qRows.push(row);
-      if (row.is_correct) correctCount += 1;
+    const body = req.body || {};
+    const answers = Array.isArray(body.answers) ? body.answers : [];
+
+    if (!answers.length) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "No answers received" });
     }
 
-    const totalCount = qRows.length || rawAnswers.length;
-    const score = totalCount > 0 ? Math.round((correctCount / totalCount) * 100) : 0;
+    const started_at = body.started_at || nowIso();
+    const finished_at = body.finished_at || nowIso();
 
-    // 4) Load pupil class_label (so attempts are consistent)
-    const { data: pupil, error: pupilErr } = await supabaseAdmin
-      .from("students")
-      .select("id, class_label, class_id")
-      .eq("id", student_id)
-      .single();
+    // Recompute correctness server-side (don’t trust browser)
+    const normalized = answers.map((q, idx) => {
+      const a = toInt(q.a, 0);
+      const b = toInt(q.b, 0);
 
-    if (pupilErr || !pupil) {
-      return res.status(404).json({
-        ok: false,
-        error: "Pupil not found in students table",
-        debug: pupilErr?.message,
-      });
+      // allow different field names coming from the front-end
+      const given =
+        q.given_answer ?? q.givenAnswer ?? q.answer ?? q.given ?? null;
+      const given_answer = given === "" || given === null ? null : toInt(given);
+
+      const correct_answer = a * b;
+      const is_correct = given_answer !== null && given_answer === correct_answer;
+
+      const response_time_ms = toInt(q.response_time_ms ?? q.responseTimeMs, 0);
+
+      // question index
+      const question_index =
+        q.question_index ?? q.questionIndex ?? idx;
+
+      // table number: prefer explicit value from client, else use the "table factor"
+      const table_number =
+        q.table_number ?? q.tableNumber ?? q.table_num ?? q.tableNum ?? a;
+
+      return {
+        student_id,
+        question_index: toInt(question_index, idx),
+        a,
+        b,
+        table_number: toInt(table_number, a),
+        table_num: toInt(table_number, a), // for compatibility if your DB uses table_num
+        correct_answer,
+        given_answer,
+        is_correct,
+        response_time_ms,
+        created_at: nowIso(),
+      };
+    });
+
+    const score = normalized.reduce((acc, q) => acc + (q.is_correct ? 1 : 0), 0);
+    const total = normalized.length;
+    const max_score = total;
+    const percent = total > 0 ? (score / total) * 100 : 0;
+
+    const avg_response_time_ms =
+      total > 0
+        ? Math.round(
+            normalized.reduce((acc, q) => acc + (q.response_time_ms || 0), 0) /
+              total
+          )
+        : 0;
+
+    const supabase = getSupabaseAdmin();
+
+    // Insert attempt summary into your "attempts" table
+    const attemptInsert = {
+      student_id,
+      class_label: class_label || null,
+      started_at,
+      finished_at,
+      score,
+      max_score,
+      percent,
+      avg_response_time_ms,
+      completed: true,
+      total,
+      created_at: nowIso(),
+    };
+
+    // If your schema has test_config_id, allow it but don’t require it
+    if (body.test_config_id || body.testConfigId) {
+      attemptInsert.test_config_id = body.test_config_id || body.testConfigId;
     }
 
-    const class_label = pupil.class_label || body.class_label || body.classLabel || null;
-
-    // 5) Create attempt
-    const { data: attempt, error: attemptErr } = await supabaseAdmin
+    const { data: attempt, error: attemptErr } = await supabase
       .from("attempts")
-      .insert([
-        {
-          student_id,
-          class_label,
-          score, // percent 0-100
-        },
-      ])
-      .select("id, created_at, score")
+      .insert(attemptInsert)
+      .select("*")
       .single();
 
-    if (attemptErr || !attempt) {
+    if (attemptErr) {
       return res.status(500).json({
         ok: false,
-        error: "Failed to create attempt",
-        debug: attemptErr?.message,
+        error: "Failed to save attempt",
+        debug: attemptErr.message,
       });
     }
 
-    // 6) Ensure question_records table has needed columns (best-effort check by inserting)
-    // Build insert rows for question_records
-    const insertRows = qRows.map((r) => ({
-      attempt_id: attempt.id,
-      table_number: r.table_number,
-      is_correct: r.is_correct,
+    // Insert per-question rows into question_records
+    const attempt_id = attempt.id;
+
+    const questionRows = normalized.map((q) => ({
+      attempt_id,
+      student_id: q.student_id,
+      question_index: q.question_index,
+      a: q.a,
+      b: q.b,
+      table_number: q.table_number, // your table shows this exists
+      table_num: q.table_num,       // your table also shows this exists
+      correct_answer: q.correct_answer,
+      given_answer: q.given_answer,
+      is_correct: q.is_correct,
+      response_time_ms: q.response_time_ms,
+      created_at: nowIso(),
     }));
 
-    if (insertRows.length) {
-      const { error: qrErr } = await supabaseAdmin
-        .from("question_records")
-        .insert(insertRows);
+    const { error: qErr } = await supabase
+      .from("question_records")
+      .insert(questionRows);
 
-      if (qrErr) {
-        // attempt is saved; question_records failed
-        return res.status(500).json({
-          ok: false,
-          error: "Attempt saved, but failed to write question records",
-          debug: qrErr.message,
-          attempt,
-          note: "This usually means question_records table is missing columns attempt_id/table_number/is_correct.",
-        });
-      }
+    if (qErr) {
+      // Attempt saved, but questions failed (still return attempt so teacher dashboard can work)
+      return res.status(200).json({
+        ok: true,
+        warning: "Attempt saved but question rows failed",
+        attempt,
+        debug: qErr.message,
+      });
     }
 
-    return res.json({
+    return res.status(200).json({
       ok: true,
       attempt,
-      score,
-      correct: correctCount,
-      total: totalCount,
-      note:
-        insertRows.length === 0
-          ? "Attempt saved, but no question_records inserted (payload shape did not include enough info to infer correctness/table)."
-          : "Attempt and question_records saved.",
     });
   } catch (e) {
-    return res.status(500).json({ ok: false, error: "Server error", debug: String(e) });
+    return res.status(500).json({
+      ok: false,
+      error: "Server error",
+      debug: String(e?.message || e),
+    });
   }
 }
