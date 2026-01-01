@@ -1,178 +1,188 @@
-// pages/api/teacher/class_overview.js
-import { supabaseAdmin } from "../../../lib/supabaseAdmin";
+import { createClient } from "@supabase/supabase-js";
 
-function safeJsonParse(s) {
+function getSupabaseAdmin() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY;
+  if (!url || !key) throw new Error("Missing Supabase env vars");
+  return createClient(url, key, { auth: { persistSession: false } });
+}
+
+function parseCookies(cookieHeader) {
+  const out = {};
+  if (!cookieHeader) return out;
+  cookieHeader.split(";").forEach((part) => {
+    const idx = part.indexOf("=");
+    if (idx === -1) return;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    out[k] = decodeURIComponent(v);
+  });
+  return out;
+}
+
+function getTeacherSession(req) {
+  const cookies = parseCookies(req.headers.cookie || "");
+  const raw = cookies.bmtt_teacher;
+  if (!raw) return null;
   try {
-    return JSON.parse(s);
+    return JSON.parse(raw);
   } catch {
     return null;
   }
 }
 
-function getTeacherSession(req) {
-  const raw = req.cookies?.bmtt_teacher;
-  if (!raw) return { ok: false, error: "Not logged in" };
-
-  const parsed = safeJsonParse(raw);
-  if (!parsed) return { ok: false, error: "Invalid session cookie" };
-
-  const role = parsed.role || parsed.parsedRole || parsed.teacher_role;
-  const teacher_id =
-    parsed.teacher_id || parsed.teacherId || parsed.parsedTeacherId;
-
-  if (!role || !teacher_id) return { ok: false, error: "Invalid session data" };
-
-  return { ok: true, role, teacher_id };
-}
-
-async function getAllClassLabels() {
-  // Your schema uses classes.class_label (NOT classes.label)
-  const { data, error } = await supabaseAdmin
-    .from("classes")
-    .select("id,class_label")
-    .order("class_label", { ascending: true });
-
-  if (error) throw new Error(error.message);
-  return (data || []).filter((c) => c.class_label);
-}
-
-async function getTeacherAllowedClasses(teacher_id) {
-  // teacher_classes should link teacher_id -> class_id
-  // Then we join to classes to get class_label
-  const { data, error } = await supabaseAdmin
-    .from("teacher_classes")
-    .select("class_id, classes:class_id ( id, class_label )")
-    .eq("teacher_id", teacher_id);
-
-  if (error) throw new Error(error.message);
-
-  const classes = (data || [])
-    .map((row) => row.classes)
-    .filter(Boolean)
-    .filter((c) => c.class_label);
-
-  // de-dupe
-  const map = new Map();
-  for (const c of classes) map.set(c.class_label, c);
-  return Array.from(map.values()).sort((a, b) =>
-    a.class_label.localeCompare(b.class_label)
-  );
-}
-
-async function loadPupilsForClass(class_id) {
-  // students table is your pupil table
-  const { data, error } = await supabaseAdmin
-    .from("students")
-    .select("id, first_name, last_name, username")
-    .eq("class_id", class_id)
-    .order("first_name", { ascending: true });
-
-  if (error) throw new Error(error.message);
-
-  const pupils = (data || []).map((p) => ({
-    pupil_id: p.id,
-    pupil_name: [p.first_name, p.last_name].filter(Boolean).join(" ").trim() || "(no name)",
-    username: p.username || "",
-  }));
-
-  return pupils;
-}
-
-async function loadAttemptsForPupils(pupilIds) {
-  if (!pupilIds.length) return [];
-
-  // IMPORTANT: your attempts table stores score as "score" (NOT score_percent)
-  const { data, error } = await supabaseAdmin
-    .from("attempts")
-    .select("id, student_id, created_at, score")
-    .in("student_id", pupilIds)
-    .order("created_at", { ascending: false });
-
-  if (error) throw new Error(error.message);
-  return data || [];
-}
-
 export default async function handler(req, res) {
-  const debug = req.query.debug === "1";
-
   try {
-    if (req.method !== "GET") {
-      return res.status(405).json({ ok: false, error: "Method not allowed" });
+    const supabase = getSupabaseAdmin();
+    const t = getTeacherSession(req);
+
+    if (!t?.teacher_id && !t?.teacherId) {
+      return res.status(401).json({ ok: false, error: "Not logged in" });
     }
 
-    const sess = getTeacherSession(req);
-    if (!sess.ok) return res.status(401).json({ ok: false, error: sess.error });
+    const teacher_id = t.teacher_id || t.teacherId;
+    const role = t.role || "teacher";
 
-    const isAdmin = sess.role === "admin";
+    // Determine target class_label:
+    // - admin: can request any class_label in query
+    // - teacher: forced to their assigned class
+    let class_label = null;
 
-    // 1) Allowed classes
-    let allowed = [];
-    if (isAdmin) {
-      allowed = await getAllClassLabels();
+    if (role === "admin") {
+      class_label = req.query.class_label || null;
+      if (!class_label) {
+        return res.status(400).json({
+          ok: false,
+          error: "Missing class_label",
+          example: "/api/teacher/class_overview?class_label=B3",
+        });
+      }
     } else {
-      allowed = await getTeacherAllowedClasses(sess.teacher_id);
+      // teacher: find their class_id then class_label
+      const { data: link, error: linkErr } = await supabase
+        .from("teacher_classes")
+        .select("class_id")
+        .eq("teacher_id", teacher_id)
+        .maybeSingle();
+
+      if (linkErr) {
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to load teacher class",
+          debug: linkErr.message,
+        });
+      }
+      if (!link?.class_id) {
+        return res.status(403).json({ ok: false, error: "No class assigned" });
+      }
+
+      const { data: cls, error: clsErr } = await supabase
+        .from("classes")
+        .select("id, class_label")
+        .eq("id", link.class_id)
+        .maybeSingle();
+
+      if (clsErr) {
+        return res.status(500).json({
+          ok: false,
+          error: "Failed to load class",
+          debug: clsErr.message,
+        });
+      }
+      class_label = cls?.class_label || null;
+      if (!class_label) return res.status(404).json({ ok: false, error: "Class not found" });
     }
 
-    const allowed_labels = allowed.map((c) => c.class_label);
+    // Resolve class_id
+    const { data: clsRow, error: clsRowErr } = await supabase
+      .from("classes")
+      .select("id, class_label")
+      .eq("class_label", class_label)
+      .maybeSingle();
 
-    if (!allowed_labels.length) {
-      return res.json({
-        ok: true,
-        allowed_classes: [],
-        class: null,
-        rows: [],
-        debug: debug ? { role: sess.role, teacher_id: sess.teacher_id } : undefined,
+    if (clsRowErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load class",
+        debug: clsRowErr.message,
+      });
+    }
+    if (!clsRow) return res.status(404).json({ ok: false, error: "Class not found" });
+
+    const class_id = clsRow.id;
+
+    // Load pupils in this class
+    const { data: pupils, error: pupErr } = await supabase
+      .from("students")
+      .select("id, first_name, last_name, surname, username")
+      .eq("class_id", class_id)
+      .order("first_name", { ascending: true });
+
+    if (pupErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load pupils",
+        debug: pupErr.message,
       });
     }
 
-    // 2) Choose class_label (requested, else first allowed)
-    const requested = (req.query.class_label || "").toString().trim();
-    const class_label = requested && allowed_labels.includes(requested)
-      ? requested
-      : allowed_labels[0];
+    const pupilIds = (pupils || []).map((p) => p.id);
 
-    const selected = allowed.find((c) => c.class_label === class_label) || allowed[0];
+    // Load attempts for those pupils (last 1000 is plenty)
+    const { data: attempts, error: attErr } = await supabase
+      .from("attempts")
+      .select("id, student_id, created_at, score, max_score, percent")
+      .in("student_id", pupilIds.length ? pupilIds : ["00000000-0000-0000-0000-000000000000"])
+      .order("created_at", { ascending: false })
+      .limit(1000);
 
-    // 3) Pupils + attempts summary
-    const pupils = await loadPupilsForClass(selected.id);
-    const pupilIds = pupils.map((p) => p.pupil_id);
-
-    const attempts = await loadAttemptsForPupils(pupilIds);
-
-    // group attempts by pupil
-    const byPupil = new Map();
-    for (const a of attempts) {
-      const arr = byPupil.get(a.student_id) || [];
-      arr.push(a);
-      byPupil.set(a.student_id, arr);
+    if (attErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load attempts",
+        debug: attErr.message,
+      });
     }
 
-    const rows = pupils.map((p) => {
-      const arr = byPupil.get(p.pupil_id) || [];
-      const latest = arr[0]?.score ?? null;
-      const recent = arr.slice(0, 3).map((x) => x.score ?? null);
+    // Build table rows with “recent attempts” per pupil
+    const byStudent = {};
+    (attempts || []).forEach((a) => {
+      if (!byStudent[a.student_id]) byStudent[a.student_id] = [];
+      byStudent[a.student_id].push(a);
+    });
+
+    const rows = (pupils || []).map((p) => {
+      const recents = (byStudent[p.id] || []).slice(0, 5).map((a) => ({
+        attempt_id: a.id,
+        created_at: a.created_at,
+        percent: a.percent,
+        score: a.score,
+        max_score: a.max_score,
+      }));
+
+      const latest = recents[0] || null;
+
+      const lastName = p.last_name || p.surname || "";
+      const pupilName = `${p.first_name || ""} ${lastName}`.trim();
+
       return {
-        ...p,
-        latest_score: typeof latest === "number" ? latest : null,
-        attempts: arr.length,
-        recent,
+        pupil_id: p.id,
+        pupil_name: pupilName || p.username || "Unnamed",
+        username: p.username || null,
+        latest_score: latest ? Math.round(latest.percent ?? 0) : null,
+        attempts: (byStudent[p.id] || []).length,
+        recent: recents,
       };
     });
 
     return res.json({
       ok: true,
-      allowed_classes: allowed_labels,
-      class: { id: selected.id, class_label },
+      class: { id: class_id, class_label },
       rows,
-      debug: debug
-        ? { teacher: { role: sess.role, teacher_id: sess.teacher_id }, pupils: pupils.length, attempts: attempts.length }
-        : undefined,
+      debug: { role, teacher_id, pupils: pupils?.length || 0, attempts: attempts?.length || 0 },
     });
   } catch (e) {
-    return res.status(500).json({
-      ok: false,
-      error: "Failed to load class overview",
-      debug: debug ? String(e?.message || e) : undefined,
-    });
+    return res.status(500).json({ ok: false, error: "Server error", debug: String(e?.message || e) });
   }
 }
