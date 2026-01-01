@@ -19,23 +19,59 @@ export default function MixedTest() {
   const [correctCount, setCorrectCount] = useState(0);
   const [finished, setFinished] = useState(false);
 
-  // IMPORTANT: use refs so we never lose answers due to React async state
+  // Timer UI
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [pauseBetween, setPauseBetween] = useState(false);
+
+  // Refs (so we never lose data)
   const startedAtRef = useRef(null);
   const questionStartRef = useRef(null);
-  const answersRef = useRef([]); // <-- ALL answers stored here
+  const answersRef = useRef([]);
+
+  const timerIntervalRef = useRef(null);
+  const pauseTimeoutRef = useRef(null);
 
   const minT = useMemo(() => Number(settings?.minimum_table ?? 1), [settings]);
   const maxT = useMemo(() => Number(settings?.maximum_table ?? 12), [settings]);
 
   const questionCount = useMemo(() => {
     const n = Number(settings?.question_count ?? settings?.num_questions ?? 25);
-    return Number.isFinite(n) && n > 0 ? n : 25;
+    return Number.isFinite(n) ? Math.max(10, Math.min(60, Math.trunc(n))) : 25;
   }, [settings]);
 
   const secondsPerQuestion = useMemo(() => {
     const s = Number(settings?.seconds_per_question ?? 6);
-    return Number.isFinite(s) && s > 0 ? s : 6;
+    return [3, 6, 9, 12].includes(s) ? s : 6;
   }, [settings]);
+
+  function clearTimers() {
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    timerIntervalRef.current = null;
+    if (pauseTimeoutRef.current) clearTimeout(pauseTimeoutRef.current);
+    pauseTimeoutRef.current = null;
+  }
+
+  function startTimer() {
+    clearTimers();
+    setPauseBetween(false);
+    setTimeLeft(secondsPerQuestion);
+
+    timerIntervalRef.current = setInterval(() => {
+      setTimeLeft((t) => {
+        if (t <= 1) {
+          clearTimers();
+          // Auto-next after 1 second pause
+          setPauseBetween(true);
+          pauseTimeoutRef.current = setTimeout(() => {
+            setPauseBetween(false);
+            onNext(true); // auto = true
+          }, 1000);
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -45,7 +81,6 @@ export default function MixedTest() {
         setLoading(true);
         setError("");
 
-        // Must be signed in
         const sRes = await fetch("/api/student/session");
         const sJson = await sRes.json();
         if (!sJson?.signedIn) {
@@ -53,7 +88,6 @@ export default function MixedTest() {
           return;
         }
 
-        // Load class settings (min/max tables, question_count, seconds_per_question)
         const setRes = await fetch("/api/student/settings");
         const setJson = await setRes.json();
         if (!setJson?.settings) {
@@ -64,7 +98,7 @@ export default function MixedTest() {
           return;
         }
 
-        // If start date exists and is in future, block
+        // Block if start date is in the future
         if (setJson.settings.test_start_date) {
           const start = new Date(setJson.settings.test_start_date);
           if (!isNaN(start.getTime()) && start.getTime() > Date.now()) {
@@ -72,40 +106,38 @@ export default function MixedTest() {
               setSettings(setJson.settings);
               setQuestions([]);
               setLoading(false);
-              setError("Test not available yet (check class settings / start date).");
+              setError("Test not available yet (check class start date).");
             }
             return;
           }
         }
 
-        const clsSettings = setJson.settings;
-        const minTable = Number(clsSettings.minimum_table ?? 1);
-        const maxTable = Number(clsSettings.maximum_table ?? 12);
-        const qCount = Number(clsSettings.question_count ?? clsSettings.num_questions ?? 25);
+        const cls = setJson.settings;
+        const minTable = Number(cls.minimum_table ?? 1);
+        const maxTable = Number(cls.maximum_table ?? 12);
+        const qCount = Number(cls.question_count ?? cls.num_questions ?? 25);
 
-        // Build questions
         const qs = Array.from({ length: qCount }).map(() => {
-          const a = randInt(minTable, maxTable); // table number range
-          const b = randInt(2, 12);              // multiplier 2..12
+          const a = randInt(minTable, maxTable);
+          const b = randInt(2, 12);
           return { a, b, expected: a * b, table_number: a };
         });
 
         if (!mounted) return;
 
-        setSettings(clsSettings);
+        setSettings(cls);
         setQuestions(qs);
         setIdx(0);
         setAnswer("");
         setCorrectCount(0);
         setFinished(false);
 
-        // Reset refs
         answersRef.current = [];
         startedAtRef.current = new Date();
         questionStartRef.current = performance.now();
 
         setLoading(false);
-      } catch (e) {
+      } catch {
         if (mounted) {
           setError("Failed to load test.");
           setLoading(false);
@@ -116,52 +148,59 @@ export default function MixedTest() {
     boot();
     return () => {
       mounted = false;
+      clearTimers();
     };
   }, [router]);
 
-  async function submitResult() {
-    try {
-      const finishedAt = new Date();
-
-      const payload = {
-        test_type: "mixed",
-        started_at: startedAtRef.current?.toISOString?.() || null,
-        finished_at: finishedAt.toISOString(),
-        answers: answersRef.current, // <-- FULL list
-      };
-
-      const r = await fetch("/api/tests/submit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const j = await r.json().catch(() => null);
-      // eslint-disable-next-line no-console
-      console.log("Submit response:", r.status, j);
-
-      if (!r.ok) {
-        setError(j?.error || "Submit failed");
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.log("Submit crashed", e);
-      setError("Submit crashed");
+  // Start timer whenever a new question appears
+  useEffect(() => {
+    if (!loading && !error && !finished && questions.length) {
+      startTimer();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idx, loading, error, finished, questions.length, secondsPerQuestion]);
+
+  async function submitResult() {
+    const finishedAt = new Date();
+    const payload = {
+      test_type: "mixed",
+      started_at: startedAtRef.current?.toISOString?.() || null,
+      finished_at: finishedAt.toISOString(),
+      answers: answersRef.current,
+    };
+
+    const r = await fetch("/api/tests/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const j = await r.json().catch(() => null);
+    // eslint-disable-next-line no-console
+    console.log("Submit response:", r.status, j);
+
+    if (!r.ok) setError(j?.error || "Submit failed");
   }
 
-  function onNext() {
+  function onNext(auto = false) {
+    if (finished) return;
+    if (pauseBetween && !auto) return; // don’t allow click during the 1s pause
+
+    clearTimers();
+
     const q = questions[idx];
     if (!q) return;
 
     const given = answer === "" ? null : Number(answer);
-    const isCorrect = given !== null && !Number.isNaN(given) && given === q.expected;
+    const isCorrect =
+      given !== null && !Number.isNaN(given) && given === q.expected;
 
     const now = performance.now();
     const responseMs =
-      questionStartRef.current != null ? Math.round(now - questionStartRef.current) : null;
+      questionStartRef.current != null
+        ? Math.round(now - questionStartRef.current)
+        : 0;
 
-    // Push into ref (never lost)
     answersRef.current.push({
       question_index: idx,
       a: q.a,
@@ -180,7 +219,7 @@ export default function MixedTest() {
 
     if (nextIdx >= questions.length) {
       setFinished(true);
-      submitResult(); // submits ALL answers
+      submitResult();
       return;
     }
 
@@ -188,14 +227,14 @@ export default function MixedTest() {
     questionStartRef.current = performance.now();
   }
 
-  if (loading) {
-    return (
-      <div style={{ padding: 40 }}>
-        <h1>Maths Test</h1>
-        <p>Loading…</p>
-      </div>
-    );
+  function onKeyDown(e) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onNext(false);
+    }
   }
+
+  if (loading) return <div style={{ padding: 40 }}>Loading…</div>;
 
   if (error && !finished) {
     return (
@@ -219,10 +258,10 @@ export default function MixedTest() {
           Score: <b>{correctCount}</b> / {questions.length}
         </p>
         <p style={{ opacity: 0.75 }}>
-          Saved: attempts = 1 row, question_records = {questions.length} rows
+          Saved for teachers (attempts + question records).
         </p>
         <p style={{ marginTop: 16 }}>
-          <Link href="/student/tests">Back to Test Home</Link>
+          <Link href="/student/tests">Back</Link>
         </p>
       </div>
     );
@@ -239,14 +278,20 @@ export default function MixedTest() {
         <br />
         Tables: <b>{minT}</b> to <b>{maxT}</b>
         <br />
-        Questions: <b>{questionCount}</b> • Target speed: <b>{secondsPerQuestion}s</b>
+        Questions: <b>{questionCount}</b> • Time: <b>{secondsPerQuestion}s</b>
       </p>
 
-      <p>
+      <div style={{ marginTop: 12, fontSize: 18 }}>
+        Time left:{" "}
+        <b style={{ fontSize: 22 }}>{timeLeft}s</b>{" "}
+        {pauseBetween && <span style={{ marginLeft: 10 }}>…next question…</span>}
+      </div>
+
+      <p style={{ marginTop: 18 }}>
         Question <b>{idx + 1}</b> of {questions.length}
       </p>
 
-      <div style={{ fontSize: 36, marginTop: 24 }}>
+      <div style={{ fontSize: 36, marginTop: 10 }}>
         {q.a} × {q.b} = ?
       </div>
 
@@ -254,7 +299,9 @@ export default function MixedTest() {
         <input
           value={answer}
           onChange={(e) => setAnswer(e.target.value)}
+          onKeyDown={onKeyDown}
           inputMode="numeric"
+          autoFocus
           style={{
             fontSize: 24,
             padding: "12px 14px",
@@ -267,16 +314,18 @@ export default function MixedTest() {
 
       <div style={{ marginTop: 18 }}>
         <button
-          onClick={onNext}
+          onClick={() => onNext(false)}
+          disabled={pauseBetween}
           style={{
             fontSize: 18,
             padding: "12px 22px",
             borderRadius: 12,
             border: "none",
             cursor: "pointer",
+            opacity: pauseBetween ? 0.5 : 1,
           }}
         >
-          Next
+          Next (or press Enter)
         </button>
       </div>
 
