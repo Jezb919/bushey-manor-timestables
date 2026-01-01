@@ -28,6 +28,12 @@ function pick(obj, keys) {
   return null;
 }
 
+function toIntOrNull(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "GET") {
@@ -60,7 +66,7 @@ export default async function handler(req, res) {
 
     const supabase = getSupabaseAdmin();
 
-    // IMPORTANT: select("*") so we don't crash if column names differ
+    // select("*") so we don't crash if column names differ
     const { data: cls, error } = await supabase
       .from("classes")
       .select("*")
@@ -79,11 +85,34 @@ export default async function handler(req, res) {
       return res.status(404).json({ ok: false, error: "Class not found" });
     }
 
-    // Try multiple possible column names (in case yours differ)
+    // Your real column names (based on your debug):
+    // class_label, min_table, max_table, test_start_date
     const classLabel = pick(cls, ["class_label", "classLabel", "label"]);
-    const minTable = pick(cls, ["minimum_table", "min_table", "minimumTable", "minTable"]);
-    const maxTable = pick(cls, ["maximum_table", "max_table", "maximumTable", "maxTable"]);
-    const startDate = pick(cls, ["test_start_date", "testStartDate", "start_date", "startDate"]);
+    const minTable = pick(cls, [
+      "min_table",
+      "minimum_table",
+      "minimumTable",
+      "minTable",
+    ]);
+    const maxTable = pick(cls, [
+      "max_table",
+      "maximum_table",
+      "maximumTable",
+      "maxTable",
+    ]);
+    const startDate = pick(cls, [
+      "test_start_date",
+      "testStartDate",
+      "start_date",
+      "startDate",
+    ]);
+
+    // NEW: question count + seconds per question
+    const questionCount = pick(cls, ["question_count", "questionCount"]);
+    const secondsPerQuestion = pick(cls, [
+      "seconds_per_question",
+      "secondsPerQuestion",
+    ]);
 
     return res.status(200).json({
       ok: true,
@@ -91,12 +120,18 @@ export default async function handler(req, res) {
       settings: {
         class_id: cls.id,
         class_label: classLabel,
-        minimum_table: minTable,
-        maximum_table: maxTable,
-        test_start_date: startDate,
+
+        // Keep these keys as minimum_/maximum_ because your student pages already read them
+        minimum_table: toIntOrNull(minTable),
+        maximum_table: toIntOrNull(maxTable),
+
+        test_start_date: startDate || null,
+
+        // NEW settings used by the test runner
+        question_count: toIntOrNull(questionCount) ?? 25,
+        seconds_per_question: toIntOrNull(secondsPerQuestion) ?? 6,
       },
       debug: {
-        // helps us confirm what your real columns are
         classKeys: Object.keys(cls),
       },
     });
