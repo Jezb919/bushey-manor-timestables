@@ -1,105 +1,120 @@
 // pages/teacher/login.js
 import { useState } from "react";
+import { useRouter } from "next/router";
 
 export default function TeacherLogin() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState(null);
 
-  const handleSubmit = async (e) => {
+  async function onSubmit(e) {
     e.preventDefault();
-    setError("");
+    setMsg(null);
     setLoading(true);
 
     try {
-      const res = await fetch("/api/teacher/login", {
+      const r = await fetch("/api/teacher/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await res.json();
+      const data = await r.json().catch(() => ({}));
 
-      if (!res.ok || !data.ok) {
-        setError(data.error || "Login failed");
+      if (!r.ok || !data.ok) {
+        setMsg(data?.error || `Login failed (${r.status})`);
         setLoading(false);
         return;
       }
 
-      // Success → go to teacher dashboard
-      window.location.href = "/teacher";
+      // success
+      router.push("/teacher");
     } catch (err) {
-      setError("Network error");
+      setMsg("Login failed (network error)");
       setLoading(false);
     }
-  };
+  }
 
   return (
-    <div style={page}>
-      <form onSubmit={handleSubmit} style={card}>
-        <h1 style={{ marginBottom: "1rem" }}>Teacher Login</h1>
+    <div style={{ maxWidth: 520, margin: "40px auto", padding: 16 }}>
+      <h1 style={{ fontSize: 48, marginBottom: 8 }}>Teacher Login</h1>
+      <p style={{ marginTop: 0, marginBottom: 18 }}>
+        Enter your <b>email</b> and <b>password</b>.
+      </p>
 
-        {error && (
-          <div style={{ color: "red", marginBottom: "0.75rem" }}>
-            {error}
-          </div>
-        )}
+      {msg && (
+        <div
+          style={{
+            background: "#ffe5e5",
+            border: "1px solid #ffb3b3",
+            padding: 12,
+            borderRadius: 10,
+            marginBottom: 12,
+          }}
+        >
+          {msg}
+        </div>
+      )}
 
-        <label>Email</label>
-        <input
-          type="email"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={input}
-        />
+      <form onSubmit={onSubmit}>
+        <div style={{ marginBottom: 10 }}>
+          <input
+            style={{
+              width: "100%",
+              padding: 14,
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              fontSize: 16,
+            }}
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="username"
+          />
+        </div>
 
-        <label>Password</label>
-        <input
-          type="password"
-          required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={input}
-        />
+        <div style={{ marginBottom: 14 }}>
+          <input
+            style={{
+              width: "100%",
+              padding: 14,
+              borderRadius: 12,
+              border: "1px solid #ddd",
+              fontSize: 16,
+            }}
+            placeholder="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+          />
+        </div>
 
-        <button type="submit" disabled={loading} style={button}>
-          {loading ? "Signing in…" : "Sign in"}
+        <button
+          type="submit"
+          disabled={loading}
+          style={{
+            width: "100%",
+            padding: 14,
+            borderRadius: 12,
+            border: "none",
+            background: "#0b1220",
+            color: "white",
+            fontSize: 18,
+            cursor: loading ? "default" : "pointer",
+          }}
+        >
+          {loading ? "Logging in..." : "Log in"}
         </button>
       </form>
+
+      <div style={{ marginTop: 12 }}>
+        <a href="/" style={{ color: "#4b3fbf" }}>
+          ← Back
+        </a>
+      </div>
     </div>
   );
 }
-
-const page = {
-  minHeight: "100vh",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "#f8fafc",
-};
-
-const card = {
-  width: "320px",
-  padding: "2rem",
-  borderRadius: "10px",
-  background: "white",
-  boxShadow: "0 10px 25px rgba(0,0,0,0.1)",
-  display: "flex",
-  flexDirection: "column",
-  gap: "0.5rem",
-};
-
-const input = {
-  padding: "8px",
-  fontSize: "1rem",
-  marginBottom: "0.75rem",
-};
-
-const button = {
-  marginTop: "1rem",
-  padding: "10px",
-  fontSize: "1rem",
-  cursor: "pointer",
-};
