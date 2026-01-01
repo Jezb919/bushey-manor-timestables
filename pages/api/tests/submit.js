@@ -21,17 +21,26 @@ function parseCookies(cookieHeader) {
   return out;
 }
 
+function isoNow() {
+  return new Date().toISOString();
+}
+
+function num(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") {
       return res.status(405).json({
         ok: false,
         error: "Method not allowed (POST only)",
-        info: "Send JSON: { test_type, started_at, finished_at, answers:[{a,b,table_number,given_answer,correct_answer,is_correct,response_time_ms}] }",
+        info:
+          "Send JSON: { started_at, finished_at, answers:[{a,b,table_number,given_answer,correct_answer,is_correct,response_time_ms}] }",
       });
     }
 
-    // --- Require student session cookie ---
     const cookies = parseCookies(req.headers.cookie || "");
     const raw = cookies.bmtt_student;
     if (!raw) return res.status(401).json({ ok: false, error: "Not signed in" });
@@ -44,56 +53,71 @@ export default async function handler(req, res) {
     }
 
     const studentId = session.studentId || session.student_id;
-    const classLabel = session.class_label || session.classLabel || null;
+    const classId = session.class_id || null;
 
     if (!studentId) {
       return res.status(400).json({ ok: false, error: "Missing studentId in session" });
     }
-    if (!classLabel) {
-      return res.status(400).json({ ok: false, error: "Missing class_label in session" });
+    if (!classId) {
+      return res.status(400).json({ ok: false, error: "Missing class_id in session" });
     }
 
-    const { test_type, started_at, finished_at, answers } = req.body || {};
+    const { started_at, finished_at, answers } = req.body || {};
 
     if (!Array.isArray(answers) || answers.length === 0) {
       return res.status(400).json({ ok: false, error: "answers[] is required" });
     }
 
-    const startedAt = started_at ? new Date(started_at) : new Date();
-    const finishedAt = finished_at ? new Date(finished_at) : new Date();
+    const startedAtIso = started_at ? new Date(started_at).toISOString() : isoNow();
+    const finishedAtIso = finished_at ? new Date(finished_at).toISOString() : isoNow();
 
-    // --- Compute score + avg response time ---
+    // Score
     const maxScore = answers.length;
     const score = answers.reduce((acc, x) => acc + (x?.is_correct ? 1 : 0), 0);
     const percent = maxScore > 0 ? (score / maxScore) * 100 : 0;
 
     const responseTimes = answers
-      .map((x) => Number(x?.response_time_ms))
+      .map((x) => num(x?.response_time_ms, 0))
       .filter((n) => Number.isFinite(n) && n >= 0);
+
     const avgResponseTimeMs =
       responseTimes.length > 0
         ? Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length)
-        : null;
+        : 0;
 
     const supabase = getSupabaseAdmin();
 
-    // --- Insert attempt (your table is "attempts") ---
+    // ✅ Look up class_label from classes using class_id
+    const { data: cls, error: clsErr } = await supabase
+      .from("classes")
+      .select("class_label")
+      .eq("id", classId)
+      .maybeSingle();
+
+    if (clsErr) {
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to load class",
+        debug: clsErr.message,
+      });
+    }
+
+    const classLabel = cls?.class_label || null;
+
+    // Insert attempt
     const attemptInsert = {
       student_id: studentId,
-      class_label: classLabel,
-      started_at: startedAt.toISOString(),
-      finished_at: finishedAt.toISOString(),
+      class_label: classLabel, // may be null, but we tried to fetch it
+      started_at: startedAtIso,
+      finished_at: finishedAtIso,
       score,
       max_score: maxScore,
       percent,
       avg_response_time_ms: avgResponseTimeMs,
       completed: true,
       total: maxScore,
+      created_at: isoNow(),
     };
-
-    // If your attempts table requires test_config_id and it is NOT nullable,
-    // you MUST set it here. If it IS nullable, leaving undefined is fine.
-    // attemptInsert.test_config_id = null;
 
     const { data: attemptRow, error: attemptErr } = await supabase
       .from("attempts")
@@ -111,24 +135,43 @@ export default async function handler(req, res) {
 
     const attemptId = attemptRow.id;
 
-    // --- Insert per-question rows (question_records) ---
-    const qRows = answers.map((x, i) => ({
-      attempt_id: attemptId,
-      student_id: studentId,
-      question_index: Number.isFinite(x.question_index) ? x.question_index : i,
-      a: Number(x.a),
-      b: Number(x.b),
-      table_num: Number(x.table_number ?? x.table_num ?? x.tableNumber ?? x.tableNum ?? x.a),
-      correct_answer: Number(x.correct_answer),
-      given_answer: x.given_answer === "" || x.given_answer == null ? null : Number(x.given_answer),
-      is_correct: !!x.is_correct,
-      response_time_ms: Number.isFinite(Number(x.response_time_ms)) ? Number(x.response_time_ms) : null,
-    }));
+    // Insert question rows
+    const createdAt = isoNow();
+    const qRows = answers.map((x, i) => {
+      const a = num(x.a, 0);
+      const b = num(x.b, 0);
+
+      const tableNumber = num(
+        x.table_number ?? x.table_num ?? x.tableNumber ?? x.tableNum ?? a,
+        a
+      );
+      const correctAnswer = num(x.correct_answer ?? a * b, a * b);
+
+      const givenRaw = x.given_answer;
+      const givenAnswer =
+        givenRaw === "" || givenRaw === null || givenRaw === undefined
+          ? null
+          : num(givenRaw, 0);
+
+      return {
+        attempt_id: attemptId,
+        student_id: studentId,
+        question_index: Number.isFinite(num(x.question_index, i)) ? num(x.question_index, i) : i,
+        a,
+        b,
+        table_num: tableNumber,
+        table_number: tableNumber,
+        correct_answer: correctAnswer,
+        given_answer: givenAnswer,
+        is_correct: !!x.is_correct,
+        response_time_ms: num(x.response_time_ms, 0),
+        created_at: createdAt,
+      };
+    });
 
     const { error: qErr } = await supabase.from("question_records").insert(qRows);
 
     if (qErr) {
-      // We keep the attempt, but tell you questions failed.
       return res.status(200).json({
         ok: true,
         attempt: attemptRow,
@@ -140,7 +183,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       attempt: attemptRow,
-      info: "Saved attempt + question records",
+      inserted_questions: qRows.length,
     });
   } catch (e) {
     return res.status(500).json({
