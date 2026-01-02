@@ -17,7 +17,9 @@ export default function ManageTeachers() {
   const [teachers, setTeachers] = useState([]);
 
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState(null); // {type:'error'|'ok', text:string}
+
+  // msg can optionally include extra data (setup_url / temp_password)
+  const [msg, setMsg] = useState(null); // {type:'error'|'ok', text:string, setup_url?, temp_password?}
 
   // Add teacher form
   const [newName, setNewName] = useState("");
@@ -107,9 +109,11 @@ export default function ManageTeachers() {
       const j = await safeJson(res);
       if (!j.ok) throw new Error(j.error || "Failed to assign class");
 
-      // refresh teachers so dropdown reflects saved state
       await loadAll();
-      setMsg({ type: "ok", text: `Saved class for ${teacher.full_name || teacher.email || "teacher"}.` });
+      setMsg({
+        type: "ok",
+        text: `Saved class for ${teacher.full_name || teacher.email || "teacher"}.`,
+      });
     } catch (e) {
       setMsg({ type: "error", text: String(e.message || e) });
     } finally {
@@ -145,7 +149,10 @@ export default function ManageTeachers() {
       setNewClass("");
 
       await loadAll();
-      setMsg({ type: "ok", text: "Teacher created. Now click “Send setup link” so they can set a password." });
+      setMsg({
+        type: "ok",
+        text: "Teacher created. Now click “Send setup link” to create a link you can copy/paste to them.",
+      });
     } catch (e) {
       setMsg({ type: "error", text: String(e.message || e) });
     } finally {
@@ -153,7 +160,6 @@ export default function ManageTeachers() {
     }
   }
 
-  // Optional action helpers (won’t break if endpoint missing)
   async function callAction(url, body) {
     setLoading(true);
     setMsg(null);
@@ -165,8 +171,16 @@ export default function ManageTeachers() {
       });
       const j = await safeJson(res);
       if (!j.ok) throw new Error(j.error || "Action failed");
+
       await loadAll();
-      setMsg({ type: "ok", text: j.info || "Done." });
+
+      // show helpful returned data (setup link / temp password)
+      setMsg({
+        type: "ok",
+        text: j.info || "Done.",
+        setup_url: j.setup_url,
+        temp_password: j.temp_password,
+      });
     } catch (e) {
       setMsg({ type: "error", text: String(e.message || e) });
     } finally {
@@ -185,48 +199,98 @@ export default function ManageTeachers() {
       <h1 style={{ fontSize: 56, margin: "0 0 8px 0" }}>Manage Teachers</h1>
 
       <div style={{ marginBottom: 12, color: "#333" }}>
-        <div>Logged in as <b>{loggedInLabel}</b></div>
+        <div>
+          Logged in as <b>{loggedInLabel}</b>
+        </div>
         <div style={{ marginTop: 6 }}>
           <Link href="/teacher/dashboard">← Back to dashboard</Link>
         </div>
       </div>
 
       {msg?.type === "error" && (
-        <div style={{
-          background: "#fde8e8",
-          border: "1px solid #f5b5b5",
-          padding: 14,
-          borderRadius: 10,
-          margin: "14px 0"
-        }}>
+        <div
+          style={{
+            background: "#fde8e8",
+            border: "1px solid #f5b5b5",
+            padding: 14,
+            borderRadius: 10,
+            margin: "14px 0",
+          }}
+        >
           <b>Server error</b>: {msg.text}
         </div>
       )}
 
       {msg?.type === "ok" && (
-        <div style={{
-          background: "#ecfdf3",
-          border: "1px solid #b7f0c9",
-          padding: 14,
-          borderRadius: 10,
-          margin: "14px 0"
-        }}>
-          {msg.text}
+        <div
+          style={{
+            background: "#ecfdf3",
+            border: "1px solid #b7f0c9",
+            padding: 14,
+            borderRadius: 10,
+            margin: "14px 0",
+          }}
+        >
+          <div>{msg.text}</div>
+
+          {msg.setup_url && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Setup link (copy/paste to teacher):</div>
+              <div
+                style={{
+                  background: "#fff",
+                  border: "1px solid #ddd",
+                  padding: 10,
+                  borderRadius: 10,
+                  wordBreak: "break-all",
+                }}
+              >
+                {msg.setup_url}
+              </div>
+            </div>
+          )}
+
+          {msg.temp_password && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>Temporary password (give to teacher):</div>
+              <div
+                style={{
+                  background: "#fff",
+                  border: "1px solid #ddd",
+                  padding: 10,
+                  borderRadius: 10,
+                  fontFamily: "monospace",
+                  fontSize: 16,
+                }}
+              >
+                {msg.temp_password}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* Add teacher */}
-      <div style={{
-        background: "#fff",
-        border: "1px solid #eee",
-        borderRadius: 16,
-        padding: 18,
-        boxShadow: "0 8px 30px rgba(0,0,0,0.04)",
-        marginTop: 18
-      }}>
+      <div
+        style={{
+          background: "#fff",
+          border: "1px solid #eee",
+          borderRadius: 16,
+          padding: 18,
+          boxShadow: "0 8px 30px rgba(0,0,0,0.04)",
+          marginTop: 18,
+        }}
+      >
         <h2 style={{ fontSize: 34, margin: "0 0 12px 0" }}>Add teacher</h2>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1.2fr 160px 160px 160px", gap: 12, alignItems: "center" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1.2fr 1.2fr 160px 160px 160px",
+            gap: 12,
+            alignItems: "center",
+          }}
+        >
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
@@ -256,7 +320,9 @@ export default function ManageTeachers() {
           >
             <option value="">(no class)</option>
             {classOptions.map((lbl) => (
-              <option key={lbl} value={lbl}>{lbl}</option>
+              <option key={lbl} value={lbl}>
+                {lbl}
+              </option>
             ))}
           </select>
 
@@ -270,7 +336,7 @@ export default function ManageTeachers() {
               background: "#111827",
               color: "white",
               fontWeight: 700,
-              cursor: "pointer"
+              cursor: "pointer",
             }}
           >
             Add teacher
@@ -278,19 +344,21 @@ export default function ManageTeachers() {
         </div>
 
         <div style={{ marginTop: 10, color: "#555" }}>
-          After adding, click <b>Send setup link</b> so they can set their password.
+          After adding, click <b>Send setup link</b> to create a link you can copy/paste.
         </div>
       </div>
 
       {/* Teachers list */}
-      <div style={{
-        background: "#fff",
-        border: "1px solid #eee",
-        borderRadius: 16,
-        padding: 18,
-        boxShadow: "0 8px 30px rgba(0,0,0,0.04)",
-        marginTop: 18
-      }}>
+      <div
+        style={{
+          background: "#fff",
+          border: "1px solid #eee",
+          borderRadius: 16,
+          padding: 18,
+          boxShadow: "0 8px 30px rgba(0,0,0,0.04)",
+          marginTop: 18,
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <h2 style={{ fontSize: 34, margin: 0 }}>Teachers</h2>
           <button
@@ -301,7 +369,7 @@ export default function ManageTeachers() {
               borderRadius: 12,
               border: "1px solid #ccc",
               background: "#f6f6f6",
-              cursor: "pointer"
+              cursor: "pointer",
             }}
           >
             Refresh
@@ -325,34 +393,39 @@ export default function ManageTeachers() {
               const current = selectedClassByTeacher[t.id] ?? (t.class_label || "");
               return (
                 <tr key={t.id} style={{ borderTop: "1px solid #eee", verticalAlign: "top" }}>
-                  <td style={{ padding: "14px 8px", fontWeight: 800 }}>
-                    {t.full_name || "—"}
-                  </td>
+                  <td style={{ padding: "14px 8px", fontWeight: 800 }}>{t.full_name || "—"}</td>
                   <td style={{ padding: "14px 8px" }}>
                     <span style={{ fontWeight: 700 }}>{t.email}</span>
                   </td>
                   <td style={{ padding: "14px 8px" }}>
-                    <span style={{
-                      display: "inline-block",
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      border: "1px solid #c7d2fe",
-                      background: "#eef2ff",
-                      fontWeight: 700
-                    }}>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: "1px solid #c7d2fe",
+                        background: "#eef2ff",
+                        fontWeight: 700,
+                      }}
+                    >
                       {t.role}
                     </span>
                   </td>
+
                   <td style={{ padding: "14px 8px" }}>
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                       <select
                         value={current || "(none)"}
-                        onChange={(e) => setTeacherClassChoice(t.id, e.target.value === "(none)" ? "" : e.target.value)}
+                        onChange={(e) =>
+                          setTeacherClassChoice(t.id, e.target.value === "(none)" ? "" : e.target.value)
+                        }
                         style={{ padding: 10, borderRadius: 12, border: "1px solid #ddd", minWidth: 140 }}
                       >
                         <option value="(none)">(none)</option>
                         {classOptions.map((lbl) => (
-                          <option key={lbl} value={lbl}>{lbl}</option>
+                          <option key={lbl} value={lbl}>
+                            {lbl}
+                          </option>
                         ))}
                       </select>
 
@@ -366,15 +439,13 @@ export default function ManageTeachers() {
                           background: "#111827",
                           color: "white",
                           fontWeight: 800,
-                          cursor: "pointer"
+                          cursor: "pointer",
                         }}
                       >
                         Save
                       </button>
                     </div>
-                    <div style={{ marginTop: 6, color: "#555" }}>
-                      Teachers will only see their assigned class.
-                    </div>
+                    <div style={{ marginTop: 6, color: "#555" }}>Teachers will only see their assigned class.</div>
                   </td>
 
                   <td style={{ padding: "14px 8px" }}>
@@ -383,7 +454,14 @@ export default function ManageTeachers() {
                         <button
                           onClick={() => callAction("/api/admin/teachers/make_teacher", { teacher_id: t.id })}
                           disabled={loading}
-                          style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ccc", background: "#fff", cursor: "pointer", fontWeight: 700 }}
+                          style={{
+                            padding: "10px 12px",
+                            borderRadius: 12,
+                            border: "1px solid #ccc",
+                            background: "#fff",
+                            cursor: "pointer",
+                            fontWeight: 700,
+                          }}
                         >
                           Make teacher
                         </button>
@@ -391,7 +469,14 @@ export default function ManageTeachers() {
                         <button
                           onClick={() => callAction("/api/admin/teachers/make_admin", { teacher_id: t.id })}
                           disabled={loading}
-                          style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ccc", background: "#fff", cursor: "pointer", fontWeight: 700 }}
+                          style={{
+                            padding: "10px 12px",
+                            borderRadius: 12,
+                            border: "1px solid #ccc",
+                            background: "#fff",
+                            cursor: "pointer",
+                            fontWeight: 700,
+                          }}
                         >
                           Make admin
                         </button>
@@ -400,7 +485,14 @@ export default function ManageTeachers() {
                       <button
                         onClick={() => callAction("/api/admin/teachers/reset_password", { teacher_id: t.id })}
                         disabled={loading}
-                        style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ccc", background: "#fff", cursor: "pointer", fontWeight: 700 }}
+                        style={{
+                          padding: "10px 12px",
+                          borderRadius: 12,
+                          border: "1px solid #ccc",
+                          background: "#fff",
+                          cursor: "pointer",
+                          fontWeight: 700,
+                        }}
                       >
                         Reset password
                       </button>
@@ -408,7 +500,14 @@ export default function ManageTeachers() {
                       <button
                         onClick={() => callAction("/api/admin/teachers/send_setup_link", { teacher_id: t.id })}
                         disabled={loading}
-                        style={{ padding: "10px 12px", borderRadius: 12, border: "1px solid #ccc", background: "#fff", cursor: "pointer", fontWeight: 700 }}
+                        style={{
+                          padding: "10px 12px",
+                          borderRadius: 12,
+                          border: "1px solid #ccc",
+                          background: "#fff",
+                          cursor: "pointer",
+                          fontWeight: 700,
+                        }}
                       >
                         Send setup link
                       </button>
@@ -420,9 +519,7 @@ export default function ManageTeachers() {
           </tbody>
         </table>
 
-        <div style={{ marginTop: 14, color: "#555" }}>
-          Tip: Set class for each teacher once. Admins can leave class blank.
-        </div>
+        <div style={{ marginTop: 14, color: "#555" }}>Tip: Set class for each teacher once. Admins can leave class blank.</div>
       </div>
     </div>
   );
